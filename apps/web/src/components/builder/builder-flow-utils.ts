@@ -76,6 +76,15 @@ export type BuilderGraphData = {
   edges: BuilderFlowEdge[];
 };
 
+export type BuilderAiDraft = {
+  name: string;
+  description: string;
+  marketSelection: "selected" | "all";
+  markets: string[];
+  conditions: Array<Partial<VisualCondition> & { type: string }>;
+  actions: Array<Partial<VisualAction> & { type: string }>;
+};
+
 export type BuilderStarterTemplate = {
   id: string;
   name: string;
@@ -1046,4 +1055,51 @@ export function buildBlankGraph(): BuilderGraphData {
     nodes: [createEntryNode()],
     edges: [],
   };
+}
+
+export function buildGraphFromAiDraft(draft: BuilderAiDraft): BuilderGraphData {
+  const nodes: BuilderFlowNode[] = [createEntryNode()];
+  const edges: BuilderFlowEdge[] = [];
+
+  let previousId = ENTRY_NODE_ID;
+  const conditionBaseX = 300;
+  const actionBaseX = conditionBaseX + draft.conditions.length * 300;
+
+  draft.conditions.forEach((conditionInput, index) => {
+    const fallbackType = CONDITION_OPTIONS.includes(conditionInput.type as (typeof CONDITION_OPTIONS)[number])
+      ? (conditionInput.type as (typeof CONDITION_OPTIONS)[number])
+      : "price_above";
+    const baseCondition = createCondition(fallbackType);
+    const condition: VisualCondition = {
+      ...baseCondition,
+      ...conditionInput,
+      id: baseCondition.id,
+      type: fallbackType,
+      symbol: conditionInput.symbol?.trim() || baseCondition.symbol,
+    };
+    const node = createConditionNode(condition, { x: conditionBaseX + (index * 300), y: 220 });
+    nodes.push(node);
+    edges.push(createCanvasEdge(previousId, node.id));
+    previousId = node.id;
+  });
+
+  draft.actions.forEach((actionInput, index) => {
+    const fallbackType = ACTION_OPTIONS.includes(actionInput.type as (typeof ACTION_OPTIONS)[number])
+      ? (actionInput.type as (typeof ACTION_OPTIONS)[number])
+      : "open_long";
+    const baseAction = createAction(fallbackType);
+    const action: VisualAction = {
+      ...baseAction,
+      ...actionInput,
+      id: baseAction.id,
+      type: fallbackType,
+      symbol: actionInput.symbol?.trim() || baseAction.symbol,
+    };
+    const node = createActionNode(action, { x: actionBaseX + (index * 300), y: 156 });
+    nodes.push(node);
+    edges.push(createCanvasEdge(previousId, node.id));
+    previousId = node.id;
+  });
+
+  return { nodes, edges };
 }

@@ -14,9 +14,9 @@ import {
   useNodesState,
   type XYPosition,
 } from "@xyflow/react";
-import { Box, Sparkles, Grid3x3, Activity, Play, Search, ChevronDown, ChevronRight, Plus, Globe, Check } from "lucide-react";
+import { Box, Sparkles, Grid3x3, Activity, Play, Search, ChevronDown, ChevronRight, Plus, Globe, Check, ArrowUp, RefreshCcw } from "lucide-react";
 import { clsx } from "clsx";
-import { useEffect, useMemo, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 
 import { BuilderFlowNodeCard } from "@/components/builder/builder-flow-node";
 import {
@@ -26,6 +26,7 @@ import {
   actionTitle,
   BLANK_BUILDER_TEMPLATE_ID,
   BOT_MARKET_UNIVERSE_SYMBOL,
+  buildGraphFromAiDraft,
   BUILDER_STARTER_TEMPLATES,
   buildBlankGraph,
   buildDefaultGraph,
@@ -45,6 +46,7 @@ import {
   parseOptionalNumber,
   serializeGraphNode,
   snapPosition,
+  type BuilderAiDraft,
   type BuilderFlowEdge,
   type BuilderFlowNode,
   type PaletteDragPayload,
@@ -66,6 +68,16 @@ export type BuilderNoticePayload = {
   eyebrow: string;
   title: string;
   detail: string;
+};
+type BuilderChatMode = "visual" | "ai";
+type BuilderChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+};
+type BuilderAiRouteResponse = {
+  reply: string;
+  draft: BuilderAiDraft;
 };
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -344,6 +356,17 @@ export function BuilderGraphStudio({
   const [status, setStatus] = useState<"idle" | "creating" | "deploying">("idle");
   const [error, setError] = useState<string | null>(null);
   const [blockSearch, setBlockSearch] = useState("");
+  const [builderMode, setBuilderMode] = useState<BuilderChatMode>("visual");
+  const [chatMessages, setChatMessages] = useState<BuilderChatMessage[]>([
+    {
+      id: "assistant-welcome",
+      role: "assistant",
+      content: "Describe the bot you want and I’ll turn it into a draft with signals, actions, and market scope.",
+    },
+  ]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatStatus, setChatStatus] = useState<"idle" | "sending">("idle");
+  const chatViewportRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (authenticatedWallet) setWalletAddress(authenticatedWallet);
@@ -364,6 +387,12 @@ export function BuilderGraphStudio({
     if (selectedNodeId && nodes.some((node) => node.id === selectedNodeId && node.data.kind !== "entry")) return;
     setSelectedNodeId(nodes.find((node) => node.data.kind !== "entry")?.id ?? null);
   }, [nodes, selectedNodeId]);
+
+  useEffect(() => {
+    const viewport = chatViewportRef.current;
+    if (!viewport) return;
+    viewport.scrollTop = viewport.scrollHeight;
+  }, [chatMessages]);
 
   const route = useMemo(() => buildPrimaryRoute(nodes, edges), [nodes, edges]);
   const primaryNodeIds = useMemo(() => new Set(route.nodeIds), [route.nodeIds]);
@@ -597,6 +626,92 @@ export function BuilderGraphStudio({
     });
   }
 
+  function buildCurrentAiDraftContext(): BuilderAiDraft {
+    return {
+      name: name.trim(),
+      description: description.trim(),
+      marketSelection: hasUniverseNodes && selectedMarketSymbols.length === availableMarketSymbols.length ? "all" : "selected",
+      markets: selectedMarketSymbols,
+      conditions: route.conditions.map((condition) => ({ ...condition })),
+      actions: route.actions.map((action) => ({ ...action })),
+    };
+  }
+
+  function applyAiDraft(draft: BuilderAiDraft) {
+    const nextGraph = buildGraphFromAiDraft(draft);
+    const nextSelectedMarkets = draft.marketSelection === "all"
+      ? (availableMarketSymbols.length > 0 ? availableMarketSymbols : draft.markets)
+      : draft.markets;
+
+    setNodes(nextGraph.nodes);
+    setEdges(nextGraph.edges);
+    setSelectedNodeId(nextGraph.nodes.find((node) => node.data.kind !== "entry")?.id ?? null);
+    setActiveTemplateId(BLANK_BUILDER_TEMPLATE_ID);
+    setName(draft.name);
+    setDescription(draft.description);
+    setSelectedMarketSymbols(nextSelectedMarkets.length > 0 ? nextSelectedMarkets : ["BTC"]);
+    setCreatedBotId(null);
+    setRuntimeStatus(null);
+    setBuilderMode("ai");
+    setError(null);
+
+    requestAnimationFrame(() => {
+      flow?.fitView({ padding: 0.18, duration: 280 });
+    });
+  }
+
+  async function sendAiMessage(seed?: string) {
+    const message = (seed ?? chatInput).trim();
+    if (!message || chatStatus === "sending") return;
+
+    const nextUserMessage: BuilderChatMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      content: message,
+    };
+    const nextConversation = [...chatMessages, nextUserMessage];
+
+    setChatMessages(nextConversation);
+    setChatInput("");
+    setChatStatus("sending");
+    setError(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/builder/ai-chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: nextConversation.map(({ role, content }) => ({ role, content })),
+          availableMarkets: availableMarketSymbols,
+          currentDraft: buildCurrentAiDraftContext(),
+        }),
+      });
+      const payload = (await response.json()) as BuilderAiRouteResponse & { detail?: string };
+      if (!response.ok || !payload.draft) {
+        throw new Error(payload.detail ?? "AI draft failed");
+      }
+
+      applyAiDraft(payload.draft);
+      setChatMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          content: payload.reply,
+        },
+      ]);
+      onNotice?.({
+        eyebrow: "AI Draft",
+        title: "Builder updated",
+        detail: "The canvas has been rebuilt from your latest prompt.",
+      });
+    } catch (chatError) {
+      setError(chatError instanceof Error ? chatError.message : "AI draft failed");
+    } finally {
+      setChatStatus("idle");
+    }
+  }
+
   function addNode(kind: "condition" | "action", blockType: string, position: XYPosition) {
     const nextPosition = snapPosition(position);
     if (kind === "condition") {
@@ -798,13 +913,31 @@ export function BuilderGraphStudio({
             </h1>
             <div className="h-6 w-px bg-[rgba(255,255,255,0.06)]"></div>
             
-            {/* Builder Mode Toggle */}
-            <div className="flex items-center gap-2 bg-neutral-900 border border-[rgba(255,255,255,0.06)] rounded-md p-1">
-              <button className="flex items-center gap-2 px-3 py-1.5 text-sm rounded transition-all bg-[#dce85d] text-[#090a0a] font-semibold">
+             {/* Builder Mode Toggle */}
+             <div className="flex items-center gap-2 bg-neutral-900 border border-[rgba(255,255,255,0.06)] rounded-md p-1">
+              <button
+                type="button"
+                onClick={() => setBuilderMode("visual")}
+                className={clsx(
+                  "flex items-center gap-2 px-3 py-1.5 text-sm rounded transition-all",
+                  builderMode === "visual"
+                    ? "bg-[#dce85d] text-[#090a0a] font-semibold"
+                    : "text-neutral-400 hover:text-neutral-300",
+                )}
+              >
                 <Grid3x3 className="w-4 h-4" />
                 <span>Visual</span>
               </button>
-              <button className="flex items-center gap-2 px-3 py-1.5 text-sm rounded transition-all text-neutral-400 hover:text-neutral-300">
+              <button
+                type="button"
+                onClick={() => setBuilderMode("ai")}
+                className={clsx(
+                  "flex items-center gap-2 px-3 py-1.5 text-sm rounded transition-all",
+                  builderMode === "ai"
+                    ? "bg-[#dce85d] text-[#090a0a] font-semibold"
+                    : "text-neutral-400 hover:text-neutral-300",
+                )}
+              >
                 <Sparkles className="w-4 h-4" />
                 <span>AI Chat</span>
               </button>
@@ -854,70 +987,182 @@ export function BuilderGraphStudio({
 
       {/* Main Workspace */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar - Block Palette */}
+        {/* Left Sidebar */}
         <div className="w-72 flex-shrink-0 border-r border-[rgba(255,255,255,0.06)] bg-[#16181a] flex flex-col">
-          <div className="p-4 border-b border-[rgba(255,255,255,0.06)] bg-neutral-900">
-            <h2 className="text-sm font-semibold text-neutral-50 mb-1">Block Palette</h2>
-            <div className="relative mt-3">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-500" />
-              <input
-                type="text"
-                placeholder="Search blocks..."
-                value={blockSearch}
-                onChange={(e) => setBlockSearch(e.target.value)}
-                className="w-full bg-neutral-800 border border-[rgba(255,255,255,0.06)] rounded-md pl-9 pr-3 py-1.5 text-xs text-neutral-50 focus:outline-none focus:border-[rgba(255,255,255,0.12)] transition-colors"
-              />
-            </div>
-          </div>
-          <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-            {SIGNAL_CATEGORIES.some(c => c.keys.some(k => filteredConditions.includes(k as any))) && (
-              <div className="mb-8">
-                <div className="flex items-center gap-2 mb-4 pb-2 border-b border-[rgba(255,255,255,0.06)] text-neutral-300">
-                  <Activity className="w-4 h-4 text-[#dce85d]" />
-                  <span className="text-sm font-bold tracking-wide">Signals</span>
-                </div>
-                {SIGNAL_CATEGORIES.map((category, idx) => (
-                  <BlockCategory
-                    key={category.name}
-                    title={category.name}
-                    icon={Activity}
-                    options={category.keys.filter(k => filteredConditions.includes(k as any))}
-                    searchQuery={blockSearch}
-                    kind="condition"
-                    onDragStart={handlePaletteDragStart}
-                    defaultExpanded={idx === 0}
+          {builderMode === "visual" ? (
+            <>
+              <div className="p-4 border-b border-[rgba(255,255,255,0.06)] bg-neutral-900">
+                <h2 className="text-sm font-semibold text-neutral-50 mb-1">Block Palette</h2>
+                <div className="relative mt-3">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-500" />
+                  <input
+                    type="text"
+                    placeholder="Search blocks..."
+                    value={blockSearch}
+                    onChange={(e) => setBlockSearch(e.target.value)}
+                    className="w-full bg-neutral-800 border border-[rgba(255,255,255,0.06)] rounded-md pl-9 pr-3 py-1.5 text-xs text-neutral-50 focus:outline-none focus:border-[rgba(255,255,255,0.12)] transition-colors"
                   />
-                ))}
-              </div>
-            )}
-            
-            {ACTION_CATEGORIES.some(c => c.keys.some(k => filteredActions.includes(k as any))) && (
-              <div className="mb-4">
-                <div className="flex items-center gap-2 mb-4 pb-2 border-b border-[rgba(255,255,255,0.06)] text-neutral-300">
-                  <Box className="w-4 h-4 text-[#74b97f]" />
-                  <span className="text-sm font-bold tracking-wide">Actions</span>
                 </div>
-                {ACTION_CATEGORIES.map((category, idx) => (
-                  <BlockCategory
-                    key={category.name}
-                    title={category.name}
-                    icon={Box}
-                    options={category.keys.filter(k => filteredActions.includes(k as any))}
-                    searchQuery={blockSearch}
-                    kind="action"
-                    onDragStart={handlePaletteDragStart}
-                    defaultExpanded={idx === 0}
-                  />
-                ))}
               </div>
-            )}
+              <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+                {SIGNAL_CATEGORIES.some((c) => c.keys.some((k) => filteredConditions.includes(k as any))) && (
+                  <div className="mb-8">
+                    <div className="flex items-center gap-2 mb-4 pb-2 border-b border-[rgba(255,255,255,0.06)] text-neutral-300">
+                      <Activity className="w-4 h-4 text-[#dce85d]" />
+                      <span className="text-sm font-bold tracking-wide">Signals</span>
+                    </div>
+                    {SIGNAL_CATEGORIES.map((category, idx) => (
+                      <BlockCategory
+                        key={category.name}
+                        title={category.name}
+                        icon={Activity}
+                        options={category.keys.filter((k) => filteredConditions.includes(k as any))}
+                        searchQuery={blockSearch}
+                        kind="condition"
+                        onDragStart={handlePaletteDragStart}
+                        defaultExpanded={idx === 0}
+                      />
+                    ))}
+                  </div>
+                )}
 
-            {filteredConditions.length === 0 && filteredActions.length === 0 && (
-              <div className="text-center py-8 text-xs text-neutral-500">
-                No blocks found matching &quot;{blockSearch}&quot;
+                {ACTION_CATEGORIES.some((c) => c.keys.some((k) => filteredActions.includes(k as any))) && (
+                  <div className="mb-4">
+                    <div className="flex items-center gap-2 mb-4 pb-2 border-b border-[rgba(255,255,255,0.06)] text-neutral-300">
+                      <Box className="w-4 h-4 text-[#74b97f]" />
+                      <span className="text-sm font-bold tracking-wide">Actions</span>
+                    </div>
+                    {ACTION_CATEGORIES.map((category, idx) => (
+                      <BlockCategory
+                        key={category.name}
+                        title={category.name}
+                        icon={Box}
+                        options={category.keys.filter((k) => filteredActions.includes(k as any))}
+                        searchQuery={blockSearch}
+                        kind="action"
+                        onDragStart={handlePaletteDragStart}
+                        defaultExpanded={idx === 0}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {filteredConditions.length === 0 && filteredActions.length === 0 && (
+                  <div className="text-center py-8 text-xs text-neutral-500">
+                    No blocks found matching &quot;{blockSearch}&quot;
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </>
+          ) : (
+            <>
+              <div className="border-b border-[rgba(255,255,255,0.06)] bg-neutral-900 px-4 py-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]/80">Builder AI</div>
+                    <h2 className="mt-1 text-sm font-semibold text-neutral-50">Describe the bot in plain language</h2>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setChatMessages([
+                        {
+                          id: "assistant-welcome-reset",
+                          role: "assistant",
+                          content: "Describe the bot you want and I’ll turn it into a draft with signals, actions, and market scope.",
+                        },
+                      ]);
+                      setChatInput("");
+                      setError(null);
+                    }}
+                    className="flex h-8 items-center gap-1.5 rounded-md border border-[rgba(255,255,255,0.08)] bg-neutral-800 px-2.5 text-[0.7rem] font-semibold text-neutral-300 transition hover:border-[rgba(255,255,255,0.14)] hover:text-white"
+                  >
+                    <RefreshCcw className="h-3.5 w-3.5" />
+                    Reset
+                  </button>
+                </div>
+                <p className="mt-2 text-xs leading-5 text-neutral-400">
+                  Ask for entries, exits, leverage, cooldowns, or multi-market scans. Each reply can refine the draft on the canvas.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {[
+                    "Build a BTC momentum long bot that waits for an EMA cross, RSI strength, then opens long with TP and SL.",
+                    "Make this trade all active markets, but only after volatility expands and cooldown is clear.",
+                    "Turn the current draft into a mean reversion short on ETH with tighter risk.",
+                  ].map((prompt) => (
+                    <button
+                      key={prompt}
+                      type="button"
+                      onClick={() => void sendAiMessage(prompt)}
+                      className="rounded-full border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] px-3 py-1.5 text-left text-[0.68rem] leading-4 text-neutral-300 transition hover:border-[rgba(220,232,93,0.24)] hover:text-white"
+                    >
+                      {prompt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div ref={chatViewportRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-4 custom-scrollbar">
+                {chatMessages.map((message) => (
+                  <div
+                    key={message.id}
+                    className={clsx(
+                      "rounded-2xl px-3 py-3 text-sm leading-6",
+                      message.role === "assistant"
+                        ? "border border-[rgba(220,232,93,0.16)] bg-[rgba(220,232,93,0.06)] text-neutral-100"
+                        : "border border-[rgba(255,255,255,0.06)] bg-neutral-900 text-neutral-200",
+                    )}
+                  >
+                    <div className="mb-1 text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">
+                      {message.role === "assistant" ? "ClashX AI" : "You"}
+                    </div>
+                    <p className="whitespace-pre-wrap">{message.content}</p>
+                  </div>
+                ))}
+                {chatStatus === "sending" ? (
+                  <div className="rounded-2xl border border-[rgba(220,232,93,0.16)] bg-[rgba(220,232,93,0.04)] px-3 py-3 text-sm text-neutral-300">
+                    Rebuilding the draft...
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="border-t border-[rgba(255,255,255,0.06)] bg-neutral-900 p-4">
+                <div className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] p-2">
+                  <textarea
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        void sendAiMessage();
+                      }
+                    }}
+                    placeholder="Create a SOL trend bot that scales in with TWAP after MACD confirmation..."
+                    className="min-h-28 w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 text-neutral-50 placeholder:text-neutral-500 focus:outline-none"
+                  />
+                  <div className="flex items-center justify-between gap-3 border-t border-[rgba(255,255,255,0.06)] px-2 pt-2">
+                    <div className="text-[0.68rem] leading-4 text-neutral-500">
+                      Press Enter to send. Shift+Enter adds a new line.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void sendAiMessage()}
+                      disabled={chatStatus === "sending" || !chatInput.trim()}
+                      className={clsx(
+                        "flex h-9 items-center gap-2 rounded-full px-3 text-sm font-semibold transition-all",
+                        chatStatus === "sending" || !chatInput.trim()
+                          ? "bg-neutral-800 text-neutral-500"
+                          : "bg-[#dce85d] text-[#090a0a] hover:bg-[#e8f06d]",
+                      )}
+                    >
+                      <ArrowUp className="h-4 w-4" />
+                      Send
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Center - Canvas */}

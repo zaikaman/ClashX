@@ -59,6 +59,9 @@ class Settings:
     pacifica_builder_code: str
     privy_app_id: str
     privy_verification_key: str
+    openai_api_key: str
+    openai_base_url: str
+    openai_model: str
 
 
 @lru_cache(maxsize=1)
@@ -95,4 +98,7 @@ def get_settings() -> Settings:
         pacifica_builder_code=os.getenv("PACIFICA_BUILDER_CODE", ""),
         privy_app_id=os.getenv("PRIVY_APP_ID", ""),
         privy_verification_key=os.getenv("PRIVY_VERIFICATION_KEY", ""),
+        openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
+        openai_base_url=os.getenv("OPENAI_BASE_URL", "").strip(),
+        openai_model=os.getenv("OPENAI_MODEL", "").strip(),
     )
