@@ -14,9 +14,9 @@ import {
   useNodesState,
   type XYPosition,
 } from "@xyflow/react";
-import { Box, Sparkles, Grid3x3, Activity, Play, Search, ChevronDown, ChevronRight, Plus, Globe, Check, ArrowUp, RefreshCcw } from "lucide-react";
+import { Box, Sparkles, Grid3x3, Activity, Play, Search, ChevronDown, ChevronRight, Plus, Globe, Check, ArrowUp, RefreshCcw, Download, Upload } from "lucide-react";
 import { clsx } from "clsx";
-import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 
 import { BuilderFlowNodeCard } from "@/components/builder/builder-flow-node";
 import {
@@ -39,6 +39,7 @@ import {
   createActionNode,
   createCondition,
   createConditionNode,
+  createEntryNode,
   DEFAULT_BUILDER_TEMPLATE_ID,
   ENTRY_NODE_ID,
   getBuilderStarterTemplate,
@@ -78,6 +79,34 @@ type BuilderChatMessage = {
 type BuilderAiRouteResponse = {
   reply: string;
   draft: BuilderAiDraft;
+};
+type PortableBuilderNode = {
+  id: string;
+  kind: "entry" | "condition" | "action";
+  position: XYPosition;
+  config?: Record<string, unknown>;
+};
+type PortableBuilderEdge = {
+  id?: string;
+  source: string;
+  target: string;
+};
+type PortableBuilderDraft = {
+  format: "clashx-builder-draft";
+  version: 1;
+  exported_at: string;
+  draft: {
+    name: string;
+    description: string;
+    visibility: "private" | "public" | "unlisted";
+    selected_market_symbols: string[];
+    active_template_id?: string;
+    builder_mode?: BuilderChatMode;
+    graph: {
+      nodes: PortableBuilderNode[];
+      edges: PortableBuilderEdge[];
+    };
+  };
 };
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -205,6 +234,15 @@ function PaletteCard({
 
 function trimSentence(value: string) {
   return value.endsWith(".") ? value.slice(0, -1) : value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function sanitizeDraftFileName(value: string) {
+  const base = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return base || "clashx-bot-draft";
 }
 
 function normalizeMarketSymbol(symbol: string) {
@@ -367,6 +405,7 @@ export function BuilderGraphStudio({
   const [chatInput, setChatInput] = useState("");
   const [chatStatus, setChatStatus] = useState<"idle" | "sending">("idle");
   const chatViewportRef = useRef<HTMLDivElement | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (authenticatedWallet) setWalletAddress(authenticatedWallet);
@@ -866,6 +905,222 @@ export function BuilderGraphStudio({
     }
   }
 
+  function buildPortableDraft(): PortableBuilderDraft {
+    return {
+      format: "clashx-builder-draft",
+      version: 1,
+      exported_at: new Date().toISOString(),
+      draft: {
+        name: name.trim() || "Untitled bot",
+        description: description.trim(),
+        visibility,
+        selected_market_symbols: selectedMarketSymbols,
+        active_template_id: activeTemplateId,
+        builder_mode: builderMode,
+        graph: {
+          nodes: nodes.map((node) => serializeGraphNode(node) as PortableBuilderNode),
+          edges: edges.map((edge) => ({ id: edge.id, source: edge.source, target: edge.target })),
+        },
+      },
+    };
+  }
+
+  function parsePortableDraft(payload: unknown): PortableBuilderDraft {
+    if (!isRecord(payload) || payload.format !== "clashx-builder-draft" || payload.version !== 1) {
+      throw new Error("This file is not a supported ClashX bot draft.");
+    }
+
+    const { draft } = payload;
+    if (!isRecord(draft)) {
+      throw new Error("The draft payload is missing its configuration.");
+    }
+
+    const visibilityValue = draft.visibility;
+    if (visibilityValue !== "private" && visibilityValue !== "public" && visibilityValue !== "unlisted") {
+      throw new Error("The draft visibility is invalid.");
+    }
+
+    const graph = draft.graph;
+    if (!isRecord(graph) || !Array.isArray(graph.nodes) || !Array.isArray(graph.edges)) {
+      throw new Error("The draft graph is incomplete.");
+    }
+
+    for (const node of graph.nodes) {
+      if (!isRecord(node) || typeof node.id !== "string" || typeof node.kind !== "string" || !isRecord(node.position)) {
+        throw new Error("The draft contains an invalid node.");
+      }
+      if (typeof node.position.x !== "number" || typeof node.position.y !== "number") {
+        throw new Error("One of the imported nodes has an invalid position.");
+      }
+      if (node.kind !== "entry" && node.kind !== "condition" && node.kind !== "action") {
+        throw new Error("The draft contains an unknown node type.");
+      }
+    }
+
+    for (const edge of graph.edges) {
+      if (!isRecord(edge) || typeof edge.source !== "string" || typeof edge.target !== "string") {
+        throw new Error("The draft contains an invalid edge.");
+      }
+    }
+
+    const selectedSymbols = Array.isArray(draft.selected_market_symbols)
+      ? draft.selected_market_symbols.filter((value): value is string => typeof value === "string")
+      : [];
+
+    return {
+      format: "clashx-builder-draft",
+      version: 1,
+      exported_at: typeof payload.exported_at === "string" ? payload.exported_at : new Date().toISOString(),
+      draft: {
+        name: typeof draft.name === "string" ? draft.name : "",
+        description: typeof draft.description === "string" ? draft.description : "",
+        visibility: visibilityValue,
+        selected_market_symbols: selectedSymbols,
+        active_template_id: typeof draft.active_template_id === "string" ? draft.active_template_id : undefined,
+        builder_mode: draft.builder_mode === "ai" ? "ai" : "visual",
+        graph: {
+          nodes: graph.nodes as PortableBuilderNode[],
+          edges: graph.edges as PortableBuilderEdge[],
+        },
+      },
+    };
+  }
+
+  function applyImportedDraft(payload: PortableBuilderDraft) {
+    const nextNodes: BuilderFlowNode[] = [];
+    const nextEdges: BuilderFlowEdge[] = [];
+    const nodeIdMap = new Map<string, string>();
+    let importedEntryPosition: XYPosition | null = null;
+
+    for (const node of payload.draft.graph.nodes) {
+      if (node.kind === "entry") {
+        nodeIdMap.set(node.id, ENTRY_NODE_ID);
+        importedEntryPosition = snapPosition(node.position);
+        continue;
+      }
+
+      if (!isRecord(node.config) || typeof node.config.type !== "string") {
+        throw new Error("One of the imported blocks is missing its type.");
+      }
+
+      if (node.kind === "condition") {
+        if (!CONDITION_OPTIONS.includes(node.config.type as (typeof CONDITION_OPTIONS)[number])) {
+          throw new Error(`Unsupported condition type: ${node.config.type}`);
+        }
+        const baseCondition = createCondition(node.config.type as (typeof CONDITION_OPTIONS)[number]);
+        const condition: VisualCondition = {
+          ...baseCondition,
+          ...(node.config as Partial<VisualCondition>),
+          id: baseCondition.id,
+          type: node.config.type,
+          symbol: typeof node.config.symbol === "string" && node.config.symbol.trim() ? node.config.symbol : baseCondition.symbol,
+        };
+        const nextNode = createConditionNode(condition, snapPosition(node.position));
+        nextNodes.push(nextNode);
+        nodeIdMap.set(node.id, nextNode.id);
+        continue;
+      }
+
+      if (!ACTION_OPTIONS.includes(node.config.type as (typeof ACTION_OPTIONS)[number])) {
+        throw new Error(`Unsupported action type: ${node.config.type}`);
+      }
+      const baseAction = createAction(node.config.type as (typeof ACTION_OPTIONS)[number]);
+      const action: VisualAction = {
+        ...baseAction,
+        ...(node.config as Partial<VisualAction>),
+        id: baseAction.id,
+        type: node.config.type,
+        symbol: typeof node.config.symbol === "string" && node.config.symbol.trim() ? node.config.symbol : baseAction.symbol,
+      };
+      const nextNode = createActionNode(action, snapPosition(node.position));
+      nextNodes.push(nextNode);
+      nodeIdMap.set(node.id, nextNode.id);
+    }
+
+    const entryNode = createEntryNode();
+    if (importedEntryPosition) {
+      entryNode.position = importedEntryPosition;
+    }
+
+    nextNodes.unshift(entryNode);
+
+    payload.draft.graph.edges.forEach((edge, index) => {
+      const source = nodeIdMap.get(edge.source);
+      const target = nodeIdMap.get(edge.target);
+      if (!source || !target) {
+        throw new Error("The draft has broken graph connections.");
+      }
+      if (source === target) {
+        return;
+      }
+      nextEdges.push({
+        id: `imported-edge-${index + 1}`,
+        source,
+        target,
+        type: "smoothstep",
+      });
+    });
+
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    setSelectedNodeId(nextNodes.find((node) => node.data.kind !== "entry")?.id ?? null);
+    setActiveTemplateId(payload.draft.active_template_id ?? BLANK_BUILDER_TEMPLATE_ID);
+    setName(payload.draft.name);
+    setDescription(payload.draft.description);
+    setVisibility(payload.draft.visibility);
+    setSelectedMarketSymbols(payload.draft.selected_market_symbols.length > 0 ? payload.draft.selected_market_symbols.map(normalizeMarketSymbol) : ["BTC"]);
+    setBuilderMode(payload.draft.builder_mode ?? "visual");
+    setCreatedBotId(null);
+    setRuntimeStatus(null);
+    setError(null);
+    setBlockSearch("");
+
+    requestAnimationFrame(() => {
+      flow?.fitView({ padding: 0.18, duration: 280 });
+    });
+  }
+
+  function exportDraft() {
+    try {
+      const payload = buildPortableDraft();
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${sanitizeDraftFileName(payload.draft.name)}.json`;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => window.URL.revokeObjectURL(url), 0);
+      onNotice?.({
+        eyebrow: "Exported",
+        title: "Draft downloaded",
+        detail: "You can import this JSON on any Builder Studio session.",
+      });
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : "Could not export this draft");
+    }
+  }
+
+  async function importDraft(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    try {
+      const raw = await file.text();
+      const payload = parsePortableDraft(JSON.parse(raw));
+      applyImportedDraft(payload);
+      onNotice?.({
+        eyebrow: "Imported",
+        title: "Draft loaded",
+        detail: "The builder has been updated from your JSON file.",
+      });
+    } catch (importError) {
+      setError(importError instanceof Error ? importError.message : "Could not import this draft");
+    }
+  }
+
   async function deployBot() {
     if (!authenticated) return void login();
     const blocker = getBuilderBlocker("deploy");
@@ -945,6 +1200,13 @@ export function BuilderGraphStudio({
           </div>
 
           <div className="flex items-center gap-3 flex-1 justify-end max-w-2xl">
+             <input
+               ref={importInputRef}
+               type="file"
+               accept="application/json,.json"
+               onChange={importDraft}
+               className="hidden"
+             />
              <div className="flex items-center gap-3 flex-1">
                <input 
                value={name}
@@ -959,6 +1221,22 @@ export function BuilderGraphStudio({
                >
                  <Plus className="w-4 h-4" />
                  New
+               </button>
+               <button
+                 type="button"
+                 onClick={exportDraft}
+                 className="flex h-9 items-center gap-2 rounded-md border border-[rgba(255,255,255,0.08)] bg-neutral-900 px-3 text-sm font-semibold text-neutral-200 transition-all hover:border-[rgba(116,185,127,0.34)] hover:text-white"
+               >
+                 <Download className="w-4 h-4" />
+                 Export
+               </button>
+               <button
+                 type="button"
+                 onClick={() => importInputRef.current?.click()}
+                 className="flex h-9 items-center gap-2 rounded-md border border-[rgba(255,255,255,0.08)] bg-neutral-900 px-3 text-sm font-semibold text-neutral-200 transition-all hover:border-[rgba(220,232,93,0.34)] hover:text-white"
+               >
+                 <Upload className="w-4 h-4" />
+                 Import
                </button>
              </div>
              <button
