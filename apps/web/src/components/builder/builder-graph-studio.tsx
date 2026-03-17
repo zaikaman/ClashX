@@ -1315,7 +1315,7 @@ export function BuilderGraphStudio({
       const response = await fetch(`${API_BASE_URL}/api/bots/${botId}/deploy`, {
         method: "POST",
         headers: await getAuthHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ wallet_address: walletAddress.trim(), risk_policy_json: { max_leverage: 5, max_order_size_usd: 200, cooldown_seconds: 45, max_drawdown_pct: 18 } }),
+        body: JSON.stringify({ wallet_address: walletAddress.trim(), risk_policy_json: { max_leverage: 5, max_order_size_usd: 200, allocated_capital_usd: 200, cooldown_seconds: 45, max_drawdown_pct: 18 } }),
       });
       const payload = (await response.json()) as { status?: string; detail?: string };
       if (!response.ok) throw new Error(payload.detail ?? "Deploy failed");

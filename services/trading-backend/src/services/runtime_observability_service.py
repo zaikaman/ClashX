@@ -5,12 +5,14 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from src.services.bot_risk_service import BotRiskService
 from src.services.supabase_rest import SupabaseRestClient
 
 
 class RuntimeObservabilityService:
     def __init__(self) -> None:
         self._supabase = SupabaseRestClient()
+        self._risk = BotRiskService()
 
     def get_overview(self, db: Any, *, bot_id: str, wallet_address: str, user_id: str) -> dict[str, Any]:
         del db, user_id
@@ -78,7 +80,7 @@ class RuntimeObservabilityService:
         runtime = self._require_runtime(bot_id=bot_id, wallet_address=wallet_address)
         existing = runtime["risk_policy_json"] if isinstance(runtime.get("risk_policy_json"), dict) else {}
         runtime_state = existing.get("_runtime_state") if isinstance(existing.get("_runtime_state"), dict) else {}
-        next_policy = {**existing, **risk_policy_json, "_runtime_state": runtime_state}
+        next_policy = self._risk.normalize_policy({**existing, **risk_policy_json, "_runtime_state": runtime_state})
         updated_at = datetime.now(tz=UTC).isoformat()
         runtime = self._supabase.update(
             "bot_runtimes",

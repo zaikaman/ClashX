@@ -106,10 +106,12 @@ def activate_authorization(authorization_id: str, payload: ActivateAuthorization
     matching_authorization = None
     for wallet_address in user.wallet_addresses:
         candidate = pacifica_auth_service.get_authorization_by_wallet(db, wallet_address)
-        if candidate is not None:
+        if candidate is None:
+            continue
+        if candidate["id"] == authorization_id:
             matching_authorization = candidate
             break
-    if matching_authorization is None or matching_authorization["id"] != authorization_id:
+    if matching_authorization is None:
         raise HTTPException(status_code=403, detail="Authorization record does not belong to the authenticated wallet")
     try:
         authorization = pacifica_auth_service.activate_authorization(db, authorization_id=authorization_id, bind_agent_signature=payload.bind_agent_signature, builder_approval_signature=payload.builder_approval_signature)

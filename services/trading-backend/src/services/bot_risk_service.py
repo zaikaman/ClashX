@@ -8,6 +8,7 @@ class BotRiskService:
     DEFAULT_POLICY = {
         "max_leverage": 5,
         "max_order_size_usd": 200,
+        "allocated_capital_usd": 200,
         "cooldown_seconds": 30,
         "max_drawdown_pct": 25,
         "allowed_symbols": [],
@@ -25,6 +26,13 @@ class BotRiskService:
         merged["max_leverage"] = int(self._to_float(merged.get("max_leverage"), self.DEFAULT_POLICY["max_leverage"]))
         merged["max_order_size_usd"] = self._to_float(
             merged.get("max_order_size_usd"), self.DEFAULT_POLICY["max_order_size_usd"]
+        )
+        merged["allocated_capital_usd"] = max(
+            1.0,
+            self._to_float(
+                merged.get("allocated_capital_usd"),
+                self.DEFAULT_POLICY["allocated_capital_usd"],
+            ),
         )
         merged["cooldown_seconds"] = int(
             self._to_float(merged.get("cooldown_seconds"), self.DEFAULT_POLICY["cooldown_seconds"])
@@ -72,11 +80,9 @@ class BotRiskService:
                 f"requested size_usd {size_usd:g} exceeds max_order_size_usd {normalized['max_order_size_usd']:g}"
             )
 
-        drawdown_pct = self._to_float(runtime_state.get("drawdown_pct"), 0.0)
-        if drawdown_pct >= normalized["max_drawdown_pct"]:
-            issues.append(
-                f"runtime drawdown {drawdown_pct:.2f}% is above max_drawdown_pct {normalized['max_drawdown_pct']:.2f}%"
-            )
+        drawdown_reason = self.drawdown_breach_reason(policy=normalized, runtime_state=runtime_state)
+        if drawdown_reason is not None:
+            issues.append(drawdown_reason)
 
         cooldown_seconds = int(normalized["cooldown_seconds"])
         last_executed_at = runtime_state.get("last_executed_at")
@@ -96,7 +102,6 @@ class BotRiskService:
         *,
         policy: dict[str, Any],
         success: bool,
-        pnl_delta: float = 0.0,
     ) -> dict[str, Any]:
         normalized = self.normalize_policy(policy)
         state = normalized.get("_runtime_state") or {}
@@ -109,17 +114,51 @@ class BotRiskService:
         if not success:
             state["failures_total"] = int(state.get("failures_total") or 0) + 1
 
-        equity = self._to_float(state.get("equity"), 0.0) + pnl_delta
-        peak_equity = max(self._to_float(state.get("peak_equity"), equity), equity)
-        drawdown_pct = 0.0
-        if peak_equity > 0:
-            drawdown_pct = max(0.0, (peak_equity - equity) / peak_equity * 100)
+        normalized["_runtime_state"] = state
+        return normalized
 
-        state["equity"] = equity
-        state["peak_equity"] = peak_equity
+    def sync_performance(
+        self,
+        *,
+        policy: dict[str, Any],
+        pnl_total: float,
+        pnl_realized: float,
+        pnl_unrealized: float,
+    ) -> dict[str, Any]:
+        normalized = self.normalize_policy(policy)
+        state = normalized.get("_runtime_state") or {}
+        if not isinstance(state, dict):
+            state = {}
+
+        allocated_capital = normalized["allocated_capital_usd"]
+        drawdown_amount = max(0.0, -pnl_total)
+        drawdown_pct = (drawdown_amount / allocated_capital * 100.0) if allocated_capital > 0 else 0.0
+        state["allocated_capital_usd"] = round(allocated_capital, 4)
+        state["realized_pnl_usd"] = round(pnl_realized, 4)
+        state["unrealized_pnl_usd"] = round(pnl_unrealized, 4)
+        state["pnl_total_usd"] = round(pnl_total, 4)
+        state["drawdown_amount_usd"] = round(drawdown_amount, 4)
         state["drawdown_pct"] = round(drawdown_pct, 4)
         normalized["_runtime_state"] = state
         return normalized
+
+    def drawdown_breach_reason(
+        self,
+        *,
+        policy: dict[str, Any],
+        runtime_state: dict[str, Any],
+    ) -> str | None:
+        normalized = self.normalize_policy(policy)
+        drawdown_pct = self._to_float(runtime_state.get("drawdown_pct"), 0.0)
+        if drawdown_pct < normalized["max_drawdown_pct"]:
+            return None
+        drawdown_amount = self._to_float(runtime_state.get("drawdown_amount_usd"), 0.0)
+        allocated_capital = normalized["allocated_capital_usd"]
+        return (
+            f"runtime drawdown ${drawdown_amount:.2f} ({drawdown_pct:.2f}%) "
+            f"has reached the allocation-based max_drawdown_pct {normalized['max_drawdown_pct']:.2f}% "
+            f"on ${allocated_capital:.2f} allocated capital"
+        )
 
     @staticmethod
     def _to_float(value: Any, default: float) -> float:

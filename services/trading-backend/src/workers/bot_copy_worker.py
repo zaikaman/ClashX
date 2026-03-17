@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 from datetime import UTC, datetime
+from decimal import ROUND_DOWN, Decimal
 from typing import Any
 
 from src.services.event_broadcaster import broadcaster
@@ -110,6 +111,8 @@ class BotCopyWorker:
             action = source_event["request_payload"] if isinstance(source_event.get("request_payload"), dict) else {}
             try:
                 result = await self._execute_action(
+                    relationship=relationship,
+                    source_event=source_event,
                     action=action,
                     scale_bps=relationship["scale_bps"],
                     credentials=credentials,
@@ -161,6 +164,8 @@ class BotCopyWorker:
     async def _execute_action(
         self,
         *,
+        relationship: dict[str, Any],
+        source_event: dict[str, Any],
         action: dict[str, Any],
         scale_bps: int,
         credentials: dict[str, str],
@@ -176,18 +181,129 @@ class BotCopyWorker:
             "symbol": symbol,
         }
 
-        if action_type in {"open_long", "open_short"}:
-            leverage = max(1, int(float(action.get("leverage") or 1)))
-            mark_price = float((market_lookup.get(symbol) or {}).get("mark_price") or 0)
-            size_usd = float(action.get("size_usd") or 0)
-            mirrored_size_usd = size_usd * (scale_bps / 10_000)
-            if mark_price <= 0 or mirrored_size_usd <= 0:
-                raise ValueError("Cannot mirror open action without valid mark price and size")
-            await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
-            amount = (mirrored_size_usd * leverage) / mark_price
-            return await self._pacifica.place_order(
-                {"type": "create_market_order", **payload, "side": "bid" if action_type == "open_long" else "ask", "amount": amount}
+        if action_type in {"open_long", "open_short", "place_market_order"}:
+            if not symbol:
+                raise ValueError("Market orders require a symbol")
+            side = (
+                "long"
+                if action_type == "open_long"
+                else "short"
+                if action_type == "open_short"
+                else str(action.get("side") or "").lower().strip()
             )
+            if side not in {"long", "short"}:
+                raise ValueError("Market orders require side to be long or short")
+            leverage = max(1, int(float(action.get("leverage") or 1)))
+            reduce_only = self._to_bool(action.get("reduce_only"), False)
+            mark_price = float((market_lookup.get(symbol) or {}).get("mark_price") or 0)
+            amount = self._resolve_order_quantity(
+                action=action,
+                scale_bps=scale_bps,
+                market_lookup=market_lookup,
+                symbol=symbol,
+                reference_price=None,
+            )
+            if not reduce_only:
+                await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
+            response = await self._pacifica.place_order(
+                {
+                    "type": "create_market_order",
+                    **payload,
+                    "side": "bid" if side == "long" else "ask",
+                    "amount": amount,
+                    "reduce_only": reduce_only,
+                    "slippage_percent": float(action.get("slippage_percent") or 0.5),
+                }
+            )
+            response["execution_meta"] = {
+                "symbol": symbol,
+                "side": "bid" if side == "long" else "ask",
+                "amount": amount,
+                "reduce_only": reduce_only,
+                "reference_price": mark_price,
+            }
+            return response
+
+        if action_type == "place_limit_order":
+            if not symbol:
+                raise ValueError("Limit orders require a symbol")
+            side = str(action.get("side") or "").lower().strip()
+            if side not in {"long", "short"}:
+                raise ValueError("Limit orders require side to be long or short")
+            price = float(action.get("price") or 0)
+            if price <= 0:
+                raise ValueError("Limit orders require a positive price")
+            leverage = max(1, int(float(action.get("leverage") or 1)))
+            reduce_only = self._to_bool(action.get("reduce_only"), False)
+            amount = self._resolve_order_quantity(
+                action=action,
+                scale_bps=scale_bps,
+                market_lookup=market_lookup,
+                symbol=symbol,
+                reference_price=price,
+            )
+            if not reduce_only:
+                await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
+            response = await self._pacifica.place_order(
+                {
+                    "type": "create_order",
+                    **payload,
+                    "side": "bid" if side == "long" else "ask",
+                    "amount": amount,
+                    "price": price,
+                    "tif": str(action.get("tif") or "GTC"),
+                    "reduce_only": reduce_only,
+                    "client_order_id": self._mirror_client_order_id(relationship=relationship, source_event=source_event),
+                }
+            )
+            response["execution_meta"] = {
+                "symbol": symbol,
+                "side": "bid" if side == "long" else "ask",
+                "amount": amount,
+                "reduce_only": reduce_only,
+                "reference_price": price,
+            }
+            return response
+
+        if action_type == "place_twap_order":
+            if not symbol:
+                raise ValueError("TWAP orders require a symbol")
+            side = str(action.get("side") or "").lower().strip()
+            if side not in {"long", "short"}:
+                raise ValueError("TWAP orders require side to be long or short")
+            duration_seconds = max(1, int(float(action.get("duration_seconds") or 0)))
+            leverage = max(1, int(float(action.get("leverage") or 1)))
+            reduce_only = self._to_bool(action.get("reduce_only"), False)
+            mark_price = float((market_lookup.get(symbol) or {}).get("mark_price") or 0)
+            amount = self._resolve_order_quantity(
+                action=action,
+                scale_bps=scale_bps,
+                market_lookup=market_lookup,
+                symbol=symbol,
+                reference_price=None,
+            )
+            if not reduce_only:
+                await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
+            response = await self._pacifica.place_order(
+                {
+                    "type": "create_twap_order",
+                    **payload,
+                    "side": "bid" if side == "long" else "ask",
+                    "amount": amount,
+                    "reduce_only": reduce_only,
+                    "duration_in_seconds": duration_seconds,
+                    "slippage_percent": float(action.get("slippage_percent") or 0.5),
+                    "client_order_id": self._mirror_client_order_id(relationship=relationship, source_event=source_event),
+                }
+            )
+            response["execution_meta"] = {
+                "symbol": symbol,
+                "side": "bid" if side == "long" else "ask",
+                "amount": amount,
+                "reduce_only": reduce_only,
+                "reference_price": mark_price,
+            }
+            return response
 
         if action_type == "close_position":
             follower_position = position_lookup.get(symbol)
@@ -229,8 +345,44 @@ class BotCopyWorker:
             )
 
         if action_type == "update_leverage":
+            if not symbol:
+                raise ValueError("Leverage updates require a symbol")
             leverage = max(1, int(float(action.get("leverage") or 1)))
             return await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
+
+        if action_type == "cancel_order":
+            if not symbol:
+                raise ValueError("Cancel order requires a symbol")
+            return await self._pacifica.place_order(
+                {
+                    "type": "cancel_order",
+                    **payload,
+                    **self._extract_mirrored_order_identifier(relationship=relationship, source_event=source_event, action=action),
+                }
+            )
+
+        if action_type == "cancel_twap_order":
+            if not symbol:
+                raise ValueError("Cancel TWAP order requires a symbol")
+            return await self._pacifica.place_order(
+                {
+                    "type": "cancel_twap_order",
+                    **payload,
+                    **self._extract_mirrored_order_identifier(relationship=relationship, source_event=source_event, action=action),
+                }
+            )
+
+        if action_type == "cancel_all_orders":
+            if not self._to_bool(action.get("all_symbols"), True) and not symbol:
+                raise ValueError("Cancel all orders requires a symbol when all_symbols is false")
+            return await self._pacifica.place_order(
+                {
+                    "type": "cancel_all_orders",
+                    **payload,
+                    "all_symbols": self._to_bool(action.get("all_symbols"), True),
+                    "exclude_reduce_only": self._to_bool(action.get("exclude_reduce_only"), False),
+                }
+            )
 
         raise ValueError(f"Unsupported mirrored action type: {action_type}")
 
@@ -239,6 +391,121 @@ class BotCopyWorker:
             return await loader()
         except PacificaClientError:
             return fallback
+
+    @staticmethod
+    def _to_bool(value: Any, default: bool) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "y"}:
+                return True
+            if normalized in {"0", "false", "no", "n"}:
+                return False
+        return bool(value)
+
+    def _resolve_order_quantity(
+        self,
+        *,
+        action: dict[str, Any],
+        scale_bps: int,
+        market_lookup: dict[str, dict[str, Any]],
+        symbol: str,
+        reference_price: float | None,
+    ) -> float:
+        market = market_lookup.get(symbol) or {}
+        raw_quantity = float(action.get("quantity") or 0)
+        scaled_quantity = raw_quantity * (scale_bps / 10_000)
+        if scaled_quantity > 0:
+            return self._normalize_order_quantity(
+                scaled_quantity,
+                lot_size=float(market.get("lot_size") or 0),
+                min_order_size=float(market.get("min_order_size") or 0),
+                symbol=symbol,
+            )
+
+        resolved_price = reference_price if reference_price is not None else float(market.get("mark_price") or 0)
+        if resolved_price <= 0:
+            raise ValueError("Cannot mirror open action without valid mark price and size")
+        size_usd = float(action.get("size_usd") or 0)
+        mirrored_size_usd = size_usd * (scale_bps / 10_000)
+        if mirrored_size_usd <= 0:
+            raise ValueError("Cannot mirror open action without valid mark price and size")
+        leverage = max(1, int(float(action.get("leverage") or 1)))
+        return self._normalize_order_quantity(
+            (mirrored_size_usd * leverage) / resolved_price,
+            lot_size=float(market.get("lot_size") or 0),
+            min_order_size=float(market.get("min_order_size") or 0),
+            symbol=symbol,
+        )
+
+    @staticmethod
+    def _normalize_order_quantity(quantity: float, *, lot_size: float, min_order_size: float, symbol: str) -> float:
+        normalized = Decimal(str(quantity))
+        if lot_size > 0:
+            step = Decimal(str(lot_size))
+            normalized = (normalized / step).to_integral_value(rounding=ROUND_DOWN) * step
+        normalized_float = float(normalized)
+        if normalized_float <= 0:
+            raise ValueError(f"Order size is below the minimum tradable increment for {symbol}.")
+        if min_order_size > 0 and normalized_float < min_order_size:
+            raise ValueError(f"Order size for {symbol} must be at least {min_order_size:g}. Adjust the copied size.")
+        return normalized_float
+
+    def _extract_mirrored_order_identifier(
+        self,
+        *,
+        relationship: dict[str, Any],
+        source_event: dict[str, Any],
+        action: dict[str, Any],
+    ) -> dict[str, Any]:
+        del source_event
+        source_identifier = self._source_order_identifier(action)
+        if not source_identifier:
+            raise ValueError("Action requires order_id or client_order_id")
+        return {
+            "client_order_id": self._mirrored_order_key(
+                relationship_id=str(relationship["id"]),
+                source_identifier=source_identifier,
+            )
+        }
+
+    def _mirror_client_order_id(self, *, relationship: dict[str, Any], source_event: dict[str, Any]) -> str:
+        action = source_event.get("request_payload") if isinstance(source_event.get("request_payload"), dict) else {}
+        source_identifier = self._source_order_identifier(action)
+        if not source_identifier:
+            result_payload = source_event.get("result_payload") if isinstance(source_event.get("result_payload"), dict) else {}
+            source_identifier = str(
+                result_payload.get("request_id")
+                or ((result_payload.get("response") or {}).get("order_id") if isinstance(result_payload.get("response"), dict) else "")
+                or ((result_payload.get("response") or {}).get("client_order_id") if isinstance(result_payload.get("response"), dict) else "")
+                or source_event.get("id")
+                or ""
+            ).strip()
+        if not source_identifier:
+            raise ValueError("Source order is missing a stable identifier")
+        return self._mirrored_order_key(
+            relationship_id=str(relationship["id"]),
+            source_identifier=source_identifier,
+        )
+
+    @staticmethod
+    def _source_order_identifier(action: dict[str, Any]) -> str:
+        client_order_id = str(action.get("client_order_id") or "").strip()
+        if client_order_id:
+            return client_order_id
+        order_id = action.get("order_id")
+        if order_id not in (None, ""):
+            return str(order_id).strip()
+        return ""
+
+    @staticmethod
+    def _mirrored_order_key(*, relationship_id: str, source_identifier: str) -> str:
+        trimmed_relationship = relationship_id.replace("-", "")[:12]
+        trimmed_source = source_identifier.replace(" ", "").replace("-", "")[:32]
+        return f"mirror-{trimmed_relationship}-{trimmed_source}"
 
     @property
     def is_running(self) -> bool:

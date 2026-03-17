@@ -51,6 +51,7 @@ const DEFAULT_RISK_POLICY_JSON = JSON.stringify(
   {
     max_leverage: 5,
     max_order_size_usd: 200,
+    allocated_capital_usd: 200,
     cooldown_seconds: 45,
     max_drawdown_pct: 18,
   },

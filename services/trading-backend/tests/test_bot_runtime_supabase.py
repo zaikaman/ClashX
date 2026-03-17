@@ -70,6 +70,7 @@ def _seed_tables() -> dict[str, list[dict[str, Any]]]:
                 "risk_policy_json": {
                     "max_leverage": 5,
                     "max_order_size_usd": 250,
+                    "allocated_capital_usd": 200,
                     "cooldown_seconds": 45,
                     "max_drawdown_pct": 18,
                     "_runtime_state": {},
@@ -234,6 +235,7 @@ def test_deploy_runtime_persists_supabase_runtime_and_event() -> None:
     assert runtime["status"] == "active"
     assert fake_supabase.tables["bot_runtimes"][0]["bot_definition_id"] == "bot-1"
     assert fake_supabase.tables["bot_runtimes"][0]["risk_policy_json"]["max_order_size_usd"] == 180
+    assert fake_supabase.tables["bot_runtimes"][0]["risk_policy_json"]["allocated_capital_usd"] == 200
     assert fake_supabase.tables["bot_execution_events"][0]["event_type"] == "runtime.deployed"
 
 
@@ -367,6 +369,7 @@ def test_runtime_worker_executes_supabase_trade_without_sqlalchemy() -> None:
     worker._auth = FakeAuthService()
     worker._pacifica = fake_pacifica
     worker._indicator_context = FakeIndicatorContextService()
+    worker._calculate_runtime_performance = _fake_runtime_performance  # type: ignore[method-assign]
 
     asyncio.run(worker._process_runtime(None, fake_supabase.tables["bot_runtimes"][0]))
 
@@ -376,7 +379,72 @@ def test_runtime_worker_executes_supabase_trade_without_sqlalchemy() -> None:
     assert [order["type"] for order in fake_pacifica.orders] == ["update_leverage", "create_market_order"]
     assert fake_pacifica.orders[1]["amount"] == 0.005
     assert runtime["risk_policy_json"]["_runtime_state"]["executions_total"] == 1
+    assert runtime["risk_policy_json"]["_runtime_state"]["allocated_capital_usd"] == 200
     assert any(event["event_type"] == "action.executed" for event in execution_events)
+
+
+async def _fake_runtime_performance(runtime: dict[str, Any]) -> dict[str, Any]:
+    del runtime
+    return {
+        "pnl_total": 0.0,
+        "pnl_realized": 0.0,
+        "pnl_unrealized": 0.0,
+        "win_streak": 0,
+        "positions": [],
+    }
+
+
+def test_runtime_worker_stops_bot_when_allocation_drawdown_is_breached() -> None:
+    fake_supabase = FakeSupabaseRestClient(_seed_tables())
+    fake_pacifica = FakePacificaClient()
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+    worker._supabase = fake_supabase
+    worker._engine._supabase = fake_supabase
+    worker._auth = FakeAuthService()
+    worker._pacifica = fake_pacifica
+    worker._indicator_context = FakeIndicatorContextService()
+
+    async def _breached_runtime_performance(runtime: dict[str, Any]) -> dict[str, Any]:
+        del runtime
+        return {
+            "pnl_total": -41.0,
+            "pnl_realized": -15.0,
+            "pnl_unrealized": -26.0,
+            "win_streak": 0,
+            "positions": [],
+        }
+
+    worker._calculate_runtime_performance = _breached_runtime_performance  # type: ignore[method-assign]
+
+    asyncio.run(worker._process_runtime(None, fake_supabase.tables["bot_runtimes"][0]))
+
+    runtime = fake_supabase.tables["bot_runtimes"][0]
+    execution_events = fake_supabase.tables["bot_execution_events"]
+
+    assert runtime["status"] == "stopped"
+    assert fake_pacifica.orders == []
+    assert runtime["risk_policy_json"]["_runtime_state"]["drawdown_amount_usd"] == 41.0
+    assert runtime["risk_policy_json"]["_runtime_state"]["drawdown_pct"] == 20.5
+    assert execution_events[-1]["event_type"] == "runtime.stopped"
+    assert "allocated drawdown budget" in execution_events[-1]["decision_summary"]
+
+
+def test_runtime_worker_idempotency_key_tracks_execution_state_not_fixed_time_bucket() -> None:
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+
+    action = {"type": "open_long", "symbol": "BTC", "size_usd": 100, "leverage": 2}
+    first_key = worker._build_idempotency_key(
+        runtime_id="runtime-1",
+        action=action,
+        runtime_state={"executions_total": 0, "failures_total": 0, "last_executed_at": ""},
+    )
+    second_key = worker._build_idempotency_key(
+        runtime_id="runtime-1",
+        action=action,
+        runtime_state={"executions_total": 1, "failures_total": 0, "last_executed_at": "2026-03-17T00:00:00+00:00"},
+    )
+
+    assert first_key != second_key
 
 
 def test_trading_service_places_orders_with_normalized_perp_market_symbols() -> None:

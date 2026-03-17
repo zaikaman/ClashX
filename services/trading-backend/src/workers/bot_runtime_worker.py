@@ -11,6 +11,7 @@ from typing import Any
 
 from src.services.bot_risk_service import BotRiskService
 from src.services.bot_runtime_engine import BotRuntimeEngine
+from src.services.bot_performance_service import BotPerformanceService
 from src.services.event_broadcaster import broadcaster
 from src.services.indicator_context_service import IndicatorContextService
 from src.services.pacifica_auth_service import PacificaAuthService
@@ -92,6 +93,59 @@ class BotRuntimeWorker:
             )
             return
 
+        markets, positions = await asyncio.gather(
+            self._safe_load(self._pacifica.get_markets, []),
+            self._safe_load(lambda: self._pacifica.get_positions(runtime["wallet_address"]), []),
+        )
+        market_lookup = self._build_market_lookup(markets)
+        position_lookup = self._build_position_lookup(positions)
+        rules_json = bot["rules_json"] if isinstance(bot.get("rules_json"), dict) else {}
+        candle_lookup = await self._indicator_context.load_candle_lookup(rules_json)
+
+        runtime_policy = self._risk.normalize_policy(runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {})
+        performance = await self._calculate_runtime_performance(runtime)
+        runtime_policy = self._risk.sync_performance(
+            policy=runtime_policy,
+            pnl_total=float(performance.get("pnl_total") or 0.0),
+            pnl_realized=float(performance.get("pnl_realized") or 0.0),
+            pnl_unrealized=float(performance.get("pnl_unrealized") or 0.0),
+        )
+        runtime = self._update_runtime(
+            runtime,
+            {"risk_policy_json": runtime_policy, "updated_at": now},
+        )
+        runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
+        drawdown_reason = self._risk.drawdown_breach_reason(policy=runtime_policy, runtime_state=runtime_state)
+        if drawdown_reason is not None:
+            runtime = self._update_runtime(
+                runtime,
+                {
+                    "status": "stopped",
+                    "stopped_at": now,
+                    "risk_policy_json": runtime_policy,
+                    "updated_at": now,
+                },
+            )
+            event = self._engine.append_execution_event(
+                None,
+                runtime=runtime,
+                event_type="runtime.stopped",
+                decision_summary="runtime stopped after exceeding allocated drawdown budget",
+                request_payload={
+                    "allocated_capital_usd": runtime_policy.get("allocated_capital_usd"),
+                    "max_drawdown_pct": runtime_policy.get("max_drawdown_pct"),
+                },
+                result_payload={"runtime_state": runtime_state},
+                status="success",
+                error_reason=drawdown_reason,
+            )
+            await broadcaster.publish(
+                channel=f"user:{runtime['user_id']}",
+                event="bot.runtime.stopped",
+                payload=self._serialize_event_payload(event),
+            )
+            return
+
         credentials = self._auth.get_trading_credentials(None, runtime["wallet_address"])
         if credentials is None:
             runtime = self._update_runtime(runtime, {"status": "paused", "updated_at": now})
@@ -112,17 +166,6 @@ class BotRuntimeWorker:
             )
             return
 
-        markets, positions = await asyncio.gather(
-            self._safe_load(self._pacifica.get_markets, []),
-            self._safe_load(lambda: self._pacifica.get_positions(runtime["wallet_address"]), []),
-        )
-        market_lookup = self._build_market_lookup(markets)
-        position_lookup = self._build_position_lookup(positions)
-        rules_json = bot["rules_json"] if isinstance(bot.get("rules_json"), dict) else {}
-        candle_lookup = await self._indicator_context.load_candle_lookup(rules_json)
-
-        runtime_policy = self._risk.normalize_policy(runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {})
-        runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
         evaluation = self._rules.evaluate(
             rules_json=rules_json,
             context={
@@ -133,23 +176,23 @@ class BotRuntimeWorker:
             },
         )
         if not evaluation.get("triggered"):
-            self._update_runtime(runtime, {"updated_at": now})
             return
 
         runtime_touched = False
         coordination = self._coordination if getattr(self._coordination, "_supabase", None) is self._supabase else WorkerCoordinationService(self._supabase)
         for action in evaluation.get("actions") or []:
-            idempotency_key = self._build_idempotency_key(runtime_id=runtime["id"], action=action)
-            if not coordination.try_claim_action(runtime_id=runtime["id"], idempotency_key=idempotency_key):
-                continue
-
             issues = self._risk.assess_action(policy=runtime_policy, action=action, runtime_state=runtime_state)
             if issues:
+                skipped_key = self._build_idempotency_key(
+                    runtime_id=runtime["id"],
+                    action=action,
+                    runtime_state=runtime_state,
+                )
                 event = self._engine.append_execution_event(
                     None,
                     runtime=runtime,
                     event_type="action.skipped",
-                    decision_summary=idempotency_key,
+                    decision_summary=skipped_key,
                     request_payload=action,
                     result_payload={"issues": issues},
                     status="skipped",
@@ -159,6 +202,14 @@ class BotRuntimeWorker:
                     event="bot.execution.skipped",
                     payload=self._serialize_event_payload(event),
                 )
+                continue
+
+            idempotency_key = self._build_idempotency_key(
+                runtime_id=runtime["id"],
+                action=action,
+                runtime_state=runtime_state,
+            )
+            if not coordination.try_claim_action(runtime_id=runtime["id"], idempotency_key=idempotency_key):
                 continue
 
             try:
@@ -212,9 +263,8 @@ class BotRuntimeWorker:
                     event="bot.execution.failed",
                     payload=self._serialize_event_payload(event),
                 )
-
         if not runtime_touched:
-            self._update_runtime(runtime, {"updated_at": datetime.now(tz=UTC)})
+            return
 
     async def _execute_action(
         self,
@@ -421,12 +471,20 @@ class BotRuntimeWorker:
         except PacificaClientError:
             return fallback
 
+    async def _calculate_runtime_performance(self, runtime: dict[str, Any]) -> dict[str, Any]:
+        service = BotPerformanceService(pacifica_client=self._pacifica, supabase=self._supabase)
+        return await service.calculate_runtime_performance(runtime)
+
     @staticmethod
-    def _build_idempotency_key(*, runtime_id: str, action: dict[str, Any]) -> str:
-        bucket = int(datetime.now(tz=UTC).timestamp() // 30)
+    def _build_idempotency_key(*, runtime_id: str, action: dict[str, Any], runtime_state: dict[str, Any]) -> str:
         payload = json.dumps(action, sort_keys=True, default=str)
-        digest = hashlib.sha256(f"{runtime_id}:{bucket}:{payload}".encode()).hexdigest()[:24]
-        return f"idem:{runtime_id}:{bucket}:{digest}"
+        execution_cursor = int(runtime_state.get("executions_total") or 0)
+        failure_cursor = int(runtime_state.get("failures_total") or 0)
+        last_executed_at = str(runtime_state.get("last_executed_at") or "")
+        digest = hashlib.sha256(
+            f"{runtime_id}:{execution_cursor}:{failure_cursor}:{last_executed_at}:{payload}".encode()
+        ).hexdigest()[:24]
+        return f"idem:{runtime_id}:{execution_cursor}:{failure_cursor}:{digest}"
 
     def _update_runtime(self, runtime: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
         serialized_updates = {key: value.isoformat() if isinstance(value, datetime) else value for key, value in updates.items()}

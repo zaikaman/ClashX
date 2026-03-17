@@ -24,6 +24,7 @@ export function AdvancedSettingsPanel({
 }) {
   const [maxLeverage, setMaxLeverage] = useState(5);
   const [maxOrderSizeUsd, setMaxOrderSizeUsd] = useState(200);
+  const [allocatedCapitalUsd, setAllocatedCapitalUsd] = useState(200);
   const [cooldownSeconds, setCooldownSeconds] = useState(45);
   const [maxDrawdownPct, setMaxDrawdownPct] = useState(18);
   const [allowedSymbols, setAllowedSymbols] = useState("BTC,ETH,SOL");
@@ -47,6 +48,7 @@ export function AdvancedSettingsPanel({
         const policy = (payload as RiskStateResponse).risk_policy_json;
         setMaxLeverage(Number(policy.max_leverage ?? 5));
         setMaxOrderSizeUsd(Number(policy.max_order_size_usd ?? 200));
+        setAllocatedCapitalUsd(Number(policy.allocated_capital_usd ?? 200));
         setCooldownSeconds(Number(policy.cooldown_seconds ?? 45));
         setMaxDrawdownPct(Number(policy.max_drawdown_pct ?? 18));
         const symbols = Array.isArray(policy.allowed_symbols) ? policy.allowed_symbols : [];
@@ -69,6 +71,7 @@ export function AdvancedSettingsPanel({
       const nextPolicy = {
         max_leverage: maxLeverage,
         max_order_size_usd: maxOrderSizeUsd,
+        allocated_capital_usd: allocatedCapitalUsd,
         cooldown_seconds: cooldownSeconds,
         max_drawdown_pct: maxDrawdownPct,
         allowed_symbols: allowedSymbols
@@ -111,14 +114,21 @@ export function AdvancedSettingsPanel({
           <input type="number" min={1} value={maxOrderSizeUsd} onChange={(event) => setMaxOrderSizeUsd(Number(event.target.value))} className="w-full border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d] rounded-md" />
         </label>
         <label className="grid gap-1.5 text-sm text-neutral-400">
+          Allocated capital USD
+          <input type="number" min={1} value={allocatedCapitalUsd} onChange={(event) => setAllocatedCapitalUsd(Number(event.target.value))} className="w-full border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d] rounded-md" />
+        </label>
+        <label className="grid gap-1.5 text-sm text-neutral-400">
           Cooldown seconds
           <input type="number" min={0} value={cooldownSeconds} onChange={(event) => setCooldownSeconds(Number(event.target.value))} className="w-full border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d] rounded-md" />
         </label>
         <label className="grid gap-1.5 text-sm text-neutral-400">
-          Max drawdown %
+          Max drawdown % of allocation
           <input type="number" min={0} step="0.1" value={maxDrawdownPct} onChange={(event) => setMaxDrawdownPct(Number(event.target.value))} className="w-full border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d] rounded-md" />
         </label>
       </div>
+      <p className="text-xs leading-6 text-neutral-500">
+        Drawdown now uses realized plus unrealized bot PnL against this runtime allocation. If a bot with ${allocatedCapitalUsd || 0} allocated reaches a {maxDrawdownPct}% loss budget, it is stopped automatically.
+      </p>
 
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="grid gap-1.5 text-sm text-neutral-400">

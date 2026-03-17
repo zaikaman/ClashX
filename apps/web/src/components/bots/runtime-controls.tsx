@@ -24,7 +24,7 @@ export function RuntimeControls({
   getAuthHeaders: (headersInit?: HeadersInit) => Promise<Headers>;
   onRuntimeUpdate?: (runtime: RuntimeResponse) => void;
 }) {
-  const [riskPolicy, setRiskPolicy] = useState('{"max_leverage":5,"max_order_size_usd":200,"cooldown_seconds":45,"max_drawdown_pct":18}');
+  const [riskPolicy, setRiskPolicy] = useState('{"max_leverage":5,"max_order_size_usd":200,"allocated_capital_usd":200,"cooldown_seconds":45,"max_drawdown_pct":18}');
   const [status, setStatus] = useState<"idle" | "deploy" | "pause" | "resume" | "stop">("idle");
   const [error, setError] = useState<string | null>(null);
 
