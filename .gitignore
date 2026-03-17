@@ -1,0 +1,31 @@
+# Node / Next.js
+node_modules/
+.next/
+out/
+coverage/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Builds / env
+dist/
+build/
+.env*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.idea/
+.vscode/
+
+*.db

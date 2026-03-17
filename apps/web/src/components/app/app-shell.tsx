@@ -1,0 +1,143 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { 
+  LayoutDashboard, Box, Home, X, ShoppingBag, 
+  Wallet, Trophy, Menu 
+} from "lucide-react";
+import { clsx } from "clsx";
+
+import { PrivyAuthButton } from "@/components/auth/privy-auth-button";
+
+export function AppShell({ children }: { children: React.ReactNode }) {
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const pathname = usePathname();
+
+  const navItems = [
+    { href: '/leaderboard', label: 'Leaderboard', icon: Trophy },
+    { href: '/build', label: 'Builder Studio', icon: Box },
+    { href: '/bots', label: 'My Bots', icon: LayoutDashboard },
+    { href: '/copy', label: 'Copy Trading', icon: ShoppingBag },
+    { href: '/agent', label: 'Agent Desk', icon: Wallet },
+  ];
+
+  const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
+
+  const sidebarContent = (
+    <div className="w-64 h-full flex-shrink-0 border-r border-[rgba(255,255,255,0.06)] bg-secondary flex flex-col">
+      {/* Logo Area */}
+      <div className="h-16 p-4 border-b border-[rgba(255,255,255,0.06)] flex items-center justify-between">
+        <Link href="/" className="flex items-center gap-2 group">
+          <span className="text-xl font-semibold text-neutral-50 mb-[2px]">
+            ClashX
+          </span>
+        </Link>
+        <button
+          onClick={() => setIsMobileSidebarOpen(false)}
+          className="lg:hidden p-2 hover:bg-neutral-900 rounded-md transition-colors text-neutral-400"
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+
+      {/* Navigation */}
+      <nav className="flex-1 overflow-y-auto p-3 flex flex-col justify-between">
+        <div className="space-y-1">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={() => setIsMobileSidebarOpen(false)}
+                className={clsx(
+                  'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all group',
+                  isActive(item.href)
+                    ? 'bg-[#dce85d]/10 text-[#dce85d]'
+                    : 'text-neutral-400 hover:text-neutral-50 hover:bg-neutral-900'
+                )}
+              >
+                <Icon className={clsx("w-5 h-5", isActive(item.href) ? "text-[#dce85d]" : "text-neutral-400 group-hover:text-neutral-50")}/>
+                <span>{item.label}</span>
+              </Link>
+            );
+          })}
+        </div>
+      </nav>
+
+      {/* Back to Home Link */}
+      <div className="p-3 border-t border-[rgba(255,255,255,0.06)] flex flex-col gap-3 pb-6">
+        <Link
+          href="/"
+          className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-neutral-400 hover:text-neutral-50 hover:bg-neutral-900 transition-all group"
+        >
+          <Home className="w-5 h-5 text-neutral-400 group-hover:text-neutral-50" />
+          <span>Back to Home</span>
+        </Link>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex h-screen bg-app overflow-hidden">
+      {/* Desktop Sidebar */}
+      <div className="hidden lg:block h-full">
+        {sidebarContent}
+      </div>
+
+      {/* Mobile Sidebar Overlay */}
+      <AnimatePresence>
+        {isMobileSidebarOpen && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsMobileSidebarOpen(false)}
+              className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 lg:hidden"
+            />
+            <motion.div
+              initial={{ x: -280 }}
+              animate={{ x: 0 }}
+              exit={{ x: -280 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="fixed left-0 top-0 bottom-0 z-50 lg:hidden"
+            >
+              {sidebarContent}
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col overflow-hidden relative">
+        {/* App Header */}
+        <motion.header
+          initial={{ y: -10 }}
+          animate={{ y: 0 }}
+          className="h-16 flex-shrink-0 border-b border-[rgba(255,255,255,0.06)] bg-secondary/95 backdrop-blur-sm relative z-10"
+        >
+          <div className="h-full px-6 flex items-center justify-between lg:justify-end">
+             <button
+              onClick={() => setIsMobileSidebarOpen(true)}
+              className="lg:hidden p-2 hover:bg-neutral-900 rounded-md transition-colors text-neutral-400"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div data-tour="wallet-connect">
+              <PrivyAuthButton />
+            </div>
+          </div>
+        </motion.header>
+
+        {/* Page Content */}
+        <main className="flex-1 overflow-auto">
+          {children}
+        </main>
+      </div>
+    </div>
+  );
+}

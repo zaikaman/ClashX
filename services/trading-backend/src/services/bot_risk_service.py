@@ -1,0 +1,131 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+
+
+class BotRiskService:
+    DEFAULT_POLICY = {
+        "max_leverage": 5,
+        "max_order_size_usd": 200,
+        "cooldown_seconds": 30,
+        "max_drawdown_pct": 25,
+        "allowed_symbols": [],
+    }
+
+    def normalize_policy(self, policy: dict[str, Any] | None) -> dict[str, Any]:
+        merged = dict(self.DEFAULT_POLICY)
+        if isinstance(policy, dict):
+            merged.update({key: value for key, value in policy.items() if key != "_runtime_state"})
+            if "_runtime_state" in policy and isinstance(policy["_runtime_state"], dict):
+                merged["_runtime_state"] = dict(policy["_runtime_state"])
+        else:
+            merged["_runtime_state"] = {}
+
+        merged["max_leverage"] = int(self._to_float(merged.get("max_leverage"), self.DEFAULT_POLICY["max_leverage"]))
+        merged["max_order_size_usd"] = self._to_float(
+            merged.get("max_order_size_usd"), self.DEFAULT_POLICY["max_order_size_usd"]
+        )
+        merged["cooldown_seconds"] = int(
+            self._to_float(merged.get("cooldown_seconds"), self.DEFAULT_POLICY["cooldown_seconds"])
+        )
+        merged["max_drawdown_pct"] = self._to_float(
+            merged.get("max_drawdown_pct"), self.DEFAULT_POLICY["max_drawdown_pct"]
+        )
+        allowed_symbols = merged.get("allowed_symbols")
+        if not isinstance(allowed_symbols, list):
+            allowed_symbols = []
+        merged["allowed_symbols"] = [str(symbol).upper().replace("-PERP", "") for symbol in allowed_symbols if str(symbol).strip()]
+        merged.setdefault("_runtime_state", {})
+        return merged
+
+    def assess_action(
+        self,
+        *,
+        policy: dict[str, Any],
+        action: dict[str, Any],
+        runtime_state: dict[str, Any],
+    ) -> list[str]:
+        issues: list[str] = []
+        normalized = self.normalize_policy(policy)
+        action_type = str(action.get("type") or "")
+        symbol = str(action.get("symbol") or "").upper().replace("-PERP", "")
+
+        allowed_symbols = normalized.get("allowed_symbols") or []
+        if symbol and allowed_symbols and symbol not in allowed_symbols:
+            issues.append(f"symbol {symbol} is not in allowed_symbols policy")
+
+        leverage = self._to_float(action.get("leverage"), 1.0)
+        if action_type in {
+            "open_long",
+            "open_short",
+            "place_market_order",
+            "place_limit_order",
+            "place_twap_order",
+            "update_leverage",
+        } and leverage > normalized["max_leverage"]:
+            issues.append(f"requested leverage {leverage:g} exceeds max_leverage {normalized['max_leverage']}")
+
+        size_usd = self._to_float(action.get("size_usd"), 0.0)
+        if action_type in {"open_long", "open_short", "place_market_order", "place_limit_order", "place_twap_order"} and size_usd > normalized["max_order_size_usd"]:
+            issues.append(
+                f"requested size_usd {size_usd:g} exceeds max_order_size_usd {normalized['max_order_size_usd']:g}"
+            )
+
+        drawdown_pct = self._to_float(runtime_state.get("drawdown_pct"), 0.0)
+        if drawdown_pct >= normalized["max_drawdown_pct"]:
+            issues.append(
+                f"runtime drawdown {drawdown_pct:.2f}% is above max_drawdown_pct {normalized['max_drawdown_pct']:.2f}%"
+            )
+
+        cooldown_seconds = int(normalized["cooldown_seconds"])
+        last_executed_at = runtime_state.get("last_executed_at")
+        if cooldown_seconds > 0 and isinstance(last_executed_at, str):
+            try:
+                last_dt = datetime.fromisoformat(last_executed_at.replace("Z", "+00:00"))
+                elapsed = (datetime.now(tz=UTC) - last_dt).total_seconds()
+                if elapsed < cooldown_seconds:
+                    issues.append(f"cooldown active for {int(cooldown_seconds - elapsed)} more seconds")
+            except ValueError:
+                pass
+
+        return issues
+
+    def mark_execution(
+        self,
+        *,
+        policy: dict[str, Any],
+        success: bool,
+        pnl_delta: float = 0.0,
+    ) -> dict[str, Any]:
+        normalized = self.normalize_policy(policy)
+        state = normalized.get("_runtime_state") or {}
+        if not isinstance(state, dict):
+            state = {}
+
+        now_iso = datetime.now(tz=UTC).isoformat()
+        state["last_executed_at"] = now_iso
+        state["executions_total"] = int(state.get("executions_total") or 0) + 1
+        if not success:
+            state["failures_total"] = int(state.get("failures_total") or 0) + 1
+
+        equity = self._to_float(state.get("equity"), 0.0) + pnl_delta
+        peak_equity = max(self._to_float(state.get("peak_equity"), equity), equity)
+        drawdown_pct = 0.0
+        if peak_equity > 0:
+            drawdown_pct = max(0.0, (peak_equity - equity) / peak_equity * 100)
+
+        state["equity"] = equity
+        state["peak_equity"] = peak_equity
+        state["drawdown_pct"] = round(drawdown_pct, 4)
+        normalized["_runtime_state"] = state
+        return normalized
+
+    @staticmethod
+    def _to_float(value: Any, default: float) -> float:
+        try:
+            if value is None or value == "":
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
