@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from src.services.bot_builder_service import BotBuilderService
 from src.services.bot_leaderboard_engine import BotLeaderboardEngine
+from src.services.bot_performance_service import BotPerformanceService
 from src.services.event_broadcaster import broadcaster
 from src.services.pacifica_auth_service import PacificaAuthService
 from src.services.pacifica_client import PacificaClient
 from src.services.supabase_rest import SupabaseRestClient
+
+
+SNAPSHOT_TTL_SECONDS = 60
 
 
 class BotCopyEngine:
@@ -17,13 +21,14 @@ class BotCopyEngine:
         self.supabase = SupabaseRestClient()
         self.leaderboard_engine = leaderboard_engine or BotLeaderboardEngine(pacifica_client=pacifica_client)
         self.pacifica_client = pacifica_client or PacificaClient()
+        self.performance_service = BotPerformanceService(pacifica_client=self.pacifica_client, supabase=self.supabase)
         self.auth_service = PacificaAuthService()
         self.builder_service = BotBuilderService()
 
     async def get_or_refresh_leaderboard(self, db: Any, *, limit: int) -> list[dict]:
         del db
         latest = self.supabase.maybe_one("bot_leaderboard_snapshots", order="captured_at.desc")
-        if latest is None:
+        if latest is None or self._snapshot_is_stale(latest.get("captured_at")):
             return await self.leaderboard_engine.refresh_public_leaderboard(None, limit=limit)
         snapshots = self.supabase.select("bot_leaderboard_snapshots", filters={"captured_at": latest["captured_at"]}, order="rank.asc", limit=limit)
         runtime_ids = [row["runtime_id"] for row in snapshots]
@@ -41,7 +46,7 @@ class BotCopyEngine:
             rows.append({"runtime_id": runtime["id"], "bot_definition_id": definition["id"], "bot_name": definition["name"], "strategy_type": definition["strategy_type"], "authoring_mode": definition["authoring_mode"], "rank": snapshot["rank"], "pnl_total": snapshot["pnl_total"], "pnl_unrealized": snapshot["pnl_unrealized"], "win_streak": snapshot["win_streak"], "drawdown": snapshot["drawdown"], "captured_at": snapshot["captured_at"]})
         return rows
 
-    def runtime_profile(self, db: Any, *, runtime_id: str) -> dict:
+    async def runtime_profile(self, db: Any, *, runtime_id: str) -> dict:
         del db
         runtime = self.supabase.maybe_one("bot_runtimes", filters={"id": runtime_id})
         if runtime is None:
@@ -50,6 +55,9 @@ class BotCopyEngine:
         if definition is None:
             raise ValueError("Bot definition not found")
         latest_snapshot = self.supabase.maybe_one("bot_leaderboard_snapshots", filters={"runtime_id": runtime_id}, order="captured_at.desc")
+        if latest_snapshot is None or self._snapshot_is_stale(latest_snapshot.get("captured_at")):
+            await self.leaderboard_engine.refresh_public_leaderboard(None, limit=100)
+            latest_snapshot = self.supabase.maybe_one("bot_leaderboard_snapshots", filters={"runtime_id": runtime_id}, order="captured_at.desc")
         recent_events = self.supabase.select("bot_execution_events", filters={"runtime_id": runtime_id}, order="created_at.desc", limit=12)
         return {
             "runtime_id": runtime["id"],
@@ -80,10 +88,10 @@ class BotCopyEngine:
             raise ValueError("Source bot is not available for mirroring")
         if runtime["wallet_address"] == follower_wallet_address:
             raise ValueError("You cannot mirror your own runtime")
-        positions = await self.pacifica_client.get_positions(runtime["wallet_address"])
+        performance = await self.performance_service.calculate_runtime_performance(runtime)
         mirrored_positions: list[dict] = []
         total_notional = 0.0
-        for position in positions:
+        for position in performance["positions"]:
             mirrored_size = round(float(position.get("amount", 0) or 0) * (scale_bps / 10_000), 4)
             mark_price = float(position.get("mark_price", 0) or 0)
             notional = round(mirrored_size * mark_price, 2)
@@ -206,3 +214,15 @@ class BotCopyEngine:
         if display_name:
             return self.supabase.update("users", {"display_name": display_name.strip()}, filters={"id": follower["id"]})[0]
         return follower
+
+    @staticmethod
+    def _snapshot_is_stale(value: Any) -> bool:
+        if not value:
+            return True
+        if isinstance(value, datetime):
+            captured_at = value
+        else:
+            captured_at = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if captured_at.tzinfo is None:
+            captured_at = captured_at.replace(tzinfo=UTC)
+        return datetime.now(tz=UTC) - captured_at > timedelta(seconds=SNAPSHOT_TTL_SECONDS)

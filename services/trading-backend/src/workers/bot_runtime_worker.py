@@ -242,10 +242,11 @@ class BotRuntimeWorker:
                 raise ValueError("Market orders require side to be long or short")
             leverage = max(1, int(float(action.get("leverage") or 1)))
             reduce_only = self._to_bool(action.get("reduce_only"), False)
+            reference_price = float((market_lookup.get(symbol) or {}).get("mark_price") or 0)
             amount = self._resolve_order_quantity(action=action, market_lookup=market_lookup, symbol=symbol, reference_price=None)
             if not reduce_only:
                 await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
-            return await self._pacifica.place_order(
+            response = await self._pacifica.place_order(
                 {
                     "type": "create_market_order",
                     **payload,
@@ -255,6 +256,14 @@ class BotRuntimeWorker:
                     "slippage_percent": float(action.get("slippage_percent") or 0.5),
                 }
             )
+            response["execution_meta"] = {
+                "symbol": symbol,
+                "side": self._to_pacifica_side(side),
+                "amount": amount,
+                "reduce_only": reduce_only,
+                "reference_price": reference_price,
+            }
+            return response
 
         if action_type == "place_limit_order":
             if not symbol:
@@ -270,7 +279,7 @@ class BotRuntimeWorker:
             amount = self._resolve_order_quantity(action=action, market_lookup=market_lookup, symbol=symbol, reference_price=price)
             if not reduce_only:
                 await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
-            return await self._pacifica.place_order(
+            response = await self._pacifica.place_order(
                 {
                     "type": "create_order",
                     **payload,
@@ -282,6 +291,14 @@ class BotRuntimeWorker:
                     "client_order_id": action.get("client_order_id"),
                 }
             )
+            response["execution_meta"] = {
+                "symbol": symbol,
+                "side": self._to_pacifica_side(side),
+                "amount": amount,
+                "reduce_only": reduce_only,
+                "reference_price": price,
+            }
+            return response
 
         if action_type == "place_twap_order":
             if not symbol:
@@ -292,10 +309,11 @@ class BotRuntimeWorker:
             duration_seconds = max(1, int(float(action.get("duration_seconds") or 0)))
             leverage = max(1, int(float(action.get("leverage") or 1)))
             reduce_only = self._to_bool(action.get("reduce_only"), False)
+            reference_price = float((market_lookup.get(symbol) or {}).get("mark_price") or 0)
             amount = self._resolve_order_quantity(action=action, market_lookup=market_lookup, symbol=symbol, reference_price=None)
             if not reduce_only:
                 await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
-            return await self._pacifica.place_order(
+            response = await self._pacifica.place_order(
                 {
                     "type": "create_twap_order",
                     **payload,
@@ -307,6 +325,14 @@ class BotRuntimeWorker:
                     "client_order_id": action.get("client_order_id"),
                 }
             )
+            response["execution_meta"] = {
+                "symbol": symbol,
+                "side": self._to_pacifica_side(side),
+                "amount": amount,
+                "reduce_only": reduce_only,
+                "reference_price": reference_price,
+            }
+            return response
 
         if action_type == "close_position":
             if not symbol:
@@ -319,9 +345,18 @@ class BotRuntimeWorker:
                 raise ValueError(f"No open position to close for {symbol}")
             side = str(position.get("side") or "").lower()
             close_side = "ask" if side in {"bid", "long"} else "bid"
-            return await self._pacifica.place_order(
+            reference_price = float(position.get("mark_price") or (market_lookup.get(symbol) or {}).get("mark_price") or 0)
+            response = await self._pacifica.place_order(
                 {"type": "create_market_order", **payload, "side": close_side, "amount": amount, "reduce_only": True}
             )
+            response["execution_meta"] = {
+                "symbol": symbol,
+                "side": close_side,
+                "amount": amount,
+                "reduce_only": True,
+                "reference_price": reference_price,
+            }
+            return response
 
         if action_type == "set_tpsl":
             position = position_lookup.get(symbol)

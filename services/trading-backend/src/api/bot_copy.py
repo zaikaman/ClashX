@@ -151,9 +151,9 @@ async def list_public_bot_leaderboard(
 
 
 @router.get("/leaderboard/{runtime_id}", response_model=BotRuntimeProfileResponse)
-def get_runtime_profile(runtime_id: str, db: Session = Depends(get_db)) -> BotRuntimeProfileResponse:
+async def get_runtime_profile(runtime_id: str, db: Session = Depends(get_db)) -> BotRuntimeProfileResponse:
     try:
-        profile = bot_copy_engine.runtime_profile(db, runtime_id=runtime_id)
+        profile = await bot_copy_engine.runtime_profile(db, runtime_id=runtime_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return BotRuntimeProfileResponse.model_validate(profile)
