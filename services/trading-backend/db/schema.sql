@@ -142,30 +142,7 @@ CREATE TABLE public.leaderboard_snapshots (
   win_streak integer NOT NULL DEFAULT 0,
   captured_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT leaderboard_snapshots_pkey PRIMARY KEY (id),
-  CONSTRAINT leaderboard_snapshots_league_id_fkey FOREIGN KEY (league_id) REFERENCES public.leagues(id),
   CONSTRAINT leaderboard_snapshots_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
-);
-CREATE TABLE public.league_participants (
-  id uuid NOT NULL,
-  league_id uuid NOT NULL,
-  user_id uuid NOT NULL,
-  joined_at timestamp with time zone NOT NULL DEFAULT now(),
-  is_active boolean NOT NULL DEFAULT true,
-  CONSTRAINT league_participants_pkey PRIMARY KEY (id),
-  CONSTRAINT league_participants_league_id_fkey FOREIGN KEY (league_id) REFERENCES public.leagues(id),
-  CONSTRAINT league_participants_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
-);
-CREATE TABLE public.leagues (
-  id uuid NOT NULL,
-  name character varying NOT NULL,
-  description character varying NOT NULL DEFAULT ''::character varying,
-  status character varying NOT NULL DEFAULT 'scheduled'::character varying,
-  market_scope character varying NOT NULL DEFAULT 'Pacifica perpetuals'::character varying,
-  rules_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-  start_at timestamp with time zone NOT NULL,
-  end_at timestamp with time zone NOT NULL,
-  created_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT leagues_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.pacifica_authorizations (
   id uuid NOT NULL,
@@ -199,8 +176,7 @@ CREATE TABLE public.strategy_activity_records (
   summary text NOT NULL,
   metadata_json jsonb NOT NULL DEFAULT '{}'::jsonb,
   recorded_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT strategy_activity_records_pkey PRIMARY KEY (id),
-  CONSTRAINT strategy_activity_records_vault_id_fkey FOREIGN KEY (vault_id) REFERENCES public.vaults(id)
+  CONSTRAINT strategy_activity_records_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.users (
   id uuid NOT NULL,
@@ -209,47 +185,6 @@ CREATE TABLE public.users (
   auth_provider character varying NOT NULL DEFAULT 'privy'::character varying,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT users_pkey PRIMARY KEY (id)
-);
-CREATE TABLE public.vault_deposits (
-  id uuid NOT NULL,
-  vault_id uuid NOT NULL,
-  user_id uuid NOT NULL,
-  amount double precision NOT NULL DEFAULT 0,
-  share_units double precision NOT NULL DEFAULT 0,
-  tx_ref character varying NOT NULL UNIQUE,
-  created_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT vault_deposits_pkey PRIMARY KEY (id),
-  CONSTRAINT vault_deposits_vault_id_fkey FOREIGN KEY (vault_id) REFERENCES public.vaults(id),
-  CONSTRAINT vault_deposits_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
-);
-CREATE TABLE public.vault_positions (
-  id uuid NOT NULL,
-  vault_id uuid NOT NULL,
-  symbol character varying NOT NULL,
-  side character varying NOT NULL,
-  size double precision NOT NULL DEFAULT 0,
-  entry_price double precision NOT NULL DEFAULT 0,
-  mark_price double precision NOT NULL DEFAULT 0,
-  pnl_pct double precision NOT NULL DEFAULT 0,
-  updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT vault_positions_pkey PRIMARY KEY (id),
-  CONSTRAINT vault_positions_vault_id_fkey FOREIGN KEY (vault_id) REFERENCES public.vaults(id)
-);
-CREATE TABLE public.vaults (
-  id uuid NOT NULL,
-  name character varying NOT NULL,
-  headline character varying NOT NULL DEFAULT ''::character varying,
-  strategy_type character varying NOT NULL,
-  strategy_description text NOT NULL,
-  manager_name character varying NOT NULL DEFAULT 'ClashX Studio'::character varying,
-  status character varying NOT NULL DEFAULT 'live'::character varying,
-  risk_band character varying NOT NULL DEFAULT 'moderate'::character varying,
-  aum double precision NOT NULL DEFAULT 0,
-  perf_7d double precision NOT NULL DEFAULT 0,
-  perf_30d double precision NOT NULL DEFAULT 0,
-  minimum_deposit double precision NOT NULL DEFAULT 100,
-  created_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT vaults_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.worker_leases (
   lease_key character varying NOT NULL,

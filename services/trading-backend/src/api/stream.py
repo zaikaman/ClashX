@@ -15,21 +15,6 @@ def _resolve_wallet_address(user_id: str) -> str | None:
     return None if user is None else user.get("wallet_address")
 
 
-@router.get("/leagues/{league_id}")
-async def stream_league_events(league_id: str) -> StreamingResponse:
-    channel = f"league:{league_id}"
-    queue = broadcaster.subscribe(channel)
-
-    async def event_stream():
-        try:
-            async for item in queue_to_stream(queue):
-                yield item
-        finally:
-            broadcaster.unsubscribe(channel, queue)
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
-
-
 @router.get("/user/{user_id}")
 async def stream_user_events(user_id: str, token: str = Query(min_length=16), db=Depends(get_db)) -> StreamingResponse:
     del db

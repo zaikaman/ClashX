@@ -23,8 +23,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
         public_prefixes = (
             "/api/builder",
             "/api/stream",
-            "/api/leagues",
-            "/api/copy",
             "/api/bot-copy",
             "/api/pacifica",
         )

@@ -4,13 +4,10 @@ import contextlib
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.admin import router as admin_router
 from src.api.auth import router as auth_router
 from src.api.bot_copy import router as bot_copy_router
 from src.api.bots import router as bots_router
 from src.api.builder import router as builder_router
-from src.api.copy import router as copy_router
-from src.api.leagues import router as leagues_router
 from src.api.pacifica import router as pacifica_router
 from src.api.stream import router as stream_router
 from src.api.stream import websocket_fallback
@@ -19,15 +16,11 @@ from src.core.settings import get_settings
 from src.middleware.auth import AuthMiddleware
 from src.workers.bot_copy_worker import BotCopyWorker
 from src.workers.bot_runtime_worker import BotRuntimeWorker
-from src.workers.copy_worker import CopyWorker
-from src.workers.leaderboard_worker import LeaderboardWorker
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name)
-    worker = LeaderboardWorker()
-    copy_worker = CopyWorker()
     bot_copy_worker = BotCopyWorker()
     bot_runtime_worker = BotRuntimeWorker()
 
@@ -40,12 +33,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(auth_router)
-    app.include_router(admin_router)
     app.include_router(bot_copy_router)
     app.include_router(bots_router)
     app.include_router(builder_router)
-    app.include_router(copy_router)
-    app.include_router(leagues_router)
     app.include_router(pacifica_router)
     app.include_router(stream_router)
     app.include_router(trading_router)
@@ -57,25 +47,14 @@ def create_app() -> FastAPI:
         if not settings.background_workers_enabled:
             return
         app.state.bot_runtime_worker = bot_runtime_worker
-        app.state.leaderboard_worker = worker
-        app.state.copy_worker = copy_worker
         app.state.bot_copy_worker = bot_copy_worker
         bot_runtime_worker.start()
-        worker.start()
-        copy_worker.start()
         bot_copy_worker.start()
 
     @app.on_event("shutdown")
     async def shutdown() -> None:
-        running_worker: LeaderboardWorker | None = getattr(app.state, "leaderboard_worker", None)
-        running_copy_worker: CopyWorker | None = getattr(app.state, "copy_worker", None)
         running_bot_copy_worker: BotCopyWorker | None = getattr(app.state, "bot_copy_worker", None)
         running_bot_runtime_worker: BotRuntimeWorker | None = getattr(app.state, "bot_runtime_worker", None)
-        if running_worker is not None:
-            await running_worker.stop()
-        if running_copy_worker is not None:
-            with contextlib.suppress(asyncio.CancelledError):
-                await running_copy_worker.stop()
         if running_bot_copy_worker is not None:
             with contextlib.suppress(asyncio.CancelledError):
                 await running_bot_copy_worker.stop()
@@ -86,7 +65,7 @@ def create_app() -> FastAPI:
     @app.get("/healthz", tags=["ops"])
     async def healthz() -> dict[str, object]:
         workers: dict[str, object] = {}
-        for key in ("bot_runtime_worker", "leaderboard_worker", "copy_worker", "bot_copy_worker"):
+        for key in ("bot_runtime_worker", "bot_copy_worker"):
             worker_ref = getattr(app.state, key, None)
             if worker_ref is None:
                 workers[key] = {"enabled": False}
