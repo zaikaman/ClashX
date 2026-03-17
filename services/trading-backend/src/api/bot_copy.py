@@ -15,6 +15,13 @@ router = APIRouter(prefix="/api/bot-copy", tags=["bot-copy"])
 bot_copy_engine = BotCopyEngine()
 
 
+def _require_owned_bot_copy_relationship(relationship_id: str, user: AuthenticatedUser) -> None:
+    relationship = bot_copy_engine.supabase.maybe_one("bot_copy_relationships", filters={"id": relationship_id})
+    if relationship is None:
+        raise HTTPException(status_code=404, detail="Bot copy relationship not found")
+    ensure_wallet_owned(user, relationship["follower_wallet_address"])
+
+
 class BotLeaderboardRow(BaseModel):
     runtime_id: str
     bot_definition_id: str
@@ -240,7 +247,9 @@ async def patch_bot_copy_relationship(
     relationship_id: str,
     payload: BotCopyRelationshipPatchRequest,
     db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> BotCopyRelationshipResponse:
+    _require_owned_bot_copy_relationship(relationship_id, user)
     try:
         relationship = await bot_copy_engine.update_relationship(
             db,
@@ -257,7 +266,9 @@ async def patch_bot_copy_relationship(
 async def delete_bot_copy_relationship(
     relationship_id: str,
     db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> BotCopyRelationshipResponse:
+    _require_owned_bot_copy_relationship(relationship_id, user)
     try:
         relationship = await bot_copy_engine.stop_relationship(db, relationship_id=relationship_id)
     except (ValueError, PacificaClientError) as exc:

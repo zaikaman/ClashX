@@ -15,6 +15,18 @@ router = APIRouter(prefix="/api/copy", tags=["copy"])
 copy_engine = CopyEngine()
 
 
+def _require_owned_copy_relationship(relationship_id: str, user: AuthenticatedUser) -> None:
+    relationship = copy_engine.supabase.maybe_one("copy_relationships", filters={"id": relationship_id})
+    if relationship is None:
+        raise HTTPException(status_code=404, detail="Copy relationship not found")
+
+    follower = copy_engine.supabase.maybe_one("users", filters={"id": relationship["follower_user_id"]})
+    if follower is None or not follower.get("wallet_address"):
+        raise HTTPException(status_code=404, detail="Follower user not found")
+
+    ensure_wallet_owned(user, follower["wallet_address"])
+
+
 class CopyPreviewRequest(BaseModel):
     source_user_id: str
     follower_wallet_address: str = Field(min_length=8)
@@ -137,7 +149,9 @@ async def patch_copy_relationship(
     relationship_id: str,
     payload: CopyRelationshipPatchRequest,
     db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> CopyRelationshipResponse:
+    _require_owned_copy_relationship(relationship_id, user)
     try:
         relationship = await copy_engine.update_relationship(
             db,
@@ -151,7 +165,12 @@ async def patch_copy_relationship(
 
 
 @router.delete("/{relationship_id}", response_model=CopyRelationshipResponse)
-async def delete_copy_relationship(relationship_id: str, db: Session = Depends(get_db)) -> CopyRelationshipResponse:
+async def delete_copy_relationship(
+    relationship_id: str,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> CopyRelationshipResponse:
+    _require_owned_copy_relationship(relationship_id, user)
     try:
         relationship = await copy_engine.stop_relationship(db, relationship_id)
     except (ValueError, PacificaClientError) as exc:
