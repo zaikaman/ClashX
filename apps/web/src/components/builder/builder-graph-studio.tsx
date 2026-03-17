@@ -1548,10 +1548,10 @@ export function BuilderGraphStudio({
       {/* Main Workspace */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left Sidebar */}
-        <div className="w-72 flex-shrink-0 border-r border-[rgba(255,255,255,0.06)] bg-[#16181a] flex flex-col">
+        <div className="w-72 flex-shrink-0 border-r border-[rgba(255,255,255,0.06)] bg-secondary flex flex-col">
           {builderMode === "visual" ? (
             <>
-              <div className="p-4 border-b border-[rgba(255,255,255,0.06)] bg-neutral-900">
+              <div className="p-4 border-b border-[rgba(255,255,255,0.06)] bg-transparent">
                 <h2 className="text-sm font-semibold text-neutral-50 mb-1">Block Palette</h2>
                 <div className="relative mt-3">
                   <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-500" />
@@ -1616,7 +1616,7 @@ export function BuilderGraphStudio({
             </>
           ) : (
             <>
-              <div className="border-b border-[rgba(255,255,255,0.06)] bg-neutral-900 px-4 py-4">
+              <div className="border-b border-[rgba(255,255,255,0.06)] bg-transparent px-4 py-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]/80">Builder AI</div>
@@ -1686,7 +1686,7 @@ export function BuilderGraphStudio({
                 ) : null}
               </div>
 
-              <div className="border-t border-[rgba(255,255,255,0.06)] bg-neutral-900 p-4">
+              <div className="border-t border-[rgba(255,255,255,0.06)] bg-transparent p-4">
                 <div className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] p-2">
                   <textarea
                     value={chatInput}
@@ -1789,9 +1789,9 @@ export function BuilderGraphStudio({
             className="[&_.react-flow__pane]:bg-transparent"
           >
             <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="rgba(255,255,255,0.08)" />
-            <Controls className="!bg-[#16181a] !border-[rgba(255,255,255,0.08)] !shadow-xl !flex !flex-col !gap-1 !p-1 [&_button]:!bg-transparent [&_button]:!border-none [&_button]:!rounded-md hover:[&_button]:!bg-white/10 [&_button_svg]:!fill-neutral-400" />
+            <Controls className="!bg-secondary !border-[rgba(255,255,255,0.08)] !shadow-xl !flex !flex-col !gap-1 !p-1 [&_button]:!bg-transparent [&_button]:!border-none [&_button]:!rounded-md hover:[&_button]:!bg-white/10 [&_button_svg]:!fill-neutral-400" />
             <MiniMap 
-               className="!bg-[#16181a] !border-[rgba(255,255,255,0.06)] rounded-lg overflow-hidden" 
+               className="!bg-secondary !border-[rgba(255,255,255,0.06)] rounded-lg overflow-hidden" 
                nodeColor={(node) => {
                   return node.data?.kind === 'condition' ? '#dce85d' : '#74b97f';
                }}
@@ -1801,9 +1801,9 @@ export function BuilderGraphStudio({
         </div>
 
         {/* Right Sidebar - Settings */}
-        <div className="w-80 flex-shrink-0 border-l border-[rgba(255,255,255,0.06)] bg-[#16181a] overflow-y-auto overflow-x-hidden custom-scrollbar flex flex-col">
+        <div className="w-80 flex-shrink-0 border-l border-[rgba(255,255,255,0.06)] bg-secondary overflow-y-auto overflow-x-hidden custom-scrollbar flex flex-col">
           <div className="border-b border-[rgba(255,255,255,0.06)]">
-            <div className="p-4 bg-neutral-900">
+            <div className="p-4 bg-transparent">
               <h2 className="text-sm font-semibold text-neutral-50 mb-4">Quick Start Templates</h2>
               <div className="space-y-2">
                 {starterTemplates.map((template) => {
@@ -1832,7 +1832,7 @@ export function BuilderGraphStudio({
 
           {/* Settings Section */}
           <div className="border-b border-[rgba(255,255,255,0.06)]">
-            <div className="p-4 bg-neutral-900">
+            <div className="p-4 bg-transparent">
               <h2 className="text-sm font-semibold text-neutral-50 mb-4">Bot Configuration</h2>
               
               <div className="space-y-4">
@@ -1919,7 +1919,7 @@ export function BuilderGraphStudio({
           </div>
 
           <div className="border-b border-[rgba(255,255,255,0.06)]">
-            <div className="p-4 bg-neutral-900">
+            <div className="p-4 bg-transparent">
               <h2 className="text-sm font-semibold text-neutral-50 mb-4">Selected Block</h2>
 
               {!selectedNode ? (
@@ -2816,7 +2816,7 @@ export function BuilderGraphStudio({
           </div>
 
           <div className="border-b border-[rgba(255,255,255,0.06)]">
-            <div className="p-4 bg-neutral-900">
+            <div className="p-4 bg-transparent">
               <h2 className="text-sm font-semibold text-neutral-50 mb-4">Execution Guardrails</h2>
               
               <div className="grid gap-4">
