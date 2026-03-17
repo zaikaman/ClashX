@@ -9,6 +9,7 @@ import { RuntimeFailurePanel } from "@/components/bots/runtime-failure-panel";
 import { RuntimeHealthCard } from "@/components/bots/runtime-health-card";
 import { RuntimeControls } from "@/components/bots/runtime-controls";
 import { useClashxAuth } from "@/lib/clashx-auth";
+import type { RuntimeOverview } from "@/lib/runtime-overview";
 
 type BotDefinition = {
   id: string;
@@ -35,13 +36,19 @@ type BotExecutionEvent = {
   created_at: string;
 };
 
-type RuntimeState = {
-  status: string;
-  mode: string;
-  updated_at: string;
-};
-
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+
+async function unwrapResponse<T>(response: Response, fallback: string): Promise<T> {
+  const payload = (await response.json()) as unknown;
+  if (!response.ok) {
+    if (payload && typeof payload === "object" && "detail" in payload) {
+      const detail = payload.detail;
+      throw new Error(typeof detail === "string" && detail.length > 0 ? detail : fallback);
+    }
+    throw new Error(fallback);
+  }
+  return payload as T;
+}
 
 export default function BotDetailPage({ params: paramsPromise }: { params: Promise<{ botId: string }> }) {
   const params = use(paramsPromise);
@@ -49,77 +56,83 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
 
   const [bot, setBot] = useState<BotDefinition | null>(null);
   const [events, setEvents] = useState<BotExecutionEvent[]>([]);
-  const [runtime, setRuntime] = useState<RuntimeState | null>(null);
+  const [runtimeOverview, setRuntimeOverview] = useState<RuntimeOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
-    const resolvedWallet = walletAddress;
-    if (!authenticated || !resolvedWallet) {
-      setBot(null);
-      setEvents([]);
-      setRuntime(null);
+    const resolvedWalletValue = walletAddress;
+    if (!authenticated || !resolvedWalletValue) {
       return;
     }
+
+    const controller = new AbortController();
 
     async function loadDetails() {
       try {
         const headers = await getAuthHeaders();
-        const botResponse = await fetch(
-          `${API_BASE_URL}/api/bots/${params.botId}?wallet_address=${encodeURIComponent(resolvedWallet ?? "")}`,
-          { cache: "no-store", headers },
-        );
-        const botPayload = (await botResponse.json()) as BotDefinition | { detail?: string };
-        if (!botResponse.ok) {
-          throw new Error("detail" in botPayload ? botPayload.detail ?? "Could not load bot" : "Could not load bot");
-        }
-        setBot(botPayload as BotDefinition);
+        const walletQuery = encodeURIComponent(resolvedWalletValue ?? "");
+        const [botResponse, eventsResponse, overviewResponse] = await Promise.all([
+          fetch(`${API_BASE_URL}/api/bots/${params.botId}?wallet_address=${walletQuery}`, {
+            cache: "no-store",
+            headers,
+            signal: controller.signal,
+          }),
+          fetch(`${API_BASE_URL}/api/bots/${params.botId}/events?wallet_address=${walletQuery}&limit=100`, {
+            cache: "no-store",
+            headers,
+            signal: controller.signal,
+          }),
+          fetch(`${API_BASE_URL}/api/bots/${params.botId}/runtime-overview?wallet_address=${walletQuery}`, {
+            cache: "no-store",
+            headers,
+            signal: controller.signal,
+          }),
+        ]);
 
-        const eventsResponse = await fetch(
-          `${API_BASE_URL}/api/bots/${params.botId}/events?wallet_address=${encodeURIComponent(resolvedWallet ?? "")}&limit=100`,
-          { cache: "no-store", headers },
-        );
-        const eventsPayload = (await eventsResponse.json()) as BotExecutionEvent[] | { detail?: string };
-        if (!eventsResponse.ok) {
-          throw new Error("detail" in eventsPayload ? eventsPayload.detail ?? "Could not load events" : "Could not load events");
+        const [nextBot, nextEvents, nextOverview] = await Promise.all([
+          unwrapResponse<BotDefinition>(botResponse, "Could not load bot"),
+          unwrapResponse<BotExecutionEvent[]>(eventsResponse, "Could not load events"),
+          unwrapResponse<RuntimeOverview>(overviewResponse, "Could not load runtime overview"),
+        ]);
+
+        if (controller.signal.aborted) {
+          return;
         }
-        const nextEvents = eventsPayload as BotExecutionEvent[];
+        setBot(nextBot);
         setEvents(nextEvents);
-        setRefreshToken((value) => value + 1);
-
-        const transition = nextEvents.find((event) => event.event_type.startsWith("runtime."));
-        if (transition) {
-          setRuntime({
-            status: String(transition.result_payload?.status ?? "unknown"),
-            mode: "live",
-            updated_at: transition.created_at,
-          });
-        } else {
-          setRuntime(null);
-        }
-
+        setRuntimeOverview(nextOverview);
         setError(null);
       } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
         setError(loadError instanceof Error ? loadError.message : "Could not load bot runtime");
       }
     }
 
     void loadDetails();
-  }, [authenticated, walletAddress, params.botId, getAuthHeaders]);
+    return () => controller.abort();
+  }, [authenticated, walletAddress, params.botId, getAuthHeaders, refreshToken]);
 
-  const runtimeHealth = useMemo(() => {
-    const errorCount = events.filter((event) => event.status === "error").length;
-    if (!runtime) {
-      return "not deployed";
+  const sessionActive = authenticated && Boolean(walletAddress);
+  const visibleBot = sessionActive ? bot : null;
+  const visibleEvents = sessionActive ? events : [];
+  const visibleRuntimeOverview = sessionActive ? runtimeOverview : null;
+  const visibleError = sessionActive ? error : null;
+
+  const runtime = useMemo(() => {
+    if (!visibleRuntimeOverview?.health.runtime_id) {
+      return null;
     }
-    if (runtime.status === "active" && errorCount === 0) {
-      return "healthy";
-    }
-    if (runtime.status === "active" && errorCount > 0) {
-      return "degraded";
-    }
-    return runtime.status;
-  }, [events, runtime]);
+    return {
+      status: visibleRuntimeOverview.health.status,
+      mode: visibleRuntimeOverview.health.mode,
+      updated_at: visibleRuntimeOverview.health.last_runtime_update ?? visibleRuntimeOverview.metrics.last_event_at ?? "",
+    };
+  }, [visibleRuntimeOverview]);
+
+  const runtimeHealth = visibleRuntimeOverview?.health.health ?? "not deployed";
 
   return (
     <main className="shell grid gap-8 pb-10 md:pb-12">
@@ -127,10 +140,10 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
         <article className="grid gap-3 rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-6">
           <span className="label text-[#dce85d]">Bot summary</span>
           <h2 className="font-mono text-3xl font-bold uppercase tracking-tight text-neutral-50">
-            {bot?.name ?? "Loading bot"}
+            {visibleBot?.name ?? "Loading bot"}
           </h2>
           <p className="max-w-3xl text-sm leading-7 text-neutral-400">
-            {bot?.description ?? "Loading the bot description and runtime data."}
+            {visibleBot?.description ?? "Loading the bot description and runtime data."}
           </p>
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="rounded-xl bg-[#090a0a] px-4 py-3">
@@ -139,11 +152,11 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
             </div>
             <div className="rounded-xl bg-[#090a0a] px-4 py-3">
               <div className="label text-[0.6rem]">Strategy type</div>
-              <div className="mt-1 text-sm font-semibold text-neutral-50">{bot?.strategy_type ?? "--"}</div>
+              <div className="mt-1 text-sm font-semibold text-neutral-50">{visibleBot?.strategy_type ?? "--"}</div>
             </div>
             <div className="rounded-xl bg-[#090a0a] px-4 py-3">
               <div className="label text-[0.6rem]">Market scope</div>
-              <div className="mt-1 text-sm font-semibold text-neutral-50">{bot?.market_scope ?? "--"}</div>
+              <div className="mt-1 text-sm font-semibold text-neutral-50">{visibleBot?.market_scope ?? "--"}</div>
             </div>
           </div>
         </article>
@@ -199,9 +212,9 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
         </button>
       ) : null}
 
-      {error ? (
+      {visibleError ? (
         <article className="rounded-2xl border border-[#dce85d]/30 bg-[#dce85d]/10 px-5 py-4 text-sm text-neutral-50">
-          {error}
+          {visibleError}
         </article>
       ) : null}
 
@@ -214,9 +227,8 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
             botId={params.botId}
             walletAddress={walletAddress}
             getAuthHeaders={getAuthHeaders}
-            onRuntimeUpdate={(nextRuntime) => {
-              setRuntime({ status: nextRuntime.status, mode: nextRuntime.mode, updated_at: nextRuntime.updated_at });
-              setEvents((current) => current);
+            onRuntimeUpdate={() => {
+              setRefreshToken((value) => value + 1);
             }}
           />
         ) : (
@@ -228,22 +240,12 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
 
       {walletAddress ? (
         <section className="grid gap-6 xl:grid-cols-2">
-          <RuntimeHealthCard
-            botId={params.botId}
-            walletAddress={walletAddress}
-            getAuthHeaders={getAuthHeaders}
-            refreshToken={refreshToken}
-          />
-          <RuntimeFailurePanel
-            botId={params.botId}
-            walletAddress={walletAddress}
-            getAuthHeaders={getAuthHeaders}
-            refreshToken={refreshToken}
-          />
+          <RuntimeHealthCard health={visibleRuntimeOverview?.health ?? null} metrics={visibleRuntimeOverview?.metrics ?? null} />
+          <RuntimeFailurePanel metrics={visibleRuntimeOverview?.metrics ?? null} />
         </section>
       ) : null}
 
-      {walletAddress ? (
+      {walletAddress && visibleRuntimeOverview?.health.runtime_id ? (
         <section className="grid gap-3">
           <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Advanced settings</span>
           <AdvancedSettingsPanel
@@ -253,11 +255,15 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
             onSaved={() => setRefreshToken((value) => value + 1)}
           />
         </section>
+      ) : walletAddress && visibleRuntimeOverview ? (
+        <article className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-5 py-5 text-sm leading-7 text-neutral-400">
+          Deploy this bot to unlock live runtime controls and risk policy settings.
+        </article>
       ) : null}
 
       <section className="grid gap-4">
         <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Execution log</span>
-        <ExecutionLog events={events} />
+        <ExecutionLog events={visibleEvents} />
       </section>
     </main>
   );

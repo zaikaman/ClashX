@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import desc, select
+from sqlalchemy import delete, desc, select
 from sqlalchemy.orm import Session
 
 from src.core.settings import get_settings
@@ -309,11 +309,7 @@ class BotBuilderService:
             raise ValueError("Stop the runtime before deleting this bot.")
 
         if runtime is not None:
-            events = list(
-                db.scalars(select(BotExecutionEvent).where(BotExecutionEvent.runtime_id == runtime.id)).all()
-            )
-            for event in events:
-                db.delete(event)
+            db.execute(delete(BotExecutionEvent).where(BotExecutionEvent.runtime_id == runtime.id))
             db.delete(runtime)
 
         db.delete(bot)

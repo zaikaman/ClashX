@@ -19,6 +19,11 @@ class SupabaseRestClient:
             "Authorization": f"Bearer {settings.supabase_service_role_key}",
             "Content-Type": "application/json",
         }
+        self._client = httpx.Client(
+            base_url=self._base_url,
+            headers=self._headers,
+            timeout=20,
+        )
 
     def select(
         self,
@@ -87,6 +92,9 @@ class SupabaseRestClient:
     def delete(self, table: str, *, filters: Mapping[str, Any]) -> None:
         self._request("DELETE", f"/{table}", params=self._build_filters(filters), headers={"Prefer": "return=minimal"})
 
+    def close(self) -> None:
+        self._client.close()
+
     def _build_filters(self, filters: Mapping[str, Any] | None) -> dict[str, str]:
         params: dict[str, str] = {}
         if not filters:
@@ -124,14 +132,6 @@ class SupabaseRestClient:
         json: Any = None,
         headers: Mapping[str, str] | None = None,
     ) -> httpx.Response:
-        merged_headers = {**self._headers, **(headers or {})}
-        response = httpx.request(
-            method,
-            f"{self._base_url}{path}",
-            params=params,
-            json=json,
-            headers=merged_headers,
-            timeout=20,
-        )
+        response = self._client.request(method, path, params=params, json=json, headers=headers)
         response.raise_for_status()
         return response

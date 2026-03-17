@@ -167,6 +167,11 @@ class RuntimeMetricsResponse(BaseModel):
     last_event_at: datetime | None = None
 
 
+class RuntimeOverviewResponse(BaseModel):
+    health: RuntimeHealthResponse
+    metrics: RuntimeMetricsResponse
+
+
 class RuntimeRiskStateResponse(BaseModel):
     runtime_id: str
     risk_policy_json: dict[str, Any]
@@ -480,6 +485,26 @@ def get_runtime_metrics(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return RuntimeMetricsResponse.model_validate(payload)
+
+
+@router.get("/{bot_id}/runtime-overview", response_model=RuntimeOverviewResponse)
+def get_runtime_overview(
+    bot_id: str,
+    wallet_address: str | None = Query(default=None, min_length=8),
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> RuntimeOverviewResponse:
+    resolved_wallet = _resolve_wallet(user, wallet_address)
+    try:
+        payload = runtime_observability_service.get_overview(
+            db,
+            bot_id=bot_id,
+            wallet_address=resolved_wallet,
+            user_id=user.user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return RuntimeOverviewResponse.model_validate(payload)
 
 
 @router.get("/{bot_id}/risk-state", response_model=RuntimeRiskStateResponse)

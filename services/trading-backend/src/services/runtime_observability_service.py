@@ -21,6 +21,58 @@ class RuntimeObservabilityService:
         self._settings = get_settings()
         self._supabase = SupabaseRestClient() if self._settings.use_supabase_api else None
 
+    def get_overview(
+        self,
+        db: Session,
+        *,
+        bot_id: str,
+        wallet_address: str,
+        user_id: str,
+    ) -> dict[str, Any]:
+        runtime = self._resolve_runtime(
+            db,
+            bot_id=bot_id,
+            wallet_address=wallet_address,
+            user_id=user_id,
+        )
+        if runtime is None:
+            return {
+                "health": {
+                    "runtime_id": None,
+                    "health": "not_deployed",
+                    "status": "draft",
+                    "mode": "live",
+                    "last_runtime_update": None,
+                    "last_event_at": None,
+                    "heartbeat_age_seconds": None,
+                    "error_rate_recent": 0.0,
+                    "reasons": ["Runtime has not been deployed yet"],
+                },
+                "metrics": {
+                    "runtime_id": "",
+                    "status": "draft",
+                    "uptime_seconds": None,
+                    "window_hours": 24,
+                    "events_total": 0,
+                    "actions_total": 0,
+                    "actions_success": 0,
+                    "actions_error": 0,
+                    "actions_skipped": 0,
+                    "success_rate": 1.0,
+                    "status_counts": {},
+                    "event_type_counts": {},
+                    "failure_reasons": [],
+                    "recent_failures": [],
+                    "last_event_at": None,
+                },
+            }
+
+        snapshot = self._build_snapshot(db, runtime)
+        return {
+            "health": self._build_health_payload(snapshot),
+            "metrics": self._build_metrics_payload(snapshot),
+        }
+
     def get_metrics(
         self,
         db: Session,
@@ -35,88 +87,7 @@ class RuntimeObservabilityService:
             wallet_address=wallet_address,
             user_id=user_id,
         )
-
-        window_start = datetime.now(tz=UTC) - timedelta(hours=24)
-        if self._settings.use_supabase_api:
-            assert self._supabase is not None
-            events = self._supabase.select(
-                "bot_execution_events",
-                filters={"runtime_id": runtime["id"]},
-                order="created_at.desc",
-                limit=500,
-            )
-            recent_window = [
-                event for event in events if self._as_datetime(event["created_at"]) >= window_start
-            ]
-            runtime_id = runtime["id"]
-            runtime_status = runtime["status"]
-            runtime_deployed_at = runtime.get("deployed_at")
-        else:
-            events = list(
-                db.scalars(
-                    select(BotExecutionEvent)
-                    .where(BotExecutionEvent.runtime_id == runtime.id)
-                    .order_by(desc(BotExecutionEvent.created_at))
-                    .limit(500)
-                ).all()
-            )
-            recent_window = [event for event in events if event.created_at >= window_start]
-            runtime_id = runtime.id
-            runtime_status = runtime.status
-            runtime_deployed_at = runtime.deployed_at
-
-        action_events = [event for event in recent_window if str(self._get_value(event, "event_type")).startswith("action.")]
-        actions_total = len(action_events)
-        actions_success = len([event for event in action_events if self._get_value(event, "status") == "success"])
-        actions_error = len([event for event in action_events if self._get_value(event, "status") == "error"])
-        actions_skipped = len([event for event in action_events if self._get_value(event, "status") == "skipped"])
-
-        event_type_counter = Counter(str(self._get_value(event, "event_type")) for event in recent_window)
-        status_counter = Counter(str(self._get_value(event, "status")) for event in recent_window)
-
-        failure_reasons = Counter(
-            (self._get_value(event, "error_reason") or "unknown")
-            for event in recent_window
-            if self._get_value(event, "status") == "error"
-        )
-
-        recent_failures = [
-            {
-                "id": self._get_value(event, "id"),
-                "event_type": self._get_value(event, "event_type"),
-                "error_reason": self._get_value(event, "error_reason") or "unknown",
-                "decision_summary": self._get_value(event, "decision_summary"),
-                "created_at": self._get_value(event, "created_at"),
-            }
-            for event in events
-            if self._get_value(event, "status") == "error"
-        ][:15]
-
-        last_event_at = self._as_datetime(self._get_value(events[0], "created_at")) if events else None
-        uptime_seconds = None
-        if runtime_deployed_at is not None:
-            deployed_at = self._as_datetime(runtime_deployed_at) if isinstance(runtime_deployed_at, str) else runtime_deployed_at
-            uptime_seconds = max(0, int((datetime.now(tz=UTC) - deployed_at).total_seconds()))
-
-        success_rate = round(actions_success / actions_total, 4) if actions_total > 0 else 1.0
-
-        return {
-            "runtime_id": runtime_id,
-            "status": runtime_status,
-            "uptime_seconds": uptime_seconds,
-            "window_hours": 24,
-            "events_total": len(recent_window),
-            "actions_total": actions_total,
-            "actions_success": actions_success,
-            "actions_error": actions_error,
-            "actions_skipped": actions_skipped,
-            "success_rate": success_rate,
-            "status_counts": dict(status_counter),
-            "event_type_counts": dict(event_type_counter),
-            "failure_reasons": [{"reason": reason, "count": count} for reason, count in failure_reasons.most_common(8)],
-            "recent_failures": recent_failures,
-            "last_event_at": last_event_at,
-        }
+        return self._build_metrics_payload(self._build_snapshot(db, runtime))
 
     def get_risk_state(
         self,
@@ -233,6 +204,24 @@ class RuntimeObservabilityService:
         wallet_address: str,
         user_id: str,
     ) -> BotRuntime | dict[str, Any]:
+        runtime = self._resolve_runtime(
+            db,
+            bot_id=bot_id,
+            wallet_address=wallet_address,
+            user_id=user_id,
+        )
+        if runtime is None:
+            raise ValueError("Bot runtime not found")
+        return runtime
+
+    def _resolve_runtime(
+        self,
+        db: Session,
+        *,
+        bot_id: str,
+        wallet_address: str,
+        user_id: str,
+    ) -> BotRuntime | dict[str, Any] | None:
         if self._settings.use_supabase_api:
             assert self._supabase is not None
             definition = self._supabase.maybe_one(
@@ -241,13 +230,10 @@ class RuntimeObservabilityService:
             )
             if definition is None:
                 raise ValueError("Bot not found")
-            runtime = self._supabase.maybe_one(
+            return self._supabase.maybe_one(
                 "bot_runtimes",
                 filters={"bot_definition_id": definition["id"], "wallet_address": wallet_address},
             )
-            if runtime is None:
-                raise ValueError("Bot runtime not found")
-            return runtime
 
         definition = db.scalar(
             select(BotDefinition)
@@ -261,7 +247,7 @@ class RuntimeObservabilityService:
         if definition is None:
             raise ValueError("Bot not found")
 
-        runtime = db.scalar(
+        return db.scalar(
             select(BotRuntime)
             .where(
                 BotRuntime.bot_definition_id == definition.id,
@@ -269,9 +255,157 @@ class RuntimeObservabilityService:
             )
             .limit(1)
         )
-        if runtime is None:
-            raise ValueError("Bot runtime not found")
-        return runtime
+
+    def _build_snapshot(self, db: Session, runtime: BotRuntime | dict[str, Any]) -> dict[str, Any]:
+        now = datetime.now(tz=UTC)
+        window_start = now - timedelta(hours=24)
+        runtime_id = self._get_value(runtime, "id")
+        runtime_updated_at = self._as_datetime(self._get_value(runtime, "updated_at"))
+        runtime_deployed_at = self._get_value(runtime, "deployed_at")
+
+        if self._settings.use_supabase_api:
+            assert self._supabase is not None
+            events = self._supabase.select(
+                "bot_execution_events",
+                filters={"runtime_id": runtime_id},
+                order="created_at.desc",
+                limit=500,
+            )
+            recent_window = [
+                event for event in events if self._as_datetime(self._get_value(event, "created_at")) >= window_start
+            ]
+        else:
+            events = list(
+                db.scalars(
+                    select(BotExecutionEvent)
+                    .where(BotExecutionEvent.runtime_id == runtime_id)
+                    .order_by(desc(BotExecutionEvent.created_at))
+                    .limit(500)
+                ).all()
+            )
+            recent_window = [event for event in events if self._as_datetime(self._get_value(event, "created_at")) >= window_start]
+
+        return {
+            "runtime": runtime,
+            "events": events,
+            "recent_window": recent_window,
+            "runtime_updated_at": runtime_updated_at,
+            "runtime_deployed_at": runtime_deployed_at,
+            "now": now,
+        }
+
+    def _build_metrics_payload(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        runtime = snapshot["runtime"]
+        events = snapshot["events"]
+        recent_window = snapshot["recent_window"]
+        now = snapshot["now"]
+        runtime_deployed_at = snapshot["runtime_deployed_at"]
+
+        action_events = [event for event in recent_window if str(self._get_value(event, "event_type")).startswith("action.")]
+        actions_total = len(action_events)
+        actions_success = len([event for event in action_events if self._get_value(event, "status") == "success"])
+        actions_error = len([event for event in action_events if self._get_value(event, "status") == "error"])
+        actions_skipped = len([event for event in action_events if self._get_value(event, "status") == "skipped"])
+
+        event_type_counter = Counter(str(self._get_value(event, "event_type")) for event in recent_window)
+        status_counter = Counter(str(self._get_value(event, "status")) for event in recent_window)
+        failure_reasons = Counter(
+            (self._get_value(event, "error_reason") or "unknown")
+            for event in recent_window
+            if self._get_value(event, "status") == "error"
+        )
+        recent_failures = [
+            {
+                "id": self._get_value(event, "id"),
+                "event_type": self._get_value(event, "event_type"),
+                "error_reason": self._get_value(event, "error_reason") or "unknown",
+                "decision_summary": self._get_value(event, "decision_summary"),
+                "created_at": self._get_value(event, "created_at"),
+            }
+            for event in events
+            if self._get_value(event, "status") == "error"
+        ][:15]
+
+        last_event_at = self._as_datetime(self._get_value(events[0], "created_at")) if events else None
+        uptime_seconds = None
+        if runtime_deployed_at is not None:
+            deployed_at = self._as_datetime(runtime_deployed_at) if isinstance(runtime_deployed_at, str) else runtime_deployed_at
+            uptime_seconds = max(0, int((now - deployed_at).total_seconds()))
+
+        success_rate = round(actions_success / actions_total, 4) if actions_total > 0 else 1.0
+
+        return {
+            "runtime_id": self._get_value(runtime, "id"),
+            "status": self._get_value(runtime, "status"),
+            "uptime_seconds": uptime_seconds,
+            "window_hours": 24,
+            "events_total": len(recent_window),
+            "actions_total": actions_total,
+            "actions_success": actions_success,
+            "actions_error": actions_error,
+            "actions_skipped": actions_skipped,
+            "success_rate": success_rate,
+            "status_counts": dict(status_counter),
+            "event_type_counts": dict(event_type_counter),
+            "failure_reasons": [{"reason": reason, "count": count} for reason, count in failure_reasons.most_common(8)],
+            "recent_failures": recent_failures,
+            "last_event_at": last_event_at,
+        }
+
+    def _build_health_payload(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        runtime = snapshot["runtime"]
+        events = snapshot["events"]
+        recent_window = snapshot["recent_window"]
+        runtime_updated_at = snapshot["runtime_updated_at"]
+        now = snapshot["now"]
+
+        latest_event_at = self._as_datetime(self._get_value(events[0], "created_at")) if events else None
+        heartbeat_reference = runtime_updated_at
+        if latest_event_at and latest_event_at > heartbeat_reference:
+            heartbeat_reference = latest_event_at
+
+        heartbeat_age_seconds = max(0, int((now - heartbeat_reference).total_seconds()))
+        recent_errors = len([event for event in recent_window if self._get_value(event, "status") == "error"])
+        error_rate_recent = round(recent_errors / len(recent_window), 4) if recent_window else 0.0
+
+        health = "healthy"
+        reasons: list[str] = []
+        runtime_status = str(self._get_value(runtime, "status"))
+        if runtime_status in {"stopped", "failed"}:
+            health = runtime_status
+            reasons.append(f"Runtime status is {runtime_status}")
+        else:
+            if heartbeat_age_seconds > 600:
+                health = "offline"
+                reasons.append("No runtime heartbeat for over 10 minutes")
+            elif heartbeat_age_seconds > 150:
+                health = "stale"
+                reasons.append("Runtime heartbeat is stale")
+
+            if error_rate_recent >= 0.35 and health not in {"offline", "stale"}:
+                health = "degraded"
+                reasons.append("High runtime error rate detected")
+            elif error_rate_recent >= 0.35:
+                reasons.append("High runtime error rate detected")
+
+            if runtime_status == "paused" and health in {"healthy", "degraded"}:
+                health = "paused"
+                reasons.append("Runtime is paused")
+
+        if not reasons:
+            reasons.append("Runtime heartbeat and execution flow are healthy")
+
+        return {
+            "runtime_id": self._get_value(runtime, "id"),
+            "health": health,
+            "status": runtime_status,
+            "mode": self._get_value(runtime, "mode"),
+            "last_runtime_update": runtime_updated_at,
+            "last_event_at": latest_event_at,
+            "heartbeat_age_seconds": heartbeat_age_seconds,
+            "error_rate_recent": error_rate_recent,
+            "reasons": reasons,
+        }
 
     @staticmethod
     def _get_value(item: BotRuntime | BotExecutionEvent | dict[str, Any], key: str) -> Any:

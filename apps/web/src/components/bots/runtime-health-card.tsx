@@ -1,86 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
-type RuntimeHealth = {
-  runtime_id: string | null;
-  health: string;
-  status: string;
-  mode: string;
-  last_runtime_update: string | null;
-  last_event_at: string | null;
-  heartbeat_age_seconds: number | null;
-  error_rate_recent: number;
-  reasons: string[];
-};
-
-type RuntimeMetrics = {
-  runtime_id: string;
-  status: string;
-  uptime_seconds: number | null;
-  window_hours: number;
-  events_total: number;
-  actions_total: number;
-  actions_success: number;
-  actions_error: number;
-  actions_skipped: number;
-  success_rate: number;
-  last_event_at: string | null;
-};
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+import type { RuntimeHealth, RuntimeMetrics } from "@/lib/runtime-overview";
 
 export function RuntimeHealthCard({
-  botId,
-  walletAddress,
-  getAuthHeaders,
-  refreshToken,
+  health,
+  metrics,
+  error,
 }: {
-  botId: string;
-  walletAddress: string;
-  getAuthHeaders: (headersInit?: HeadersInit) => Promise<Headers>;
-  refreshToken: number;
+  health: RuntimeHealth | null;
+  metrics: RuntimeMetrics | null;
+  error?: string | null;
 }) {
-  const [health, setHealth] = useState<RuntimeHealth | null>(null);
-  const [metrics, setMetrics] = useState<RuntimeMetrics | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    async function loadRuntimeHealth() {
-      try {
-        const headers = await getAuthHeaders();
-        const [healthResponse, metricsResponse] = await Promise.all([
-          fetch(`${API_BASE_URL}/api/bots/${botId}/health?wallet_address=${encodeURIComponent(walletAddress)}`, {
-            cache: "no-store",
-            headers,
-          }),
-          fetch(`${API_BASE_URL}/api/bots/${botId}/metrics?wallet_address=${encodeURIComponent(walletAddress)}`, {
-            cache: "no-store",
-            headers,
-          }),
-        ]);
-
-        const healthPayload = (await healthResponse.json()) as RuntimeHealth | { detail?: string };
-        const metricsPayload = (await metricsResponse.json()) as RuntimeMetrics | { detail?: string };
-
-        if (!healthResponse.ok) {
-          throw new Error("detail" in healthPayload ? healthPayload.detail ?? "Could not load health" : "Could not load health");
-        }
-        if (!metricsResponse.ok) {
-          throw new Error("detail" in metricsPayload ? metricsPayload.detail ?? "Could not load metrics" : "Could not load metrics");
-        }
-
-        setHealth(healthPayload as RuntimeHealth);
-        setMetrics(metricsPayload as RuntimeMetrics);
-        setError(null);
-      } catch (loadError) {
-        setError(loadError instanceof Error ? loadError.message : "Could not load runtime health");
-      }
-    }
-
-    void loadRuntimeHealth();
-  }, [botId, walletAddress, getAuthHeaders, refreshToken]);
-
   return (
     <section className="grid gap-4 border-l-2 border-[#74b97f] bg-[#16181a] p-6">
       <div className="flex items-center justify-between">
@@ -128,7 +58,7 @@ export function RuntimeHealthCard({
 
       <div className="grid gap-1 text-xs text-neutral-500">
         {(health?.reasons ?? []).slice(0, 2).map((reason) => (
-          <p key={reason}>• {reason}</p>
+          <p key={reason}>- {reason}</p>
         ))}
       </div>
     </section>

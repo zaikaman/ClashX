@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from src.services.bot_builder_service import BotBuilderService
+from src.services.runtime_observability_service import RuntimeObservabilityService
 from src.services.bot_runtime_engine import BotRuntimeEngine
 from src.services.trading_service import TradingService
 from src.workers.bot_runtime_worker import BotRuntimeWorker
@@ -286,6 +288,62 @@ def test_delete_bot_rejects_active_runtime() -> None:
         assert str(exc) == "Stop the runtime before deleting this bot."
     else:
         raise AssertionError("Expected delete_bot to reject active runtimes")
+
+
+def test_runtime_overview_returns_health_and_metrics_from_shared_event_window() -> None:
+    tables = _seed_tables()
+    now = datetime.now(tz=UTC)
+    tables["bot_execution_events"] = [
+        {
+            "id": "event-2",
+            "runtime_id": "runtime-1",
+            "event_type": "action.executed",
+            "decision_summary": "opened a long",
+            "request_payload": {},
+            "result_payload": {"status": "success"},
+            "status": "success",
+            "error_reason": None,
+            "created_at": (now - timedelta(minutes=20)).isoformat(),
+        },
+        {
+            "id": "event-1",
+            "runtime_id": "runtime-1",
+            "event_type": "action.failed",
+            "decision_summary": "rejected by guardrail",
+            "request_payload": {},
+            "result_payload": {"status": "error"},
+            "status": "error",
+            "error_reason": "risk_limit",
+            "created_at": (now - timedelta(minutes=30)).isoformat(),
+        },
+    ]
+    fake_supabase = FakeSupabaseRestClient(tables)
+    service = RuntimeObservabilityService()
+    service._supabase = fake_supabase
+
+    overview = service.get_overview(None, bot_id="bot-1", wallet_address="wallet-1", user_id="user-1")
+
+    assert overview["health"]["runtime_id"] == "runtime-1"
+    assert overview["metrics"]["runtime_id"] == "runtime-1"
+    assert overview["metrics"]["events_total"] == 2
+    assert overview["metrics"]["actions_total"] == 2
+    assert overview["metrics"]["actions_error"] == 1
+    assert overview["metrics"]["failure_reasons"][0]["reason"] == "risk_limit"
+
+
+def test_runtime_overview_returns_draft_snapshot_when_runtime_is_missing() -> None:
+    tables = _seed_tables()
+    tables["bot_runtimes"] = []
+    fake_supabase = FakeSupabaseRestClient(tables)
+    service = RuntimeObservabilityService()
+    service._supabase = fake_supabase
+
+    overview = service.get_overview(None, bot_id="bot-1", wallet_address="wallet-1", user_id="user-1")
+
+    assert overview["health"]["runtime_id"] is None
+    assert overview["health"]["health"] == "not_deployed"
+    assert overview["metrics"]["status"] == "draft"
+    assert overview["metrics"]["events_total"] == 0
 
 
 def test_runtime_worker_executes_supabase_trade_without_sqlalchemy() -> None:

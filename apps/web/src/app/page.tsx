@@ -2,6 +2,7 @@
 
 import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
+import Script from 'next/script';
 import {
   ArrowRight, Shield, Zap, TrendingUp, Box, Users,
   Activity, ShieldCheck, Layers, Sparkles, Menu, X,
@@ -234,7 +235,7 @@ const Home = () => {
 
 
   useEffect(() => {
-    // Script is already loaded in Layout/HTML, just initialize
+    // The animated background is decorative, so it can load after the route is interactive.
     const initUnicorn = () => {
       const UnicornStudio = (window as any).UnicornStudio;
       if (UnicornStudio) {
@@ -380,6 +381,7 @@ const Home = () => {
 
   return (
     <div className="min-h-screen bg-app flex flex-col">
+      <Script src="/unicornStudio.umd.js" strategy="lazyOnload" />
       <LandingHeader />
 
       <main className="flex-grow">
