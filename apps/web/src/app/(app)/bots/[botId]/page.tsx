@@ -151,12 +151,20 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
         <article className="grid gap-3 rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-6">
           <div className="flex items-center justify-between gap-3">
             <span className="label text-[#74b97f]">Runtime snapshot</span>
-            <Link
-              href="/bots"
-              className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#dce85d] hover:text-[#dce85d]"
-            >
-              Back to my bots
-            </Link>
+            <div className="flex items-center gap-2">
+              <Link
+                href={`/build?botId=${encodeURIComponent(params.botId)}`}
+                className="rounded-full border border-[rgba(220,232,93,0.24)] px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#dce85d] transition hover:border-[#dce85d] hover:bg-[#dce85d]/8"
+              >
+                Edit in builder
+              </Link>
+              <Link
+                href="/bots"
+                className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#dce85d] hover:text-[#dce85d]"
+              >
+                Back to my bots
+              </Link>
+            </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="rounded-xl bg-[#090a0a] px-4 py-3">

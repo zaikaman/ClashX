@@ -937,6 +937,12 @@ export function BotsFleetPage() {
                         <StatusBadge status={status} />
                         <MetaBadge label={authoringLabel()} />
                         <MetaBadge label={bot.visibility} />
+                        <Link
+                          href={`/build?botId=${encodeURIComponent(bot.id)}`}
+                          className="rounded-full border border-[rgba(220,232,93,0.24)] px-2.5 py-1 text-[0.55rem] font-semibold uppercase tracking-[0.16em] text-[#dce85d] transition hover:border-[#dce85d] hover:bg-[#dce85d]/8"
+                        >
+                          Edit in builder
+                        </Link>
                       </div>
                       <p className="max-w-3xl text-sm leading-7 text-neutral-400">
                         {bot.description || "No description yet."}
@@ -995,6 +1001,13 @@ export function BotsFleetPage() {
                         className="inline-flex items-center gap-2 rounded-full border border-[rgba(255,255,255,0.12)] px-5 py-2.5 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-white hover:text-neutral-50"
                       >
                         Open desk
+                        <ArrowUpRight className="h-3.5 w-3.5" />
+                      </Link>
+                      <Link
+                        href={`/build?botId=${encodeURIComponent(bot.id)}`}
+                        className="inline-flex items-center gap-2 rounded-full border border-[rgba(220,232,93,0.24)] px-5 py-2.5 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-[#dce85d] transition hover:border-[#dce85d] hover:bg-[#dce85d]/8"
+                      >
+                        Edit draft
                         <ArrowUpRight className="h-3.5 w-3.5" />
                       </Link>
                     </div>

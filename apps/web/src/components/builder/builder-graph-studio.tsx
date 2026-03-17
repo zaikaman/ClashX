@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import {
   addEdge,
   Background,
@@ -79,6 +80,25 @@ type BuilderChatMessage = {
 type BuilderAiRouteResponse = {
   reply: string;
   draft: BuilderAiDraft;
+};
+type BuilderBotDefinition = {
+  id: string;
+  name: string;
+  description: string;
+  wallet_address: string;
+  visibility: "private" | "public" | "unlisted";
+  authoring_mode: string;
+  strategy_type: string;
+  market_scope: string;
+  rules_json: Record<string, unknown>;
+};
+type SavedBuilderBot = {
+  id: string;
+  name: string;
+  description: string;
+  visibility: string;
+  market_scope: string;
+  updated_at: string;
 };
 type PortableBuilderNode = {
   id: string;
@@ -245,6 +265,90 @@ function sanitizeDraftFileName(value: string) {
   return base || "clashx-bot-draft";
 }
 
+function buildCanvasFromSerializedGraph(graph: {
+  nodes: PortableBuilderNode[];
+  edges: PortableBuilderEdge[];
+}) {
+  const nextNodes: BuilderFlowNode[] = [];
+  const nextEdges: BuilderFlowEdge[] = [];
+  const nodeIdMap = new Map<string, string>();
+  let importedEntryPosition: XYPosition | null = null;
+
+  for (const node of graph.nodes) {
+    if (node.kind === "entry") {
+      nodeIdMap.set(node.id, ENTRY_NODE_ID);
+      importedEntryPosition = snapPosition(node.position);
+      continue;
+    }
+
+    if (!isRecord(node.config) || typeof node.config.type !== "string") {
+      throw new Error("One of the imported blocks is missing its type.");
+    }
+
+    if (node.kind === "condition") {
+      if (!CONDITION_OPTIONS.includes(node.config.type as (typeof CONDITION_OPTIONS)[number])) {
+        throw new Error(`Unsupported condition type: ${node.config.type}`);
+      }
+      const baseCondition = createCondition(node.config.type as (typeof CONDITION_OPTIONS)[number]);
+      const condition: VisualCondition = {
+        ...baseCondition,
+        ...(node.config as Partial<VisualCondition>),
+        id: baseCondition.id,
+        type: node.config.type,
+        symbol: typeof node.config.symbol === "string" && node.config.symbol.trim() ? node.config.symbol : baseCondition.symbol,
+      };
+      const nextNode = createConditionNode(condition, snapPosition(node.position));
+      nextNodes.push(nextNode);
+      nodeIdMap.set(node.id, nextNode.id);
+      continue;
+    }
+
+    if (!ACTION_OPTIONS.includes(node.config.type as (typeof ACTION_OPTIONS)[number])) {
+      throw new Error(`Unsupported action type: ${node.config.type}`);
+    }
+    const baseAction = createAction(node.config.type as (typeof ACTION_OPTIONS)[number]);
+    const action: VisualAction = {
+      ...baseAction,
+      ...(node.config as Partial<VisualAction>),
+      id: baseAction.id,
+      type: node.config.type,
+      symbol: typeof node.config.symbol === "string" && node.config.symbol.trim() ? node.config.symbol : baseAction.symbol,
+    };
+    const nextNode = createActionNode(action, snapPosition(node.position));
+    nextNodes.push(nextNode);
+    nodeIdMap.set(node.id, nextNode.id);
+  }
+
+  const entryNode = createEntryNode();
+  if (importedEntryPosition) {
+    entryNode.position = importedEntryPosition;
+  }
+  nextNodes.unshift(entryNode);
+
+  graph.edges.forEach((edge, index) => {
+    const source = nodeIdMap.get(edge.source);
+    const target = nodeIdMap.get(edge.target);
+    if (!source || !target) {
+      throw new Error("The draft has broken graph connections.");
+    }
+    if (source === target) {
+      return;
+    }
+    nextEdges.push({
+      id: edge.id ?? `imported-edge-${index + 1}`,
+      source,
+      target,
+      type: "smoothstep",
+    });
+  });
+
+  return {
+    nodes: nextNodes,
+    edges: nextEdges,
+    selectedNodeId: nextNodes.find((node) => node.data.kind !== "entry")?.id ?? null,
+  };
+}
+
 function normalizeMarketSymbol(symbol: string) {
   return symbol.trim().toUpperCase().replace("-PERP", "");
 }
@@ -369,6 +473,8 @@ export function BuilderGraphStudio({
   onboardingStatus: PacificaOnboardingStatus;
   onOpenOnboardingGuide?: () => void;
 }) {
+  const searchParams = useSearchParams();
+  const requestedBotId = searchParams.get("botId");
   const { authenticated, login, walletAddress: authenticatedWallet, getAuthHeaders } = useClashxAuth();
   const initialTemplate = getBuilderStarterTemplate(DEFAULT_BUILDER_TEMPLATE_ID);
   const initialGraph = useMemo(() => buildDefaultGraph(), []);
@@ -406,6 +512,11 @@ export function BuilderGraphStudio({
   const [chatStatus, setChatStatus] = useState<"idle" | "sending">("idle");
   const chatViewportRef = useRef<HTMLDivElement | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const [loadingBotId, setLoadingBotId] = useState<string | null>(null);
+  const [loadedBotId, setLoadedBotId] = useState<string | null>(null);
+  const [savedBots, setSavedBots] = useState<SavedBuilderBot[]>([]);
+  const [savedBotsLoading, setSavedBotsLoading] = useState(false);
+  const [savedBotsOpen, setSavedBotsOpen] = useState(false);
 
   useEffect(() => {
     if (authenticatedWallet) setWalletAddress(authenticatedWallet);
@@ -421,6 +532,122 @@ export function BuilderGraphStudio({
       if (marketsResponse.ok) setMarkets((await marketsResponse.json()) as BuilderMarket[]);
     })();
   }, []);
+
+  useEffect(() => {
+    if (!authenticated || !walletAddress) {
+      setSavedBots([]);
+      setSavedBotsOpen(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadSavedBots() {
+      setSavedBotsLoading(true);
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/api/bots?wallet_address=${encodeURIComponent(walletAddress)}`,
+          { cache: "no-store", headers: await getAuthHeaders() },
+        );
+        const payload = (await response.json()) as SavedBuilderBot[] | { detail?: string };
+        if (!response.ok) {
+          throw new Error("detail" in payload ? payload.detail ?? "Could not load saved bots" : "Could not load saved bots");
+        }
+        if (!cancelled) {
+          setSavedBots(
+            [...(payload as SavedBuilderBot[])].sort(
+              (left, right) => new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime(),
+            ),
+          );
+        }
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : "Could not load saved bots");
+        }
+      } finally {
+        if (!cancelled) {
+          setSavedBotsLoading(false);
+        }
+      }
+    }
+
+    void loadSavedBots();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authenticated, walletAddress, getAuthHeaders]);
+
+  async function loadBotIntoBuilder(botId: string) {
+    if (!authenticated || !walletAddress) {
+      login();
+      return;
+    }
+
+    setLoadingBotId(botId);
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/bots/${botId}?wallet_address=${encodeURIComponent(walletAddress)}`,
+        { cache: "no-store", headers: await getAuthHeaders() },
+      );
+      const payload = (await response.json()) as BuilderBotDefinition | { detail?: string };
+      if (!response.ok) {
+        throw new Error("detail" in payload ? payload.detail ?? "Could not load bot draft" : "Could not load bot draft");
+      }
+
+      const bot = payload as BuilderBotDefinition;
+      const graphPayload = isRecord(bot.rules_json.graph) ? bot.rules_json.graph : null;
+      if (!graphPayload || !Array.isArray(graphPayload.nodes) || !Array.isArray(graphPayload.edges)) {
+        throw new Error("This saved bot does not include an editable builder graph.");
+      }
+
+      const nextGraph = buildCanvasFromSerializedGraph({
+        nodes: graphPayload.nodes as PortableBuilderNode[],
+        edges: graphPayload.edges as PortableBuilderEdge[],
+      });
+
+      setNodes(nextGraph.nodes);
+      setEdges(nextGraph.edges);
+      setSelectedNodeId(nextGraph.selectedNodeId);
+      setActiveTemplateId(BLANK_BUILDER_TEMPLATE_ID);
+      setWalletAddress(bot.wallet_address);
+      setName(bot.name);
+      setDescription(bot.description);
+      setVisibility(bot.visibility);
+      setSelectedMarketSymbols(
+        parseMarketScopeSelection(bot.market_scope).length
+          ? parseMarketScopeSelection(bot.market_scope)
+          : ["BTC"],
+      );
+      setCreatedBotId(bot.id);
+      setLoadedBotId(bot.id);
+      setRuntimeStatus(null);
+      setError(null);
+      setBlockSearch("");
+      setSavedBotsOpen(false);
+
+      requestAnimationFrame(() => {
+        flow?.fitView({ padding: 0.18, duration: 280 });
+      });
+
+      onNotice?.({
+        eyebrow: "Loaded",
+        title: "Saved bot ready",
+        detail: "You can edit this draft and save over it whenever you're ready.",
+      });
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Could not load bot draft");
+    } finally {
+      setLoadingBotId(null);
+    }
+  }
+
+  useEffect(() => {
+    if (!authenticated || !walletAddress || !requestedBotId || requestedBotId === loadedBotId || requestedBotId === loadingBotId) {
+      return;
+    }
+    void loadBotIntoBuilder(requestedBotId);
+  }, [authenticated, walletAddress, requestedBotId, loadedBotId, loadingBotId]);
 
   useEffect(() => {
     if (selectedNodeId && nodes.some((node) => node.id === selectedNodeId && node.data.kind !== "entry")) return;
@@ -637,6 +864,7 @@ export function BuilderGraphStudio({
         : ["BTC"],
     );
     setCreatedBotId(null);
+    setLoadedBotId(null);
     setRuntimeStatus(null);
     setError(null);
 
@@ -656,6 +884,7 @@ export function BuilderGraphStudio({
     setDescription("");
     setSelectedMarketSymbols(["BTC", "ETH", "SOL"]);
     setCreatedBotId(null);
+    setLoadedBotId(null);
     setRuntimeStatus(null);
     setError(null);
     setBlockSearch("");
@@ -690,6 +919,7 @@ export function BuilderGraphStudio({
     setDescription(draft.description);
     setSelectedMarketSymbols(nextSelectedMarkets.length > 0 ? nextSelectedMarkets : ["BTC"]);
     setCreatedBotId(null);
+    setLoadedBotId(null);
     setRuntimeStatus(null);
     setBuilderMode("ai");
     setError(null);
@@ -890,13 +1120,30 @@ export function BuilderGraphStudio({
     if (blocker) return void setError(blocker);
     setStatus("creating");
     setError(null);
+    const updatingExisting = Boolean(createdBotId);
     try {
-      await persistBotDraft();
+      const savedBotId = await persistBotDraft();
+      setLoadedBotId(savedBotId);
+      setSavedBots((current) => {
+        const nextItem: SavedBuilderBot = {
+          id: savedBotId,
+          name: name.trim(),
+          description: description.trim(),
+          visibility,
+          market_scope: marketScope,
+          updated_at: new Date().toISOString(),
+        };
+        return [nextItem, ...current.filter((bot) => bot.id !== savedBotId)].sort(
+          (left, right) => new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime(),
+        );
+      });
       setRuntimeStatus(null);
       onNotice?.({
-        eyebrow: "Saved",
-        title: "Draft saved",
-        detail: "Your changes are ready whenever you want to deploy.",
+        eyebrow: updatingExisting ? "Updated" : "Saved",
+        title: updatingExisting ? "Draft updated" : "Draft saved",
+        detail: updatingExisting
+          ? "Your latest edits have been written back to this bot."
+          : "Your changes are ready whenever you want to deploy.",
       });
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : "Bot save failed");
@@ -987,83 +1234,11 @@ export function BuilderGraphStudio({
   }
 
   function applyImportedDraft(payload: PortableBuilderDraft) {
-    const nextNodes: BuilderFlowNode[] = [];
-    const nextEdges: BuilderFlowEdge[] = [];
-    const nodeIdMap = new Map<string, string>();
-    let importedEntryPosition: XYPosition | null = null;
+    const nextGraph = buildCanvasFromSerializedGraph(payload.draft.graph);
 
-    for (const node of payload.draft.graph.nodes) {
-      if (node.kind === "entry") {
-        nodeIdMap.set(node.id, ENTRY_NODE_ID);
-        importedEntryPosition = snapPosition(node.position);
-        continue;
-      }
-
-      if (!isRecord(node.config) || typeof node.config.type !== "string") {
-        throw new Error("One of the imported blocks is missing its type.");
-      }
-
-      if (node.kind === "condition") {
-        if (!CONDITION_OPTIONS.includes(node.config.type as (typeof CONDITION_OPTIONS)[number])) {
-          throw new Error(`Unsupported condition type: ${node.config.type}`);
-        }
-        const baseCondition = createCondition(node.config.type as (typeof CONDITION_OPTIONS)[number]);
-        const condition: VisualCondition = {
-          ...baseCondition,
-          ...(node.config as Partial<VisualCondition>),
-          id: baseCondition.id,
-          type: node.config.type,
-          symbol: typeof node.config.symbol === "string" && node.config.symbol.trim() ? node.config.symbol : baseCondition.symbol,
-        };
-        const nextNode = createConditionNode(condition, snapPosition(node.position));
-        nextNodes.push(nextNode);
-        nodeIdMap.set(node.id, nextNode.id);
-        continue;
-      }
-
-      if (!ACTION_OPTIONS.includes(node.config.type as (typeof ACTION_OPTIONS)[number])) {
-        throw new Error(`Unsupported action type: ${node.config.type}`);
-      }
-      const baseAction = createAction(node.config.type as (typeof ACTION_OPTIONS)[number]);
-      const action: VisualAction = {
-        ...baseAction,
-        ...(node.config as Partial<VisualAction>),
-        id: baseAction.id,
-        type: node.config.type,
-        symbol: typeof node.config.symbol === "string" && node.config.symbol.trim() ? node.config.symbol : baseAction.symbol,
-      };
-      const nextNode = createActionNode(action, snapPosition(node.position));
-      nextNodes.push(nextNode);
-      nodeIdMap.set(node.id, nextNode.id);
-    }
-
-    const entryNode = createEntryNode();
-    if (importedEntryPosition) {
-      entryNode.position = importedEntryPosition;
-    }
-
-    nextNodes.unshift(entryNode);
-
-    payload.draft.graph.edges.forEach((edge, index) => {
-      const source = nodeIdMap.get(edge.source);
-      const target = nodeIdMap.get(edge.target);
-      if (!source || !target) {
-        throw new Error("The draft has broken graph connections.");
-      }
-      if (source === target) {
-        return;
-      }
-      nextEdges.push({
-        id: `imported-edge-${index + 1}`,
-        source,
-        target,
-        type: "smoothstep",
-      });
-    });
-
-    setNodes(nextNodes);
-    setEdges(nextEdges);
-    setSelectedNodeId(nextNodes.find((node) => node.data.kind !== "entry")?.id ?? null);
+    setNodes(nextGraph.nodes);
+    setEdges(nextGraph.edges);
+    setSelectedNodeId(nextGraph.selectedNodeId);
     setActiveTemplateId(payload.draft.active_template_id ?? BLANK_BUILDER_TEMPLATE_ID);
     setName(payload.draft.name);
     setDescription(payload.draft.description);
@@ -1071,6 +1246,7 @@ export function BuilderGraphStudio({
     setSelectedMarketSymbols(payload.draft.selected_market_symbols.length > 0 ? payload.draft.selected_market_symbols.map(normalizeMarketSymbol) : ["BTC"]);
     setBuilderMode(payload.draft.builder_mode ?? "visual");
     setCreatedBotId(null);
+    setLoadedBotId(null);
     setRuntimeStatus(null);
     setError(null);
     setBlockSearch("");
@@ -1157,7 +1333,7 @@ export function BuilderGraphStudio({
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-app overflow-hidden">
+    <div className="relative flex-1 flex flex-col bg-app overflow-hidden">
       {/* Header */}
       <div className="flex-shrink-0 border-b border-[rgba(255,255,255,0.06)] bg-secondary">
         <div className="px-4 py-3 flex items-center justify-between">
@@ -1199,7 +1375,7 @@ export function BuilderGraphStudio({
             </div>
           </div>
 
-          <div className="flex items-center gap-3 flex-1 justify-end max-w-2xl">
+          <div className="flex items-center gap-3 flex-1 justify-end max-w-4xl">
              <input
                ref={importInputRef}
                type="file"
@@ -1209,11 +1385,11 @@ export function BuilderGraphStudio({
              />
              <div className="flex items-center gap-3 flex-1">
                <input 
-               value={name}
-               onChange={(e) => setName(e.target.value)}
-               placeholder="Enter Strategy Name..."
-               className="bg-neutral-900 border border-[rgba(255,255,255,0.06)] rounded-md px-3 py-1.5 text-sm text-neutral-50 w-full focus:outline-none focus:border-[#dce85d] transition-colors"
-             />
+                 value={name}
+                 onChange={(e) => setName(e.target.value)}
+                 placeholder="Enter Strategy Name..."
+                 className="bg-neutral-900 border border-[rgba(255,255,255,0.06)] rounded-md px-3 py-1.5 text-sm text-neutral-50 w-full focus:outline-none focus:border-[#dce85d] transition-colors"
+               />
                <button
                  type="button"
                  onClick={createNewBotDraft}
@@ -1222,6 +1398,32 @@ export function BuilderGraphStudio({
                  <Plus className="w-4 h-4" />
                  New
                </button>
+              <button
+                type="button"
+                onClick={() => setSavedBotsOpen((current) => !current)}
+                className={clsx(
+                   "flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-semibold transition-all",
+                   savedBotsOpen
+                     ? "border-[rgba(220,232,93,0.34)] bg-[rgba(220,232,93,0.08)] text-[#dce85d]"
+                     : "border-[rgba(255,255,255,0.08)] bg-neutral-900 text-neutral-200 hover:border-[rgba(220,232,93,0.34)] hover:text-white",
+                )}
+              >
+                <RefreshCcw className="w-4 h-4" />
+                Load
+              </button>
+              <button
+                type="button"
+                onClick={createBot}
+                disabled={status === "creating"}
+                className={clsx(
+                  "flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-semibold transition-all",
+                  status === "creating"
+                    ? "border-[rgba(255,255,255,0.08)] bg-neutral-900 text-neutral-500"
+                    : "border-[rgba(255,255,255,0.08)] bg-neutral-900 text-neutral-200 hover:border-[rgba(220,232,93,0.34)] hover:text-white",
+                )}
+              >
+                {status === "creating" ? "Saving..." : "Save"}
+              </button>
                <button
                  type="button"
                  onClick={exportDraft}
@@ -1255,13 +1457,93 @@ export function BuilderGraphStudio({
              <button
                type="button"
                onClick={onOpenOnboardingGuide}
-               className="flex h-9 items-center rounded-md border border-[rgba(255,255,255,0.08)] bg-neutral-900 px-3 text-sm font-semibold text-neutral-200 transition-all hover:border-[rgba(220,232,93,0.34)] hover:text-white"
+               className="flex h-9 items-center rounded-md border border-[rgba(255,255,255,0.08)] bg-neutral-900 px-3 text-sm font-semibold text-neutral-200 transition-all hover:border-[rgba(220,232,93,0.34)] hover:text-white whitespace-nowrap"
              >
                Pacifica setup
              </button>
           </div>
         </div>
       </div>
+
+      {savedBotsOpen ? (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-[rgba(3,4,4,0.72)] px-4 py-8 backdrop-blur-sm">
+          <div
+            className="absolute inset-0"
+            onClick={() => setSavedBotsOpen(false)}
+            aria-hidden="true"
+          />
+          <div className="relative z-10 w-full max-w-2xl overflow-hidden rounded-[2rem] border border-[rgba(220,232,93,0.22)] bg-[linear-gradient(180deg,rgba(18,20,18,0.98),rgba(9,10,10,0.99))] shadow-[0_28px_80px_rgba(0,0,0,0.5)]">
+            <div className="flex items-center justify-between border-b border-[rgba(255,255,255,0.06)] px-6 py-5">
+              <div>
+                <div className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]">Saved drafts</div>
+                <div className="mt-1 text-sm text-neutral-400">Pick a bot to reopen in the builder and keep editing.</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSavedBotsOpen(false)}
+                className="rounded-full border border-[rgba(255,255,255,0.08)] px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-white hover:text-white"
+              >
+                Close
+              </button>
+            </div>
+            <div className="max-h-[min(70vh,38rem)] space-y-3 overflow-y-auto p-6">
+              {savedBotsLoading ? (
+                <div className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-neutral-800/70 px-4 py-4 text-sm text-neutral-400">
+                  Loading your saved bots...
+                </div>
+              ) : savedBots.length === 0 ? (
+                <div className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-neutral-800/70 px-4 py-4 text-sm leading-6 text-neutral-400">
+                  Save a draft once and it will appear here for quick loading.
+                </div>
+              ) : (
+                savedBots.slice(0, 10).map((bot) => {
+                  const isCurrent = bot.id === createdBotId;
+                  const isLoading = bot.id === loadingBotId;
+                  return (
+                    <div
+                      key={bot.id}
+                      className={clsx(
+                        "rounded-[1.35rem] border px-4 py-4 transition-colors",
+                        isCurrent
+                          ? "border-[rgba(220,232,93,0.24)] bg-[rgba(220,232,93,0.06)]"
+                          : "border-[rgba(255,255,255,0.06)] bg-neutral-800/70",
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="truncate text-base font-semibold text-neutral-50">{bot.name}</div>
+                          <div className="mt-1 text-[0.65rem] uppercase tracking-[0.14em] text-neutral-500">
+                            {bot.visibility} / {bot.market_scope}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void loadBotIntoBuilder(bot.id)}
+                          disabled={isCurrent || isLoading}
+                          className={clsx(
+                            "rounded-full border px-3 py-1.5 text-[0.58rem] font-semibold uppercase tracking-[0.16em] transition",
+                            isCurrent
+                              ? "border-[rgba(220,232,93,0.18)] text-[#dce85d]/70"
+                              : "border-[rgba(255,255,255,0.12)] text-neutral-300 hover:border-[#dce85d] hover:text-[#dce85d]",
+                          )}
+                        >
+                          {isLoading ? "Loading" : isCurrent ? "Open" : "Load"}
+                        </button>
+                      </div>
+                      <div className="mt-2 line-clamp-2 text-sm leading-6 text-neutral-400">
+                        {bot.description || "No description yet."}
+                      </div>
+                      <div className="mt-3 text-[0.7rem] text-neutral-500">
+                        Updated {new Date(bot.updated_at).toLocaleString()}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Main Workspace */}
       <div className="flex-1 flex overflow-hidden">
@@ -2591,7 +2873,7 @@ export function BuilderGraphStudio({
                      status === "creating" ? "bg-neutral-800 text-neutral-500" : "bg-white/5 text-white hover:bg-white/10"
                    )}
                  >
-                   {status === "creating" ? "Testing..." : "Save Sandbox Draft"}
+                   {status === "creating" ? "Saving..." : createdBotId ? "Update Draft" : "Save Sandbox Draft"}
                  </button>
               </div>
             </div>
