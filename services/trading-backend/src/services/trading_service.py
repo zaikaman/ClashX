@@ -22,7 +22,7 @@ class TradingService:
         user = self._upsert_user(db, wallet_address)
         authorization = self.auth_service.get_authorization_by_wallet(None, wallet_address)
         account_info, positions, orders, fills, portfolio, markets = await asyncio.gather(
-            self._safe_read(lambda: self.pacifica.get_account_info(wallet_address), {"balance": 0.0, "fee_level": 0}),
+            self._safe_read(lambda: self.pacifica.get_account_info(wallet_address), {"balance": 0.0, "equity": 0.0, "fee_level": 0}),
             self._safe_read(lambda: self.pacifica.get_positions(wallet_address), []),
             self._safe_read(lambda: self.pacifica.get_open_orders(wallet_address), []),
             self._safe_read(lambda: self.pacifica.get_position_history(wallet_address, limit=60, offset=0), []),
@@ -40,7 +40,8 @@ class TradingService:
         winning_fills = [item for item in normalized_fills if item["event_type"].startswith("close_")]
         win_rate = None if not winning_fills else sum(1 for item in winning_fills if item["pnl"] > 0) / len(winning_fills)
         balance = float(account_info.get("balance", 0) or 0)
-        portfolio_value = float(portfolio[-1]["equity"] if portfolio else balance)
+        equity = float(account_info.get("equity", balance) or balance)
+        portfolio_value = float(portfolio[-1]["equity"] if portfolio else equity)
         return {
             "user_id": user["id"],
             "wallet_address": wallet_address,

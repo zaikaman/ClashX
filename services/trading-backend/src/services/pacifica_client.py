@@ -316,14 +316,20 @@ class PacificaClient:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
-                return {"balance": 0.0, "fee_level": 0}
+                return {"balance": 0.0, "equity": 0.0, "fee_level": 0}
             self._raise_http_error("account", exc)
         payload = self._extract_response_payload(response.json())
         if not isinstance(payload, dict):
             raise PacificaClientError("Pacifica account API returned an unexpected payload shape")
+        balance = self._coerce_float(payload.get("balance"), 0.0)
+        equity = self._coerce_float(
+            payload.get("equity", payload.get("account_equity", payload.get("accountEquity"))),
+            balance,
+        )
         return {
-            "balance": float(payload.get("balance", 0) or 0),
-            "fee_level": int(payload.get("feeLevel", payload.get("fee_level", 0)) or 0),
+            "balance": balance,
+            "equity": equity,
+            "fee_level": self._coerce_int(payload.get("feeLevel", payload.get("fee_level", 0)), 0),
         }
 
     async def get_markets(self) -> list[dict[str, Any]]:

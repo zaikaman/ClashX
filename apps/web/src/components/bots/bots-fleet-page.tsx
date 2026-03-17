@@ -573,12 +573,6 @@ export function BotsFleetPage() {
         >
           New bot draft
         </Link>
-        <Link
-          href="/agent"
-          className="rounded-full border border-[rgba(255,255,255,0.12)] px-5 py-2.5 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#dce85d] hover:text-[#dce85d]"
-        >
-          Agent desk
-        </Link>
         {authenticated ? (
           <button
             type="button"

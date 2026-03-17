@@ -5,8 +5,8 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
-  LayoutDashboard, Box, Home, X, ShoppingBag, 
-  Wallet, Trophy, Menu 
+  LayoutDashboard, Box, Home, X, ShoppingBag,
+  Trophy, Menu
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -21,7 +21,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     { href: '/build', label: 'Builder Studio', icon: Box },
     { href: '/bots', label: 'My Bots', icon: LayoutDashboard },
     { href: '/copy', label: 'Copy Trading', icon: ShoppingBag },
-    { href: '/agent', label: 'Agent Desk', icon: Wallet },
   ];
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);

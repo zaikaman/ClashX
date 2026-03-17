@@ -245,8 +245,8 @@ export function RiskWarningModal({
             <span className="label text-[#dce85d]">risk acknowledgement</span>
             <p>
               Bot copy requires an active delegated Pacifica runtime wallet. Set it up in{" "}
-              <Link href="/agent" className="text-neutral-50 underline decoration-[color:var(--line)] underline-offset-4 transition hover:text-[#dce85d]">
-                Runtime Desk
+              <Link href="/build" className="text-neutral-50 underline decoration-[color:var(--line)] underline-offset-4 transition hover:text-[#dce85d]">
+                Builder Studio
               </Link>{" "}
               before arming copy.
             </p>

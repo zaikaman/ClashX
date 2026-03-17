@@ -283,10 +283,10 @@ export function PacificaOnboardingChecklist({
                     <div className="break-all">Agent: <span className="text-neutral-200">{readiness?.metrics.agent_wallet_address ?? "not bound yet"}</span></div>
                     <div className="flex flex-wrap gap-2 pt-1">
                       <Link
-                        href="/agent"
+                        href="/build"
                         className="inline-flex items-center rounded-full bg-[#dce85d] px-3 py-1.5 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d]"
                       >
-                        Open Agent Desk
+                        Open Builder Studio
                       </Link>
                       {mode === "agent" ? (
                         <Link

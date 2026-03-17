@@ -21,8 +21,7 @@ class PacificaReadinessService:
 
     async def get_readiness(self, db: Any, wallet_address: str) -> dict[str, Any]:
         sol_balance = await self._get_sol_balance(wallet_address)
-        account_access = await self._verify_account_access(wallet_address)
-        equity_usd = await self._get_equity_usd(wallet_address)
+        account_access, equity_usd = await self._get_account_access_and_equity(wallet_address)
         authorization = self.auth.get_authorization_by_wallet(db, wallet_address)
         authorization_verified = authorization is not None and authorization.get("status") == "active"
         funding_verified = sol_balance >= MIN_SOL_BALANCE and equity_usd >= MIN_EQUITY_USD
@@ -91,6 +90,17 @@ class PacificaReadinessService:
         except (httpx.HTTPError, PacificaClientError, ValueError):
             return False
 
+    async def _get_account_access_and_equity(self, wallet_address: str) -> tuple[bool, float]:
+        try:
+            account_info = await self.pacifica.get_account_info(wallet_address)
+        except PacificaClientError:
+            return False, await self._get_equity_usd(wallet_address)
+
+        equity = float(account_info.get("equity", account_info.get("balance", 0)) or 0)
+        if equity > 0:
+            return True, equity
+        return True, await self._get_equity_usd(wallet_address)
+
     async def _get_equity_usd(self, wallet_address: str) -> float:
         try:
             portfolio = await self.pacifica.get_portfolio_history(wallet_address, limit=30, offset=0)
@@ -103,4 +113,4 @@ class PacificaReadinessService:
             account_info = await self.pacifica.get_account_info(wallet_address)
         except PacificaClientError:
             return 0.0
-        return float(account_info.get("balance", 0) or 0)
+        return float(account_info.get("equity", account_info.get("balance", 0)) or 0)

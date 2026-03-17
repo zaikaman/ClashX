@@ -59,11 +59,6 @@ export const appNavGroups: AppNavGroup[] = [
         label: "Copy center",
         description: "Manage follows and cloned drafts.",
       },
-      {
-        href: "/agent",
-        label: "Agent desk",
-        description: "Approve delegated execution safely.",
-      },
     ],
   },
 ];
@@ -133,7 +128,7 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
       ],
       actions: [
         { href: "/bots", label: "Back to my bots", tone: "secondary" },
-        { href: "/agent", label: "Open agent desk", tone: "ghost" },
+        { href: "/build", label: "Open builder studio", tone: "ghost" },
       ],
     };
   }
@@ -242,24 +237,6 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
       actions: [
         { href: "/leaderboard", label: "Browse the public board", tone: "primary" },
         { href: "/bots", label: "Open my bots", tone: "secondary" },
-      ],
-    };
-  }
-
-  if (normalizedPathname === "/agent") {
-    return {
-      eyebrow: "Agent desk",
-      title: "Approve delegated execution safely",
-      description: "Connect the right wallet, sign the approval packet once, and keep bot execution separate from your raw signing keys.",
-      guidanceTitle: "Before you approve",
-      guidance: [
-        "Make sure the connected browser wallet matches the wallet linked to your account.",
-        "Read the status panel so you know whether you are creating a new authorization or refreshing an existing one.",
-        "Return to My bots after approval when you are ready to deploy or resume a runtime.",
-      ],
-      actions: [
-        { href: "/bots", label: "Open my bots", tone: "primary" },
-        { href: "/build", label: "Create a bot", tone: "secondary" },
       ],
     };
   }
