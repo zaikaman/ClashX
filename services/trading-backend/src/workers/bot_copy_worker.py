@@ -2,20 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
-from src.db.session import SessionLocal
-from src.models.audit_event import AuditEvent
-from src.models.bot_copy_relationship import BotCopyRelationship
-from src.models.bot_execution_event import BotExecutionEvent
-from src.models.bot_runtime import BotRuntime
 from src.services.event_broadcaster import broadcaster
 from src.services.pacifica_auth_service import PacificaAuthService
 from src.services.pacifica_client import PacificaClient, PacificaClientError
+from src.services.supabase_rest import SupabaseRestClient
+from src.services.worker_coordination_service import WorkerCoordinationService
+
+
+logger = logging.getLogger(__name__)
 
 
 class BotCopyWorker:
@@ -25,6 +23,10 @@ class BotCopyWorker:
         self._running = False
         self._pacifica = PacificaClient()
         self._auth = PacificaAuthService()
+        self._supabase = SupabaseRestClient()
+        self._coordination = WorkerCoordinationService(self._supabase)
+        self.last_iteration_at: str | None = None
+        self.last_error: str | None = None
 
     def start(self) -> asyncio.Task:
         if self._task and not self._task.done():
@@ -42,67 +44,74 @@ class BotCopyWorker:
 
     async def run_forever(self) -> None:
         while self._running:
-            db = SessionLocal()
             try:
-                active = list(
-                    db.scalars(
-                        select(BotCopyRelationship).where(
-                            BotCopyRelationship.status == "active",
-                            BotCopyRelationship.mode == "mirror",
-                        )
-                    ).all()
-                )
+                active = self._supabase.select("bot_copy_relationships", filters={"status": "active", "mode": "mirror"})
                 for relationship in active:
-                    await self._process_relationship(db, relationship)
-                db.commit()
-            finally:
-                db.close()
+                    lease_key = f"bot-copy:{relationship['id']}"
+                    if not self._coordination.try_claim_lease(
+                        lease_key, ttl_seconds=max(20, int(self.poll_interval_seconds * 3))
+                    ):
+                        continue
+                    try:
+                        await self._process_relationship(relationship)
+                    finally:
+                        self._coordination.release_lease(lease_key)
+                self.last_iteration_at = datetime.now(tz=UTC).isoformat()
+                self.last_error = None
+            except Exception as exc:
+                self.last_error = str(exc)
+                logger.exception("Bot copy worker iteration failed")
             await asyncio.sleep(self.poll_interval_seconds)
 
-    async def _process_relationship(self, db: Session, relationship: BotCopyRelationship) -> None:
-        runtime = db.get(BotRuntime, relationship.source_runtime_id)
-        if runtime is None or runtime.status != "active":
+    async def _process_relationship(self, relationship: dict[str, Any]) -> None:
+        runtime = self._supabase.maybe_one("bot_runtimes", filters={"id": relationship["source_runtime_id"]})
+        if runtime is None or runtime["status"] != "active":
             return
 
-        credentials = self._auth.get_trading_credentials(db, relationship.follower_wallet_address)
+        credentials = self._auth.get_trading_credentials(None, relationship["follower_wallet_address"])
         if credentials is None:
-            relationship.status = "paused"
-            relationship.updated_at = datetime.now(tz=UTC)
+            self._supabase.update(
+                "bot_copy_relationships",
+                {"status": "paused", "updated_at": datetime.now(tz=UTC).isoformat()},
+                filters={"id": relationship["id"]},
+            )
             return
 
         source_events = list(
-            db.scalars(
-                select(BotExecutionEvent)
-                .where(
-                    BotExecutionEvent.runtime_id == relationship.source_runtime_id,
-                    BotExecutionEvent.event_type == "action.executed",
-                    BotExecutionEvent.created_at > relationship.updated_at,
+            reversed(
+                self._supabase.select(
+                    "bot_execution_events",
+                    filters={
+                        "runtime_id": relationship["source_runtime_id"],
+                        "event_type": "action.executed",
+                        "created_at": ("gt", relationship["updated_at"]),
+                    },
+                    order="created_at.desc",
+                    limit=50,
                 )
-                .order_by(BotExecutionEvent.created_at.asc())
-                .limit(50)
-            ).all()
+            )
         )
         if not source_events:
             return
 
         markets, follower_positions = await asyncio.gather(
             self._safe_load(self._pacifica.get_markets, []),
-            self._safe_load(lambda: self._pacifica.get_positions(relationship.follower_wallet_address), []),
+            self._safe_load(lambda: self._pacifica.get_positions(relationship["follower_wallet_address"]), []),
         )
         market_lookup = {str(item.get("symbol") or "").upper(): item for item in markets if isinstance(item, dict)}
         position_lookup = {str(item.get("symbol") or "").upper(): item for item in follower_positions if isinstance(item, dict)}
 
         for source_event in source_events:
-            marker = f"bot_copy.mirror:{relationship.id}:{source_event.id}"
-            seen = db.scalar(select(AuditEvent).where(AuditEvent.action == marker).limit(1))
+            marker = f"bot_copy.mirror:{relationship['id']}:{source_event['id']}"
+            seen = self._supabase.maybe_one("audit_events", filters={"action": marker})
             if seen is not None:
                 continue
 
-            action = source_event.request_payload if isinstance(source_event.request_payload, dict) else {}
+            action = source_event["request_payload"] if isinstance(source_event.get("request_payload"), dict) else {}
             try:
                 result = await self._execute_action(
                     action=action,
-                    scale_bps=relationship.scale_bps,
+                    scale_bps=relationship["scale_bps"],
                     credentials=credentials,
                     market_lookup=market_lookup,
                     position_lookup=position_lookup,
@@ -114,33 +123,40 @@ class BotCopyWorker:
                 status = "error"
                 error_reason = str(exc)
 
-            db.add(
-                AuditEvent(
-                    user_id=relationship.follower_user_id,
-                    action=marker,
-                    payload={
-                        "relationship_id": relationship.id,
-                        "source_runtime_id": relationship.source_runtime_id,
-                        "source_event_id": source_event.id,
+            self._supabase.insert(
+                "audit_events",
+                {
+                    "id": marker,
+                    "user_id": relationship["follower_user_id"],
+                    "action": marker,
+                    "payload": {
+                        "relationship_id": relationship["id"],
+                        "source_runtime_id": relationship["source_runtime_id"],
+                        "source_event_id": source_event["id"],
                         "status": status,
                         "error_reason": error_reason,
                         "request_payload": action,
                         "result_payload": result,
                     },
-                )
+                    "created_at": datetime.now(tz=UTC).isoformat(),
+                },
             )
             await broadcaster.publish(
-                channel=f"user:{relationship.follower_user_id}",
+                channel=f"user:{relationship['follower_user_id']}",
                 event="bot.copy.execution",
                 payload={
-                    "relationship_id": relationship.id,
-                    "source_event_id": source_event.id,
+                    "relationship_id": relationship["id"],
+                    "source_event_id": source_event["id"],
                     "status": status,
                     "error_reason": error_reason,
                 },
             )
 
-        relationship.updated_at = datetime.now(tz=UTC)
+        self._supabase.update(
+            "bot_copy_relationships",
+            {"updated_at": datetime.now(tz=UTC).isoformat()},
+            filters={"id": relationship["id"]},
+        )
 
     async def _execute_action(
         self,
@@ -167,21 +183,10 @@ class BotCopyWorker:
             mirrored_size_usd = size_usd * (scale_bps / 10_000)
             if mark_price <= 0 or mirrored_size_usd <= 0:
                 raise ValueError("Cannot mirror open action without valid mark price and size")
-            await self._pacifica.place_order(
-                {
-                    "type": "update_leverage",
-                    **payload,
-                    "leverage": leverage,
-                }
-            )
+            await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
             amount = (mirrored_size_usd * leverage) / mark_price
             return await self._pacifica.place_order(
-                {
-                    "type": "create_market_order",
-                    **payload,
-                    "side": "bid" if action_type == "open_long" else "ask",
-                    "amount": amount,
-                }
+                {"type": "create_market_order", **payload, "side": "bid" if action_type == "open_long" else "ask", "amount": amount}
             )
 
         if action_type == "close_position":
@@ -194,13 +199,7 @@ class BotCopyWorker:
             side = str(follower_position.get("side") or "").lower()
             close_side = "ask" if side in {"bid", "long"} else "bid"
             return await self._pacifica.place_order(
-                {
-                    "type": "create_market_order",
-                    **payload,
-                    "side": close_side,
-                    "amount": amount,
-                    "reduce_only": True,
-                }
+                {"type": "create_market_order", **payload, "side": close_side, "amount": amount, "reduce_only": True}
             )
 
         if action_type == "set_tpsl":
@@ -220,7 +219,6 @@ class BotCopyWorker:
             else:
                 take_profit_price = mark_price * (1 - tp_pct / 100)
                 stop_loss_price = mark_price * (1 + sl_pct / 100)
-
             return await self._pacifica.place_order(
                 {
                     "type": "set_position_tpsl",
@@ -232,13 +230,7 @@ class BotCopyWorker:
 
         if action_type == "update_leverage":
             leverage = max(1, int(float(action.get("leverage") or 1)))
-            return await self._pacifica.place_order(
-                {
-                    "type": "update_leverage",
-                    **payload,
-                    "leverage": leverage,
-                }
-            )
+            return await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
 
         raise ValueError(f"Unsupported mirrored action type: {action_type}")
 
@@ -247,3 +239,7 @@ class BotCopyWorker:
             return await loader()
         except PacificaClientError:
             return fallback
+
+    @property
+    def is_running(self) -> bool:
+        return bool(self._task and not self._task.done())

@@ -4,6 +4,8 @@ drop table if exists public.bot_leaderboard_snapshots cascade;
 drop table if exists public.bot_clones cascade;
 drop table if exists public.bot_copy_relationships cascade;
 drop table if exists public.bot_execution_events cascade;
+drop table if exists public.bot_action_claims cascade;
+drop table if exists public.worker_leases cascade;
 drop table if exists public.bot_runtimes cascade;
 drop table if exists public.bot_definitions cascade;
 
@@ -60,6 +62,25 @@ create index ix_bot_execution_events_runtime_id on public.bot_execution_events(r
 create index ix_bot_execution_events_event_type on public.bot_execution_events(event_type);
 create index ix_bot_execution_events_status on public.bot_execution_events(status);
 create index ix_bot_execution_events_created_at on public.bot_execution_events(created_at);
+
+create table public.bot_action_claims (
+  id uuid primary key,
+  runtime_id uuid not null references public.bot_runtimes(id) on delete cascade,
+  idempotency_key varchar(255) not null,
+  claimed_by varchar(128) not null,
+  created_at timestamptz not null default now(),
+  unique (runtime_id, idempotency_key)
+);
+create index ix_bot_action_claims_runtime_id on public.bot_action_claims(runtime_id);
+create index ix_bot_action_claims_created_at on public.bot_action_claims(created_at);
+
+create table public.worker_leases (
+  lease_key varchar(255) primary key,
+  owner_id varchar(128) not null,
+  expires_at timestamptz not null,
+  updated_at timestamptz not null default now()
+);
+create index ix_worker_leases_expires_at on public.worker_leases(expires_at);
 
 create table public.bot_copy_relationships (
   id uuid primary key,

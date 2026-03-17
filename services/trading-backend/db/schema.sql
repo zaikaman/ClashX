@@ -10,6 +10,15 @@ CREATE TABLE public.audit_events (
   CONSTRAINT audit_events_pkey PRIMARY KEY (id),
   CONSTRAINT audit_events_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
+CREATE TABLE public.bot_action_claims (
+  id uuid NOT NULL,
+  runtime_id uuid NOT NULL,
+  idempotency_key character varying NOT NULL,
+  claimed_by character varying NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT bot_action_claims_pkey PRIMARY KEY (id),
+  CONSTRAINT bot_action_claims_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id)
+);
 CREATE TABLE public.bot_clones (
   id uuid NOT NULL,
   source_bot_definition_id uuid NOT NULL,
@@ -241,4 +250,11 @@ CREATE TABLE public.vaults (
   minimum_deposit double precision NOT NULL DEFAULT 100,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT vaults_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.worker_leases (
+  lease_key character varying NOT NULL,
+  owner_id character varying NOT NULL,
+  expires_at timestamp with time zone NOT NULL,
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT worker_leases_pkey PRIMARY KEY (lease_key)
 );

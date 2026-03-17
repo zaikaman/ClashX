@@ -36,11 +36,11 @@ def _default_pacifica_ws_url(network: str) -> str:
 class Settings:
     app_name: str
     app_env: str
-    database_url: str
+    background_workers_enabled: bool
+    worker_instance_id: str
     supabase_url: str
     supabase_anon_key: str
     supabase_service_role_key: str
-    use_supabase_api: bool
     pacifica_network: str
     pacifica_rest_url: str
     pacifica_ws_url: str
@@ -66,20 +66,21 @@ class Settings:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    database_url = os.getenv("DATABASE_URL", "").strip()
     supabase_url = os.getenv("SUPABASE_URL", "").strip()
     supabase_service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
     pacifica_network = os.getenv("PACIFICA_NETWORK", "Pacifica").strip() or "Pacifica"
     if not supabase_url or not supabase_service_role_key:
         raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
+    workers_enabled = os.getenv("BACKGROUND_WORKERS_ENABLED", "true").strip().lower() in {"1", "true", "yes", "y"}
+    worker_instance_id = os.getenv("WORKER_INSTANCE_ID", "").strip() or f"{os.getpid()}"
     return Settings(
         app_name=os.getenv("APP_NAME", "ClashX Trading Backend"),
         app_env=os.getenv("APP_ENV", "development"),
-        database_url=database_url,
+        background_workers_enabled=workers_enabled,
+        worker_instance_id=worker_instance_id,
         supabase_url=supabase_url,
         supabase_anon_key=os.getenv("SUPABASE_ANON_KEY", ""),
         supabase_service_role_key=supabase_service_role_key,
-        use_supabase_api=True,
         pacifica_network=pacifica_network,
         pacifica_rest_url=os.getenv("PACIFICA_REST_URL", "").strip() or _default_pacifica_rest_url(pacifica_network),
         pacifica_ws_url=os.getenv("PACIFICA_WS_URL", "").strip() or _default_pacifica_ws_url(pacifica_network),

@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+from typing import Any as Session
 
 from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authenticated_user
 from src.db.session import get_db

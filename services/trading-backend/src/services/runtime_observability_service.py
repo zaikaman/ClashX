@@ -5,36 +5,16 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import desc, select
-from sqlalchemy.orm import Session
-
-from src.core.settings import get_settings
-from src.models.audit_event import AuditEvent
-from src.models.bot_definition import BotDefinition
-from src.models.bot_execution_event import BotExecutionEvent
-from src.models.bot_runtime import BotRuntime
 from src.services.supabase_rest import SupabaseRestClient
 
 
 class RuntimeObservabilityService:
     def __init__(self) -> None:
-        self._settings = get_settings()
-        self._supabase = SupabaseRestClient() if self._settings.use_supabase_api else None
+        self._supabase = SupabaseRestClient()
 
-    def get_overview(
-        self,
-        db: Session,
-        *,
-        bot_id: str,
-        wallet_address: str,
-        user_id: str,
-    ) -> dict[str, Any]:
-        runtime = self._resolve_runtime(
-            db,
-            bot_id=bot_id,
-            wallet_address=wallet_address,
-            user_id=user_id,
-        )
+    def get_overview(self, db: Any, *, bot_id: str, wallet_address: str, user_id: str) -> dict[str, Any]:
+        del db, user_id
+        runtime = self._resolve_runtime(bot_id=bot_id, wallet_address=wallet_address)
         if runtime is None:
             return {
                 "health": {
@@ -66,231 +46,82 @@ class RuntimeObservabilityService:
                     "last_event_at": None,
                 },
             }
+        snapshot = self._build_snapshot(runtime)
+        return {"health": self._build_health_payload(snapshot), "metrics": self._build_metrics_payload(snapshot)}
 
-        snapshot = self._build_snapshot(db, runtime)
-        return {
-            "health": self._build_health_payload(snapshot),
-            "metrics": self._build_metrics_payload(snapshot),
-        }
+    def get_metrics(self, db: Any, *, bot_id: str, wallet_address: str, user_id: str) -> dict[str, Any]:
+        del db, user_id
+        return self._build_metrics_payload(self._build_snapshot(self._require_runtime(bot_id=bot_id, wallet_address=wallet_address)))
 
-    def get_metrics(
-        self,
-        db: Session,
-        *,
-        bot_id: str,
-        wallet_address: str,
-        user_id: str,
-    ) -> dict[str, Any]:
-        runtime = self._require_runtime(
-            db,
-            bot_id=bot_id,
-            wallet_address=wallet_address,
-            user_id=user_id,
-        )
-        return self._build_metrics_payload(self._build_snapshot(db, runtime))
-
-    def get_risk_state(
-        self,
-        db: Session,
-        *,
-        bot_id: str,
-        wallet_address: str,
-        user_id: str,
-    ) -> dict[str, Any]:
-        runtime = self._require_runtime(
-            db,
-            bot_id=bot_id,
-            wallet_address=wallet_address,
-            user_id=user_id,
-        )
-        if isinstance(runtime, dict):
-            policy = runtime["risk_policy_json"] if isinstance(runtime.get("risk_policy_json"), dict) else {}
-        else:
-            policy = runtime.risk_policy_json if isinstance(runtime.risk_policy_json, dict) else {}
+    def get_risk_state(self, db: Any, *, bot_id: str, wallet_address: str, user_id: str) -> dict[str, Any]:
+        del db, user_id
+        runtime = self._require_runtime(bot_id=bot_id, wallet_address=wallet_address)
+        policy = runtime["risk_policy_json"] if isinstance(runtime.get("risk_policy_json"), dict) else {}
         runtime_state = policy.get("_runtime_state") if isinstance(policy.get("_runtime_state"), dict) else {}
         return {
-            "runtime_id": self._get_value(runtime, "id"),
+            "runtime_id": runtime["id"],
             "risk_policy_json": policy,
             "runtime_state": runtime_state,
-            "updated_at": self._get_value(runtime, "updated_at"),
+            "updated_at": runtime["updated_at"],
         }
 
     def update_risk_policy(
         self,
-        db: Session,
+        db: Any,
         *,
         bot_id: str,
         wallet_address: str,
         user_id: str,
         risk_policy_json: dict[str, Any],
     ) -> dict[str, Any]:
-        runtime = self._require_runtime(
-            db,
-            bot_id=bot_id,
-            wallet_address=wallet_address,
-            user_id=user_id,
-        )
-        existing = runtime["risk_policy_json"] if isinstance(runtime, dict) and isinstance(runtime.get("risk_policy_json"), dict) else runtime.risk_policy_json if isinstance(runtime.risk_policy_json, dict) else {}
+        del db
+        runtime = self._require_runtime(bot_id=bot_id, wallet_address=wallet_address)
+        existing = runtime["risk_policy_json"] if isinstance(runtime.get("risk_policy_json"), dict) else {}
         runtime_state = existing.get("_runtime_state") if isinstance(existing.get("_runtime_state"), dict) else {}
-
-        next_policy = {
-            **existing,
-            **risk_policy_json,
-            "_runtime_state": runtime_state,
-        }
-        updated_at = datetime.now(tz=UTC)
-
-        if self._settings.use_supabase_api:
-            assert self._supabase is not None
-            runtime = self._supabase.update(
-                "bot_runtimes",
-                {"risk_policy_json": next_policy, "updated_at": updated_at.isoformat()},
-                filters={"id": runtime["id"]},
-            )[0]
-            self._supabase.insert(
-                "audit_events",
-                {
-                    "id": str(uuid.uuid4()),
-                    "user_id": runtime["user_id"],
-                    "action": "bot.runtime.risk_policy.updated",
-                    "payload": {
-                        "runtime_id": runtime["id"],
-                        "bot_id": bot_id,
-                        "updated_keys": sorted(risk_policy_json.keys()),
-                    },
-                    "created_at": updated_at.isoformat(),
-                },
-            )
-            policy = runtime["risk_policy_json"] if isinstance(runtime.get("risk_policy_json"), dict) else {}
-            runtime_state_next = policy.get("_runtime_state") if isinstance(policy.get("_runtime_state"), dict) else {}
-            return {
-                "runtime_id": runtime["id"],
-                "risk_policy_json": policy,
-                "runtime_state": runtime_state_next,
-                "updated_at": runtime["updated_at"],
-            }
-
-        runtime.risk_policy_json = next_policy
-        runtime.updated_at = updated_at
-
-        db.add(
-            AuditEvent(
-                user_id=user_id,
-                action="bot.runtime.risk_policy.updated",
-                payload={
-                    "runtime_id": runtime.id,
-                    "bot_id": bot_id,
-                    "updated_keys": sorted(risk_policy_json.keys()),
-                },
-            )
+        next_policy = {**existing, **risk_policy_json, "_runtime_state": runtime_state}
+        updated_at = datetime.now(tz=UTC).isoformat()
+        runtime = self._supabase.update(
+            "bot_runtimes",
+            {"risk_policy_json": next_policy, "updated_at": updated_at},
+            filters={"id": runtime["id"]},
+        )[0]
+        self._supabase.insert(
+            "audit_events",
+            {
+                "id": str(uuid.uuid4()),
+                "user_id": user_id,
+                "action": "bot.runtime.risk_policy.updated",
+                "payload": {"runtime_id": runtime["id"], "bot_id": bot_id, "updated_keys": sorted(risk_policy_json.keys())},
+                "created_at": updated_at,
+            },
         )
-        db.commit()
-        db.refresh(runtime)
-
-        policy = runtime.risk_policy_json if isinstance(runtime.risk_policy_json, dict) else {}
+        policy = runtime["risk_policy_json"] if isinstance(runtime.get("risk_policy_json"), dict) else {}
         runtime_state_next = policy.get("_runtime_state") if isinstance(policy.get("_runtime_state"), dict) else {}
-        return {
-            "runtime_id": runtime.id,
-            "risk_policy_json": policy,
-            "runtime_state": runtime_state_next,
-            "updated_at": runtime.updated_at,
-        }
+        return {"runtime_id": runtime["id"], "risk_policy_json": policy, "runtime_state": runtime_state_next, "updated_at": runtime["updated_at"]}
 
-    def _require_runtime(
-        self,
-        db: Session,
-        *,
-        bot_id: str,
-        wallet_address: str,
-        user_id: str,
-    ) -> BotRuntime | dict[str, Any]:
-        runtime = self._resolve_runtime(
-            db,
-            bot_id=bot_id,
-            wallet_address=wallet_address,
-            user_id=user_id,
-        )
+    def _require_runtime(self, *, bot_id: str, wallet_address: str) -> dict[str, Any]:
+        runtime = self._resolve_runtime(bot_id=bot_id, wallet_address=wallet_address)
         if runtime is None:
             raise ValueError("Bot runtime not found")
         return runtime
 
-    def _resolve_runtime(
-        self,
-        db: Session,
-        *,
-        bot_id: str,
-        wallet_address: str,
-        user_id: str,
-    ) -> BotRuntime | dict[str, Any] | None:
-        if self._settings.use_supabase_api:
-            assert self._supabase is not None
-            definition = self._supabase.maybe_one(
-                "bot_definitions",
-                filters={"id": bot_id, "wallet_address": wallet_address},
-            )
-            if definition is None:
-                raise ValueError("Bot not found")
-            return self._supabase.maybe_one(
-                "bot_runtimes",
-                filters={"bot_definition_id": definition["id"], "wallet_address": wallet_address},
-            )
-
-        definition = db.scalar(
-            select(BotDefinition)
-            .where(
-                BotDefinition.id == bot_id,
-                BotDefinition.wallet_address == wallet_address,
-                BotDefinition.user_id == user_id,
-            )
-            .limit(1)
-        )
+    def _resolve_runtime(self, *, bot_id: str, wallet_address: str) -> dict[str, Any] | None:
+        definition = self._supabase.maybe_one("bot_definitions", filters={"id": bot_id, "wallet_address": wallet_address})
         if definition is None:
             raise ValueError("Bot not found")
+        return self._supabase.maybe_one("bot_runtimes", filters={"bot_definition_id": definition["id"], "wallet_address": wallet_address})
 
-        return db.scalar(
-            select(BotRuntime)
-            .where(
-                BotRuntime.bot_definition_id == definition.id,
-                BotRuntime.wallet_address == wallet_address,
-            )
-            .limit(1)
-        )
-
-    def _build_snapshot(self, db: Session, runtime: BotRuntime | dict[str, Any]) -> dict[str, Any]:
+    def _build_snapshot(self, runtime: dict[str, Any]) -> dict[str, Any]:
         now = datetime.now(tz=UTC)
         window_start = now - timedelta(hours=24)
-        runtime_id = self._get_value(runtime, "id")
-        runtime_updated_at = self._as_datetime(self._get_value(runtime, "updated_at"))
-        runtime_deployed_at = self._get_value(runtime, "deployed_at")
-
-        if self._settings.use_supabase_api:
-            assert self._supabase is not None
-            events = self._supabase.select(
-                "bot_execution_events",
-                filters={"runtime_id": runtime_id},
-                order="created_at.desc",
-                limit=500,
-            )
-            recent_window = [
-                event for event in events if self._as_datetime(self._get_value(event, "created_at")) >= window_start
-            ]
-        else:
-            events = list(
-                db.scalars(
-                    select(BotExecutionEvent)
-                    .where(BotExecutionEvent.runtime_id == runtime_id)
-                    .order_by(desc(BotExecutionEvent.created_at))
-                    .limit(500)
-                ).all()
-            )
-            recent_window = [event for event in events if self._as_datetime(self._get_value(event, "created_at")) >= window_start]
-
+        events = self._supabase.select("bot_execution_events", filters={"runtime_id": runtime["id"]}, order="created_at.desc", limit=500)
+        recent_window = [event for event in events if self._as_datetime(event["created_at"]) >= window_start]
         return {
             "runtime": runtime,
             "events": events,
             "recent_window": recent_window,
-            "runtime_updated_at": runtime_updated_at,
-            "runtime_deployed_at": runtime_deployed_at,
+            "runtime_updated_at": self._as_datetime(runtime["updated_at"]),
+            "runtime_deployed_at": runtime.get("deployed_at"),
             "now": now,
         }
 
@@ -300,43 +131,33 @@ class RuntimeObservabilityService:
         recent_window = snapshot["recent_window"]
         now = snapshot["now"]
         runtime_deployed_at = snapshot["runtime_deployed_at"]
-
-        action_events = [event for event in recent_window if str(self._get_value(event, "event_type")).startswith("action.")]
+        action_events = [event for event in recent_window if str(event.get("event_type") or "").startswith("action.")]
         actions_total = len(action_events)
-        actions_success = len([event for event in action_events if self._get_value(event, "status") == "success"])
-        actions_error = len([event for event in action_events if self._get_value(event, "status") == "error"])
-        actions_skipped = len([event for event in action_events if self._get_value(event, "status") == "skipped"])
-
-        event_type_counter = Counter(str(self._get_value(event, "event_type")) for event in recent_window)
-        status_counter = Counter(str(self._get_value(event, "status")) for event in recent_window)
-        failure_reasons = Counter(
-            (self._get_value(event, "error_reason") or "unknown")
-            for event in recent_window
-            if self._get_value(event, "status") == "error"
-        )
+        actions_success = len([event for event in action_events if event.get("status") == "success"])
+        actions_error = len([event for event in action_events if event.get("status") == "error"])
+        actions_skipped = len([event for event in action_events if event.get("status") == "skipped"])
+        event_type_counter = Counter(str(event.get("event_type")) for event in recent_window)
+        status_counter = Counter(str(event.get("status")) for event in recent_window)
+        failure_reasons = Counter((event.get("error_reason") or "unknown") for event in recent_window if event.get("status") == "error")
         recent_failures = [
             {
-                "id": self._get_value(event, "id"),
-                "event_type": self._get_value(event, "event_type"),
-                "error_reason": self._get_value(event, "error_reason") or "unknown",
-                "decision_summary": self._get_value(event, "decision_summary"),
-                "created_at": self._get_value(event, "created_at"),
+                "id": event["id"],
+                "event_type": event["event_type"],
+                "error_reason": event.get("error_reason") or "unknown",
+                "decision_summary": event["decision_summary"],
+                "created_at": event["created_at"],
             }
             for event in events
-            if self._get_value(event, "status") == "error"
+            if event.get("status") == "error"
         ][:15]
-
-        last_event_at = self._as_datetime(self._get_value(events[0], "created_at")) if events else None
+        last_event_at = self._as_datetime(events[0]["created_at"]) if events else None
         uptime_seconds = None
         if runtime_deployed_at is not None:
-            deployed_at = self._as_datetime(runtime_deployed_at) if isinstance(runtime_deployed_at, str) else runtime_deployed_at
-            uptime_seconds = max(0, int((now - deployed_at).total_seconds()))
-
+            uptime_seconds = max(0, int((now - self._as_datetime(runtime_deployed_at)).total_seconds()))
         success_rate = round(actions_success / actions_total, 4) if actions_total > 0 else 1.0
-
         return {
-            "runtime_id": self._get_value(runtime, "id"),
-            "status": self._get_value(runtime, "status"),
+            "runtime_id": runtime["id"],
+            "status": runtime["status"],
             "uptime_seconds": uptime_seconds,
             "window_hours": 24,
             "events_total": len(recent_window),
@@ -358,19 +179,14 @@ class RuntimeObservabilityService:
         recent_window = snapshot["recent_window"]
         runtime_updated_at = snapshot["runtime_updated_at"]
         now = snapshot["now"]
-
-        latest_event_at = self._as_datetime(self._get_value(events[0], "created_at")) if events else None
-        heartbeat_reference = runtime_updated_at
-        if latest_event_at and latest_event_at > heartbeat_reference:
-            heartbeat_reference = latest_event_at
-
+        latest_event_at = self._as_datetime(events[0]["created_at"]) if events else None
+        heartbeat_reference = runtime_updated_at if latest_event_at is None or runtime_updated_at > latest_event_at else latest_event_at
         heartbeat_age_seconds = max(0, int((now - heartbeat_reference).total_seconds()))
-        recent_errors = len([event for event in recent_window if self._get_value(event, "status") == "error"])
+        recent_errors = len([event for event in recent_window if event.get("status") == "error"])
         error_rate_recent = round(recent_errors / len(recent_window), 4) if recent_window else 0.0
-
         health = "healthy"
         reasons: list[str] = []
-        runtime_status = str(self._get_value(runtime, "status"))
+        runtime_status = str(runtime["status"])
         if runtime_status in {"stopped", "failed"}:
             health = runtime_status
             reasons.append(f"Runtime status is {runtime_status}")
@@ -381,37 +197,27 @@ class RuntimeObservabilityService:
             elif heartbeat_age_seconds > 150:
                 health = "stale"
                 reasons.append("Runtime heartbeat is stale")
-
             if error_rate_recent >= 0.35 and health not in {"offline", "stale"}:
                 health = "degraded"
                 reasons.append("High runtime error rate detected")
             elif error_rate_recent >= 0.35:
                 reasons.append("High runtime error rate detected")
-
             if runtime_status == "paused" and health in {"healthy", "degraded"}:
                 health = "paused"
                 reasons.append("Runtime is paused")
-
         if not reasons:
             reasons.append("Runtime heartbeat and execution flow are healthy")
-
         return {
-            "runtime_id": self._get_value(runtime, "id"),
+            "runtime_id": runtime["id"],
             "health": health,
             "status": runtime_status,
-            "mode": self._get_value(runtime, "mode"),
+            "mode": runtime["mode"],
             "last_runtime_update": runtime_updated_at,
             "last_event_at": latest_event_at,
             "heartbeat_age_seconds": heartbeat_age_seconds,
             "error_rate_recent": error_rate_recent,
             "reasons": reasons,
         }
-
-    @staticmethod
-    def _get_value(item: BotRuntime | BotExecutionEvent | dict[str, Any], key: str) -> Any:
-        if isinstance(item, dict):
-            return item.get(key)
-        return getattr(item, key)
 
     @staticmethod
     def _as_datetime(value: datetime | str) -> datetime:

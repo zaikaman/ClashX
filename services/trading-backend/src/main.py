@@ -16,7 +16,6 @@ from src.api.stream import router as stream_router
 from src.api.stream import websocket_fallback
 from src.api.trading import router as trading_router
 from src.core.settings import get_settings
-from src.db.session import engine
 from src.middleware.auth import AuthMiddleware
 from src.workers.bot_copy_worker import BotCopyWorker
 from src.workers.bot_runtime_worker import BotRuntimeWorker
@@ -55,15 +54,16 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def startup() -> None:
+        if not settings.background_workers_enabled:
+            return
         app.state.bot_runtime_worker = bot_runtime_worker
+        app.state.leaderboard_worker = worker
+        app.state.copy_worker = copy_worker
+        app.state.bot_copy_worker = bot_copy_worker
         bot_runtime_worker.start()
-        if engine is not None:
-            app.state.leaderboard_worker = worker
-            app.state.copy_worker = copy_worker
-            app.state.bot_copy_worker = bot_copy_worker
-            worker.start()
-            copy_worker.start()
-            bot_copy_worker.start()
+        worker.start()
+        copy_worker.start()
+        bot_copy_worker.start()
 
     @app.on_event("shutdown")
     async def shutdown() -> None:
@@ -84,8 +84,20 @@ def create_app() -> FastAPI:
                 await running_bot_runtime_worker.stop()
 
     @app.get("/healthz", tags=["ops"])
-    async def healthz() -> dict[str, str]:
-        return {"status": "ok", "network": display_network}
+    async def healthz() -> dict[str, object]:
+        workers: dict[str, object] = {}
+        for key in ("bot_runtime_worker", "leaderboard_worker", "copy_worker", "bot_copy_worker"):
+            worker_ref = getattr(app.state, key, None)
+            if worker_ref is None:
+                workers[key] = {"enabled": False}
+                continue
+            workers[key] = {
+                "enabled": True,
+                "running": worker_ref.is_running,
+                "last_iteration_at": worker_ref.last_iteration_at,
+                "last_error": worker_ref.last_error,
+            }
+        return {"status": "ok", "network": display_network, "workers": workers}
 
     app.websocket("/ws")(websocket_fallback)
     return app

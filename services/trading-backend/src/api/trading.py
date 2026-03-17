@@ -5,7 +5,6 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
 
 from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authenticated_user
 from src.db.session import get_db
@@ -176,11 +175,7 @@ def _resolve_wallet(user: AuthenticatedUser, wallet_address: str | None) -> str:
 
 
 @router.get("/account", response_model=TradingAccountResponse)
-async def get_trading_account(
-    wallet_address: str | None = Query(default=None, min_length=8),
-    db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_authenticated_user),
-) -> TradingAccountResponse:
+async def get_trading_account(wallet_address: str | None = Query(default=None, min_length=8), db=Depends(get_db), user: AuthenticatedUser = Depends(require_authenticated_user)) -> TradingAccountResponse:
     resolved_wallet = _resolve_wallet(user, wallet_address)
     try:
         snapshot = await trading_service.get_account_snapshot(db, resolved_wallet)
@@ -199,42 +194,20 @@ async def get_trading_markets() -> list[MarketInfoResponse]:
 
 
 @router.get("/chart", response_model=list[TradingCandleResponse])
-async def get_trading_chart(
-    symbol: str = Query(min_length=2, max_length=32),
-    interval: Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"] = Query(default="15m"),
-    lookback: int = Query(default=300, ge=12, le=2_000),
-    end_time: int | None = Query(default=None, ge=0),
-) -> list[TradingCandleResponse]:
-    interval_ms = {
-        "1m": 60_000,
-        "5m": 300_000,
-        "15m": 900_000,
-        "30m": 1_800_000,
-        "1h": 3_600_000,
-        "4h": 14_400_000,
-        "1d": 86_400_000,
-    }
+async def get_trading_chart(symbol: str = Query(min_length=2, max_length=32), interval: Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"] = Query(default="15m"), lookback: int = Query(default=300, ge=12, le=2_000), end_time: int | None = Query(default=None, ge=0)) -> list[TradingCandleResponse]:
+    interval_ms = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
     normalized_symbol = symbol.upper().removesuffix("-PERP")
     resolved_end_time = end_time or int(datetime.now().timestamp() * 1_000)
     start_time = resolved_end_time - interval_ms[interval] * lookback
     try:
-        candles = await trading_service.pacifica.get_kline(
-            normalized_symbol,
-            interval=interval,
-            start_time=start_time,
-            end_time=resolved_end_time,
-        )
+        candles = await trading_service.pacifica.get_kline(normalized_symbol, interval=interval, start_time=start_time, end_time=resolved_end_time)
     except PacificaClientError as exc:
         raise HTTPException(status_code=_upstream_status(exc), detail=str(exc)) from exc
     return [TradingCandleResponse.model_validate(item) for item in candles]
 
 
 @router.get("/positions", response_model=list[TradingPositionResponse])
-async def get_trading_positions(
-    wallet_address: str | None = Query(default=None, min_length=8),
-    db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_authenticated_user),
-) -> list[TradingPositionResponse]:
+async def get_trading_positions(wallet_address: str | None = Query(default=None, min_length=8), db=Depends(get_db), user: AuthenticatedUser = Depends(require_authenticated_user)) -> list[TradingPositionResponse]:
     resolved_wallet = _resolve_wallet(user, wallet_address)
     try:
         positions = await trading_service.list_positions(db, resolved_wallet)
@@ -244,11 +217,7 @@ async def get_trading_positions(
 
 
 @router.get("/orders", response_model=list[TradingOrderResponse])
-async def get_trading_orders(
-    wallet_address: str | None = Query(default=None, min_length=8),
-    db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_authenticated_user),
-) -> list[TradingOrderResponse]:
+async def get_trading_orders(wallet_address: str | None = Query(default=None, min_length=8), db=Depends(get_db), user: AuthenticatedUser = Depends(require_authenticated_user)) -> list[TradingOrderResponse]:
     resolved_wallet = _resolve_wallet(user, wallet_address)
     try:
         orders = await trading_service.list_orders(db, resolved_wallet)
@@ -258,27 +227,10 @@ async def get_trading_orders(
 
 
 @router.post("/orders", response_model=OrderMutationResponse)
-async def create_trading_order(
-    payload: CreateOrderRequest,
-    db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_authenticated_user),
-) -> OrderMutationResponse:
+async def create_trading_order(payload: CreateOrderRequest, db=Depends(get_db), user: AuthenticatedUser = Depends(require_authenticated_user)) -> OrderMutationResponse:
     resolved_wallet = _resolve_wallet(user, payload.wallet_address)
     try:
-        result = await trading_service.place_order(
-            db,
-            wallet_address=resolved_wallet,
-            symbol=payload.symbol,
-            side=payload.side,
-            order_type=payload.order_type,
-            leverage=payload.leverage,
-            size_usd=payload.size_usd,
-            quantity=payload.quantity,
-            limit_price=payload.limit_price,
-            reduce_only=payload.reduce_only,
-            tif=payload.tif,
-            slippage_percent=payload.slippage_percent,
-        )
+        result = await trading_service.place_order(db, wallet_address=resolved_wallet, symbol=payload.symbol, side=payload.side, order_type=payload.order_type, leverage=payload.leverage, size_usd=payload.size_usd, quantity=payload.quantity, limit_price=payload.limit_price, reduce_only=payload.reduce_only, tif=payload.tif, slippage_percent=payload.slippage_percent)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except PacificaClientError as exc:
@@ -287,21 +239,10 @@ async def create_trading_order(
 
 
 @router.delete("/orders/{order_id}", response_model=OrderMutationResponse)
-async def cancel_trading_order(
-    order_id: str,
-    wallet_address: str | None = Query(default=None, min_length=8),
-    symbol: str = Query(min_length=2, max_length=32),
-    db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_authenticated_user),
-) -> OrderMutationResponse:
+async def cancel_trading_order(order_id: str, wallet_address: str | None = Query(default=None, min_length=8), symbol: str = Query(min_length=2, max_length=32), db=Depends(get_db), user: AuthenticatedUser = Depends(require_authenticated_user)) -> OrderMutationResponse:
     resolved_wallet = _resolve_wallet(user, wallet_address)
     try:
-        result = await trading_service.cancel_order(
-            db,
-            wallet_address=resolved_wallet,
-            symbol=symbol,
-            order_id=order_id,
-        )
+        result = await trading_service.cancel_order(db, wallet_address=resolved_wallet, symbol=symbol, order_id=order_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except PacificaClientError as exc:

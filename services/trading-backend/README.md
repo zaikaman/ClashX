@@ -1,40 +1,35 @@
 # ClashX Trading Backend
 
-Python 3.11 FastAPI service for Pacifica integrations, realtime fanout, and trading logic.
+Python 3.11 FastAPI service for Pacifica integrations, realtime fanout, and Supabase-backed trading logic.
 
-## Database setup
+## Backend mode
 
-The backend now uses Alembic migrations.
+The backend is now Supabase-only. There is no SQLAlchemy or Alembic path.
 
-### Shared env
+## Schema bootstrap
 
-The backend reads configuration from the root `.env` file.
+Apply the Supabase SQL in:
 
-### Apply schema
+- `services/trading-backend/db/supabase_bot_tables.sql`
+
+This includes the runtime tables plus:
+
+- `bot_action_claims`
+- `worker_leases`
+
+Those tables are required for duplicate-prevention and worker coordination.
+
+## Start backend
 
 From the workspace root run:
 
-- `npm run db:migrate`
-
-This applies the initial schema to the Supabase Postgres database configured by `DATABASE_URL`.
-
-### Bootstrap Supabase-only bot tables
-
-If your Supabase project was initialized before the bot runtime features were added, apply:
-
-- `services/trading-backend/db/supabase_initial_schema.sql`
-
-This SQL file now includes the missing bot tables:
-
-- `bot_definitions`
-- `bot_runtimes`
-- `bot_execution_events`
-- `bot_copy_relationships`
-- `bot_clones`
-- `bot_leaderboard_snapshots`
-
-### Start backend
-
-After migrations:
-
 - `npm run backend`
+
+## Worker deployment
+
+Background workers are controlled with `BACKGROUND_WORKERS_ENABLED`.
+
+- Web dyno: set `BACKGROUND_WORKERS_ENABLED=false`
+- Worker dyno: set `BACKGROUND_WORKERS_ENABLED=true`
+
+If you run a single combined process, leave it enabled.

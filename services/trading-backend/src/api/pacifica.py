@@ -5,7 +5,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
 
 from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authenticated_user
 from src.db.session import get_db
@@ -79,53 +78,31 @@ class PacificaReadinessResponse(BaseModel):
 
 
 @router.get("/authorize", response_model=PacificaAuthorizationResponse | None)
-def get_authorization_status(
-    wallet_address: str = Query(min_length=8),
-    db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_authenticated_user),
-) -> PacificaAuthorizationResponse | None:
+def get_authorization_status(wallet_address: str = Query(min_length=8), db=Depends(get_db), user: AuthenticatedUser = Depends(require_authenticated_user)) -> PacificaAuthorizationResponse | None:
     ensure_wallet_owned(user, wallet_address)
     authorization = pacifica_auth_service.get_authorization_by_wallet(db, wallet_address)
     return PacificaAuthorizationResponse.model_validate(authorization) if authorization else None
 
 
 @router.get("/readiness", response_model=PacificaReadinessResponse)
-async def get_pacifica_readiness(
-    wallet_address: str = Query(min_length=8),
-    db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_authenticated_user),
-) -> PacificaReadinessResponse:
+async def get_pacifica_readiness(wallet_address: str = Query(min_length=8), db=Depends(get_db), user: AuthenticatedUser = Depends(require_authenticated_user)) -> PacificaReadinessResponse:
     ensure_wallet_owned(user, wallet_address)
     payload = await pacifica_readiness_service.get_readiness(db, wallet_address)
     return PacificaReadinessResponse.model_validate(payload)
 
 
 @router.post("/authorize/start", response_model=PacificaAuthorizationResponse)
-def start_authorization(
-    payload: StartAuthorizationRequest,
-    db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_authenticated_user),
-) -> PacificaAuthorizationResponse:
+def start_authorization(payload: StartAuthorizationRequest, db=Depends(get_db), user: AuthenticatedUser = Depends(require_authenticated_user)) -> PacificaAuthorizationResponse:
     ensure_wallet_owned(user, payload.wallet_address)
     try:
-        authorization = pacifica_auth_service.start_authorization(
-            db,
-            wallet_address=payload.wallet_address,
-            display_name=payload.display_name,
-            force_reissue=payload.force_reissue,
-        )
+        authorization = pacifica_auth_service.start_authorization(db, wallet_address=payload.wallet_address, display_name=payload.display_name, force_reissue=payload.force_reissue)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return PacificaAuthorizationResponse.model_validate(authorization)
 
 
 @router.post("/authorize/{authorization_id}/activate", response_model=PacificaAuthorizationResponse)
-def activate_authorization(
-    authorization_id: str,
-    payload: ActivateAuthorizationRequest,
-    db: Session = Depends(get_db),
-    user: AuthenticatedUser = Depends(require_authenticated_user),
-) -> PacificaAuthorizationResponse:
+def activate_authorization(authorization_id: str, payload: ActivateAuthorizationRequest, db=Depends(get_db), user: AuthenticatedUser = Depends(require_authenticated_user)) -> PacificaAuthorizationResponse:
     matching_authorization = None
     for wallet_address in user.wallet_addresses:
         candidate = pacifica_auth_service.get_authorization_by_wallet(db, wallet_address)
@@ -135,12 +112,7 @@ def activate_authorization(
     if matching_authorization is None or matching_authorization["id"] != authorization_id:
         raise HTTPException(status_code=403, detail="Authorization record does not belong to the authenticated wallet")
     try:
-        authorization = pacifica_auth_service.activate_authorization(
-            db,
-            authorization_id=authorization_id,
-            bind_agent_signature=payload.bind_agent_signature,
-            builder_approval_signature=payload.builder_approval_signature,
-        )
+        authorization = pacifica_auth_service.activate_authorization(db, authorization_id=authorization_id, bind_agent_signature=payload.bind_agent_signature, builder_approval_signature=payload.builder_approval_signature)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return PacificaAuthorizationResponse.model_validate(authorization)

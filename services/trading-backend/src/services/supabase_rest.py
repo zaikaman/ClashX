@@ -8,6 +8,13 @@ import httpx
 from src.core.settings import get_settings
 
 
+class SupabaseRestError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int, response_json: Any = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.response_json = response_json
+
+
 class SupabaseRestClient:
     def __init__(self) -> None:
         settings = get_settings()
@@ -133,5 +140,15 @@ class SupabaseRestClient:
         headers: Mapping[str, str] | None = None,
     ) -> httpx.Response:
         response = self._client.request(method, path, params=params, json=json, headers=headers)
-        response.raise_for_status()
+        if response.is_error:
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = response.text
+            message = payload.get("message") if isinstance(payload, dict) else response.text
+            raise SupabaseRestError(
+                message or f"Supabase request failed with status {response.status_code}",
+                status_code=response.status_code,
+                response_json=payload,
+            )
         return response
