@@ -123,7 +123,10 @@ class BotRuntimeEngine:
 
     def list_runtime_events(self, db: Any, *, bot_id: str, wallet_address: str, user_id: str, limit: int) -> list[dict[str, Any]]:
         del db
-        runtime = self._require_runtime(bot_id=bot_id, wallet_address=wallet_address, user_id=user_id)
+        bot = self._resolve_bot(bot_id=bot_id, wallet_address=wallet_address, user_id=user_id)
+        runtime = self._resolve_runtime(bot_definition_id=bot["id"], wallet_address=wallet_address)
+        if runtime is None:
+            return []
         rows = self._supabase.select("bot_execution_events", filters={"runtime_id": runtime["id"]}, order="created_at.desc", limit=limit)
         return [self.serialize_event(row) for row in rows]
 

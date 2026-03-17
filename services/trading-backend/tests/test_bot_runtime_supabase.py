@@ -346,6 +346,18 @@ def test_runtime_overview_returns_draft_snapshot_when_runtime_is_missing() -> No
     assert overview["metrics"]["events_total"] == 0
 
 
+def test_list_runtime_events_returns_empty_list_when_runtime_is_missing() -> None:
+    tables = _seed_tables()
+    tables["bot_runtimes"] = []
+    fake_supabase = FakeSupabaseRestClient(tables)
+    engine = BotRuntimeEngine()
+    engine._supabase = fake_supabase
+
+    events = engine.list_runtime_events(None, bot_id="bot-1", wallet_address="wallet-1", user_id="user-1", limit=100)
+
+    assert events == []
+
+
 def test_runtime_worker_executes_supabase_trade_without_sqlalchemy() -> None:
     fake_supabase = FakeSupabaseRestClient(_seed_tables())
     fake_pacifica = FakePacificaClient()
