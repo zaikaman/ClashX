@@ -54,6 +54,7 @@ const DEFAULT_RISK_POLICY_JSON = JSON.stringify(
     max_leverage: 5,
     max_order_size_usd: 200,
     allocated_capital_usd: 200,
+    max_open_positions: 1,
     cooldown_seconds: 45,
     max_drawdown_pct: 18,
   },
@@ -849,7 +850,7 @@ export function BotsFleetPage() {
                     className="min-h-[11rem] rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0f1112] px-4 py-3 font-mono text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]"
                   />
                   <span className="text-xs leading-6 text-neutral-500">
-                    This same payload will be used for every selected deploy. If a bot is still live, stop it before trying to delete it.
+                    This same payload will be used for every selected deploy. Include `max_open_positions` here when you want a stricter cap on how many live entries each runtime can hold.
                   </span>
                 </label>
               ) : null}

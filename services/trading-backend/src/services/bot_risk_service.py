@@ -9,6 +9,7 @@ class BotRiskService:
         "max_leverage": 5,
         "max_order_size_usd": 200,
         "allocated_capital_usd": 200,
+        "max_open_positions": 1,
         "cooldown_seconds": 30,
         "max_drawdown_pct": 25,
         "allowed_symbols": [],
@@ -34,6 +35,10 @@ class BotRiskService:
                 self.DEFAULT_POLICY["allocated_capital_usd"],
             ),
         )
+        merged["max_open_positions"] = max(
+            1,
+            int(self._to_float(merged.get("max_open_positions"), self.DEFAULT_POLICY["max_open_positions"])),
+        )
         merged["cooldown_seconds"] = int(
             self._to_float(merged.get("cooldown_seconds"), self.DEFAULT_POLICY["cooldown_seconds"])
         )
@@ -53,11 +58,13 @@ class BotRiskService:
         policy: dict[str, Any],
         action: dict[str, Any],
         runtime_state: dict[str, Any],
+        position_lookup: dict[str, dict[str, Any]] | None = None,
     ) -> list[str]:
         issues: list[str] = []
         normalized = self.normalize_policy(policy)
         action_type = str(action.get("type") or "")
         symbol = str(action.get("symbol") or "").upper().replace("-PERP", "")
+        positions = position_lookup if isinstance(position_lookup, dict) else {}
 
         allowed_symbols = normalized.get("allowed_symbols") or []
         if symbol and allowed_symbols and symbol not in allowed_symbols:
@@ -79,6 +86,12 @@ class BotRiskService:
             issues.append(
                 f"requested size_usd {size_usd:g} exceeds max_order_size_usd {normalized['max_order_size_usd']:g}"
             )
+        if action_type in {"open_long", "open_short", "place_market_order", "place_limit_order", "place_twap_order"}:
+            open_positions = sum(1 for item in positions.values() if self._to_float(item.get("amount"), 0.0) > 0)
+            if open_positions >= normalized["max_open_positions"]:
+                issues.append(
+                    f"max_open_positions {normalized['max_open_positions']} reached"
+                )
 
         drawdown_reason = self.drawdown_breach_reason(policy=normalized, runtime_state=runtime_state)
         if drawdown_reason is not None:

@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 from datetime import UTC, datetime
-from decimal import ROUND_DOWN, Decimal
+from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from typing import Any
 
 from src.services.bot_risk_service import BotRiskService
@@ -205,14 +205,21 @@ class BotRuntimeWorker:
         )
 
         runtime_touched = False
+        cycle_runtime_state = dict(runtime_state)
         coordination = self._coordination if getattr(self._coordination, "_supabase", None) is self._supabase else WorkerCoordinationService(self._supabase)
         for action in actions:
-            issues = self._risk.assess_action(policy=runtime_policy, action=action, runtime_state=runtime_state)
+            issues = self._risk.assess_action(
+                policy=runtime_policy,
+                action=action,
+                runtime_state=cycle_runtime_state,
+                position_lookup=position_lookup,
+            )
             if issues:
                 skipped_key = self._build_idempotency_key(
                     runtime_id=runtime["id"],
                     action=action,
                     runtime_state=runtime_state,
+                    position_lookup=position_lookup,
                 )
                 event = self._engine.append_execution_event(
                     None,
@@ -241,6 +248,7 @@ class BotRuntimeWorker:
                 runtime_id=runtime["id"],
                 action=action,
                 runtime_state=runtime_state,
+                position_lookup=position_lookup,
             )
             if not coordination.try_claim_action(runtime_id=runtime["id"], idempotency_key=idempotency_key):
                 continue
@@ -258,6 +266,7 @@ class BotRuntimeWorker:
                     runtime,
                     {"risk_policy_json": runtime_policy, "updated_at": datetime.now(tz=UTC)},
                 )
+                position_lookup = await self._refresh_position_lookup(credentials["account_address"])
                 runtime_touched = True
                 event = self._engine.append_execution_event(
                     None,
@@ -341,7 +350,12 @@ class BotRuntimeWorker:
             reference_price = float((market_lookup.get(symbol) or {}).get("mark_price") or 0)
             amount = self._resolve_order_quantity(action=action, market_lookup=market_lookup, symbol=symbol, reference_price=None)
             if not reduce_only:
-                await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
+                await self._ensure_leverage(
+                    wallet_address=credentials["account_address"],
+                    credentials=credentials,
+                    symbol=symbol,
+                    leverage=leverage,
+                )
             response = await self._pacifica.place_order(
                 {
                     "type": "create_market_order",
@@ -374,7 +388,12 @@ class BotRuntimeWorker:
             reduce_only = self._to_bool(action.get("reduce_only"), False)
             amount = self._resolve_order_quantity(action=action, market_lookup=market_lookup, symbol=symbol, reference_price=price)
             if not reduce_only:
-                await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
+                await self._ensure_leverage(
+                    wallet_address=credentials["account_address"],
+                    credentials=credentials,
+                    symbol=symbol,
+                    leverage=leverage,
+                )
             response = await self._pacifica.place_order(
                 {
                     "type": "create_order",
@@ -408,7 +427,12 @@ class BotRuntimeWorker:
             reference_price = float((market_lookup.get(symbol) or {}).get("mark_price") or 0)
             amount = self._resolve_order_quantity(action=action, market_lookup=market_lookup, symbol=symbol, reference_price=None)
             if not reduce_only:
-                await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
+                await self._ensure_leverage(
+                    wallet_address=credentials["account_address"],
+                    credentials=credentials,
+                    symbol=symbol,
+                    leverage=leverage,
+                )
             response = await self._pacifica.place_order(
                 {
                     "type": "create_twap_order",
@@ -461,21 +485,40 @@ class BotRuntimeWorker:
             amount = abs(float(position.get("amount") or 0))
             market = self._resolve_market(market_lookup, symbol)
             mark_price = float(position.get("mark_price") or market.get("mark_price") or 0)
+            tick_size = float(market.get("tick_size") or 0)
             if amount <= 0 or mark_price <= 0:
                 raise ValueError(f"Cannot set TP/SL without valid position price for {symbol}")
             tp_pct = float(action.get("take_profit_pct") or 0)
             sl_pct = float(action.get("stop_loss_pct") or 0)
             side = str(position.get("side") or "").lower()
+            close_side = "ask" if side in {"bid", "long"} else "bid"
             if side in {"bid", "long"}:
-                take_profit_price = mark_price * (1 + tp_pct / 100)
-                stop_loss_price = mark_price * (1 - sl_pct / 100)
+                take_profit_price = self._normalize_price_to_tick(
+                    mark_price * (1 + tp_pct / 100),
+                    tick_size=tick_size,
+                    rounding=ROUND_UP,
+                )
+                stop_loss_price = self._normalize_price_to_tick(
+                    mark_price * (1 - sl_pct / 100),
+                    tick_size=tick_size,
+                    rounding=ROUND_DOWN,
+                )
             else:
-                take_profit_price = mark_price * (1 - tp_pct / 100)
-                stop_loss_price = mark_price * (1 + sl_pct / 100)
+                take_profit_price = self._normalize_price_to_tick(
+                    mark_price * (1 - tp_pct / 100),
+                    tick_size=tick_size,
+                    rounding=ROUND_DOWN,
+                )
+                stop_loss_price = self._normalize_price_to_tick(
+                    mark_price * (1 + sl_pct / 100),
+                    tick_size=tick_size,
+                    rounding=ROUND_UP,
+                )
             return await self._pacifica.place_order(
                 {
                     "type": "set_position_tpsl",
                     **payload,
+                    "side": close_side,
                     "take_profit": {"stop_price": take_profit_price, "amount": amount},
                     "stop_loss": {"stop_price": stop_loss_price, "amount": amount},
                 }
@@ -517,20 +560,83 @@ class BotRuntimeWorker:
         except PacificaClientError:
             return fallback
 
+    async def _refresh_position_lookup(self, wallet_address: str) -> dict[str, dict[str, Any]]:
+        positions = await self._safe_load(lambda: self._pacifica.get_positions(wallet_address), [])
+        return self._build_position_lookup(positions)
+
+    async def _ensure_leverage(
+        self,
+        *,
+        wallet_address: str,
+        credentials: dict[str, str],
+        symbol: str,
+        leverage: int,
+    ) -> None:
+        settings = await self._safe_load(lambda: self._pacifica.get_account_settings(wallet_address), [])
+        current = next(
+            (
+                item
+                for item in settings
+                if self._normalize_symbol(item.get("symbol")) == symbol
+            ),
+            None,
+        )
+        if isinstance(current, dict) and int(current.get("leverage") or 0) == leverage:
+            return
+        await self._pacifica.place_order(
+            {
+                "type": "update_leverage",
+                "account": credentials["account_address"],
+                "agent_wallet": credentials["agent_wallet_address"],
+                "__agent_private_key": credentials["agent_private_key"],
+                "symbol": symbol,
+                "leverage": leverage,
+            }
+        )
+
     async def _calculate_runtime_performance(self, runtime: dict[str, Any]) -> dict[str, Any]:
         service = BotPerformanceService(pacifica_client=self._pacifica, supabase=self._supabase)
         return await service.calculate_runtime_performance(runtime)
 
     @staticmethod
-    def _build_idempotency_key(*, runtime_id: str, action: dict[str, Any], runtime_state: dict[str, Any]) -> str:
+    def _build_idempotency_key(
+        *,
+        runtime_id: str,
+        action: dict[str, Any],
+        runtime_state: dict[str, Any],
+        position_lookup: dict[str, dict[str, Any]],
+    ) -> str:
         payload = json.dumps(action, sort_keys=True, default=str)
         execution_cursor = int(runtime_state.get("executions_total") or 0)
         failure_cursor = int(runtime_state.get("failures_total") or 0)
         last_executed_at = str(runtime_state.get("last_executed_at") or "")
+        position_fingerprint = BotRuntimeWorker._position_fingerprint(
+            action=action,
+            position_lookup=position_lookup,
+        )
         digest = hashlib.sha256(
-            f"{runtime_id}:{execution_cursor}:{failure_cursor}:{last_executed_at}:{payload}".encode()
+            f"{runtime_id}:{execution_cursor}:{failure_cursor}:{last_executed_at}:{position_fingerprint}:{payload}".encode()
         ).hexdigest()[:24]
         return f"idem:{runtime_id}:{execution_cursor}:{failure_cursor}:{digest}"
+
+    @staticmethod
+    def _position_fingerprint(*, action: dict[str, Any], position_lookup: dict[str, dict[str, Any]]) -> str:
+        action_type = str(action.get("type") or "")
+        symbol = BotRuntimeWorker._normalize_symbol(action.get("symbol"))
+        if not symbol:
+            return "nosymbol"
+        position = position_lookup.get(symbol) or {}
+        amount = float(position.get("amount") or 0.0) if isinstance(position, dict) else 0.0
+        side = str(position.get("side") or "") if isinstance(position, dict) else ""
+        has_position = amount > 0
+        if action_type == "set_tpsl":
+            entry_price = float(position.get("entry_price") or 0.0) if isinstance(position, dict) else 0.0
+            return f"{symbol}:tpsl:{has_position}:{side}:{amount:.8f}:{entry_price:.8f}"
+        if action_type in {"open_long", "open_short", "place_market_order", "place_limit_order", "place_twap_order"}:
+            return f"{symbol}:entry:{has_position}:{side}:{amount:.8f}"
+        if action_type == "close_position":
+            return f"{symbol}:close:{has_position}:{side}:{amount:.8f}"
+        return f"{symbol}:generic:{has_position}:{side}:{amount:.8f}"
 
     def _update_runtime(self, runtime: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
         serialized_updates = {key: value.isoformat() if isinstance(value, datetime) else value for key, value in updates.items()}
@@ -604,7 +710,6 @@ class BotRuntimeWorker:
             return self._normalize_order_quantity(
                 raw_quantity,
                 lot_size=float(market.get("lot_size") or 0),
-                min_order_size=float(market.get("min_order_size") or 0),
                 symbol=symbol,
             )
         resolved_price = reference_price if reference_price is not None else float(market.get("mark_price") or 0)
@@ -617,7 +722,6 @@ class BotRuntimeWorker:
         return self._normalize_order_quantity(
             (size_usd * leverage) / resolved_price,
             lot_size=float(market.get("lot_size") or 0),
-            min_order_size=float(market.get("min_order_size") or 0),
             symbol=symbol,
         )
 
@@ -634,7 +738,7 @@ class BotRuntimeWorker:
         raise ValueError("Action requires order_id or client_order_id")
 
     @staticmethod
-    def _normalize_order_quantity(quantity: float, *, lot_size: float, min_order_size: float, symbol: str) -> float:
+    def _normalize_order_quantity(quantity: float, *, lot_size: float, symbol: str) -> float:
         normalized = Decimal(str(quantity))
         if lot_size > 0:
             step = Decimal(str(lot_size))
@@ -642,9 +746,15 @@ class BotRuntimeWorker:
         normalized_float = float(normalized)
         if normalized_float <= 0:
             raise ValueError(f"Order size is below the minimum tradable increment for {symbol}.")
-        if min_order_size > 0 and normalized_float < min_order_size:
-            raise ValueError(f"Order size for {symbol} must be at least {min_order_size:g}. Adjust the USD size or leverage.")
         return normalized_float
+
+    @staticmethod
+    def _normalize_price_to_tick(price: float, *, tick_size: float, rounding: str) -> float:
+        normalized = Decimal(str(price))
+        if tick_size > 0:
+            tick = Decimal(str(tick_size))
+            normalized = (normalized / tick).to_integral_value(rounding=rounding) * tick
+        return float(normalized)
 
     @staticmethod
     def _serialize_event_payload(event: dict[str, Any]) -> dict[str, Any]:

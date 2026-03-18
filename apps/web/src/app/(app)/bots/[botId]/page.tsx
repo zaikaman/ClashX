@@ -116,6 +116,16 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
     return () => controller.abort();
   }, [authenticated, walletAddress, params.botId, getAuthHeaders, refreshToken]);
 
+  useEffect(() => {
+    if (!authenticated || !walletAddress) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      setRefreshToken((value) => value + 1);
+    }, 15000);
+    return () => window.clearInterval(interval);
+  }, [authenticated, walletAddress]);
+
   const sessionActive = authenticated && Boolean(walletAddress);
   const visibleBot = sessionActive ? bot : null;
   const visibleEvents = sessionActive ? events : [];
@@ -265,7 +275,10 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
       ) : null}
 
       <section className="grid gap-4">
-        <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Execution log</span>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Activity stream</span>
+          <span className="text-xs text-neutral-500">refreshes every 15 seconds while this page is open</span>
+        </div>
         <ExecutionLog events={visibleEvents} />
       </section>
     </main>

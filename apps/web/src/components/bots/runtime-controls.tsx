@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 type RuntimeResponse = {
   id: string;
@@ -24,9 +24,34 @@ export function RuntimeControls({
   getAuthHeaders: (headersInit?: HeadersInit) => Promise<Headers>;
   onRuntimeUpdate?: (runtime: RuntimeResponse) => void;
 }) {
-  const [riskPolicy, setRiskPolicy] = useState('{"max_leverage":5,"max_order_size_usd":200,"allocated_capital_usd":200,"cooldown_seconds":45,"max_drawdown_pct":18}');
+  const [maxLeverage, setMaxLeverage] = useState(5);
+  const [maxOrderSizeUsd, setMaxOrderSizeUsd] = useState(200);
+  const [allocatedCapitalUsd, setAllocatedCapitalUsd] = useState(200);
+  const [cooldownSeconds, setCooldownSeconds] = useState(45);
+  const [maxDrawdownPct, setMaxDrawdownPct] = useState(18);
+  const [maxOpenPositions, setMaxOpenPositions] = useState(1);
+  const [showRawPolicy, setShowRawPolicy] = useState(false);
   const [status, setStatus] = useState<"idle" | "deploy" | "pause" | "resume" | "stop">("idle");
   const [error, setError] = useState<string | null>(null);
+
+  const riskPolicy = useMemo(
+    () => ({
+      max_leverage: maxLeverage,
+      max_order_size_usd: maxOrderSizeUsd,
+      allocated_capital_usd: allocatedCapitalUsd,
+      cooldown_seconds: cooldownSeconds,
+      max_drawdown_pct: maxDrawdownPct,
+      max_open_positions: maxOpenPositions,
+    }),
+    [
+      allocatedCapitalUsd,
+      cooldownSeconds,
+      maxDrawdownPct,
+      maxLeverage,
+      maxOpenPositions,
+      maxOrderSizeUsd,
+    ],
+  );
 
   async function invoke(action: "deploy" | "pause" | "resume" | "stop") {
     setStatus(action);
@@ -35,7 +60,7 @@ export function RuntimeControls({
       const endpoint = `${API_BASE_URL}/api/bots/${botId}/${action}`;
       const body =
         action === "deploy"
-          ? { wallet_address: walletAddress, risk_policy_json: JSON.parse(riskPolicy) as Record<string, unknown> }
+          ? { wallet_address: walletAddress, risk_policy_json: riskPolicy }
           : undefined;
 
       const response = await fetch(endpoint, {
@@ -56,21 +81,103 @@ export function RuntimeControls({
   }
 
   return (
-    <section className="grid gap-4 border-l-2 border-[#74b97f] bg-[#16181a] p-6">
+    <section className="grid gap-5 border-l-2 border-[#74b97f] bg-[#16181a] p-6">
       <div className="flex items-center justify-between">
         <span className="label text-[#74b97f]">runtime controls</span>
-        <span className="text-xs text-neutral-500">wallet-bound lifecycle</span>
+        <span className="text-xs text-neutral-500">wallet-bound live deployment</span>
       </div>
 
-      <label className="grid gap-1.5 text-sm text-neutral-400">
-        Deploy risk policy JSON
-        <textarea
-          value={riskPolicy}
-          onChange={(event) => setRiskPolicy(event.target.value)}
-          rows={4}
-          className="border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]"
-        />
-      </label>
+      <div className="grid gap-3 rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-4">
+        <div className="grid gap-1">
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#74b97f]">deploy profile</span>
+          <p className="text-sm leading-6 text-neutral-400">
+            Set the live guardrails the bot will use the moment it starts trading.
+          </p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <label className="grid gap-1.5 text-sm text-neutral-400">
+            Max leverage
+            <input
+              type="number"
+              min={1}
+              value={maxLeverage}
+              onChange={(event) => setMaxLeverage(Number(event.target.value))}
+              className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+            />
+          </label>
+          <label className="grid gap-1.5 text-sm text-neutral-400">
+            Max order size
+            <input
+              type="number"
+              min={1}
+              value={maxOrderSizeUsd}
+              onChange={(event) => setMaxOrderSizeUsd(Number(event.target.value))}
+              className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+            />
+          </label>
+          <label className="grid gap-1.5 text-sm text-neutral-400">
+            Allocated capital
+            <input
+              type="number"
+              min={1}
+              value={allocatedCapitalUsd}
+              onChange={(event) => setAllocatedCapitalUsd(Number(event.target.value))}
+              className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+            />
+          </label>
+          <label className="grid gap-1.5 text-sm text-neutral-400">
+            Cooldown
+            <input
+              type="number"
+              min={0}
+              value={cooldownSeconds}
+              onChange={(event) => setCooldownSeconds(Number(event.target.value))}
+              className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+            />
+          </label>
+          <label className="grid gap-1.5 text-sm text-neutral-400">
+            Max drawdown %
+            <input
+              type="number"
+              min={0}
+              step="0.1"
+              value={maxDrawdownPct}
+              onChange={(event) => setMaxDrawdownPct(Number(event.target.value))}
+              className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+            />
+          </label>
+          <label className="grid gap-1.5 text-sm text-neutral-400">
+            Open positions allowed
+            <input
+              type="number"
+              min={1}
+              value={maxOpenPositions}
+              onChange={(event) => setMaxOpenPositions(Number(event.target.value))}
+              className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+            />
+          </label>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[rgba(255,255,255,0.05)] bg-[#111416] px-4 py-3">
+          <p className="text-xs leading-6 text-neutral-500">
+            With this profile, the bot can hold up to {maxOpenPositions} live position{maxOpenPositions === 1 ? "" : "s"} and waits {cooldownSeconds}s before the next fresh entry.
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowRawPolicy((current) => !current)}
+            className="rounded-full border border-[rgba(255,255,255,0.12)] px-3 py-1.5 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#dce85d] hover:text-[#dce85d]"
+          >
+            {showRawPolicy ? "Hide raw policy" : "View raw policy"}
+          </button>
+        </div>
+
+        {showRawPolicy ? (
+          <pre className="overflow-x-auto rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-4 py-3 text-xs leading-6 text-neutral-300">
+            {JSON.stringify(riskPolicy, null, 2)}
+          </pre>
+        ) : null}
+      </div>
 
       {error ? <p className="text-sm text-[#dce85d]">{error}</p> : null}
 

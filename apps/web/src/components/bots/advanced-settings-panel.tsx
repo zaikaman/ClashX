@@ -25,6 +25,7 @@ export function AdvancedSettingsPanel({
   const [maxLeverage, setMaxLeverage] = useState(5);
   const [maxOrderSizeUsd, setMaxOrderSizeUsd] = useState(200);
   const [allocatedCapitalUsd, setAllocatedCapitalUsd] = useState(200);
+  const [maxOpenPositions, setMaxOpenPositions] = useState(1);
   const [cooldownSeconds, setCooldownSeconds] = useState(45);
   const [maxDrawdownPct, setMaxDrawdownPct] = useState(18);
   const [allowedSymbols, setAllowedSymbols] = useState("BTC,ETH,SOL");
@@ -49,6 +50,7 @@ export function AdvancedSettingsPanel({
         setMaxLeverage(Number(policy.max_leverage ?? 5));
         setMaxOrderSizeUsd(Number(policy.max_order_size_usd ?? 200));
         setAllocatedCapitalUsd(Number(policy.allocated_capital_usd ?? 200));
+        setMaxOpenPositions(Number(policy.max_open_positions ?? 1));
         setCooldownSeconds(Number(policy.cooldown_seconds ?? 45));
         setMaxDrawdownPct(Number(policy.max_drawdown_pct ?? 18));
         const symbols = Array.isArray(policy.allowed_symbols) ? policy.allowed_symbols : [];
@@ -72,6 +74,7 @@ export function AdvancedSettingsPanel({
         max_leverage: maxLeverage,
         max_order_size_usd: maxOrderSizeUsd,
         allocated_capital_usd: allocatedCapitalUsd,
+        max_open_positions: maxOpenPositions,
         cooldown_seconds: cooldownSeconds,
         max_drawdown_pct: maxDrawdownPct,
         allowed_symbols: allowedSymbols
@@ -118,6 +121,10 @@ export function AdvancedSettingsPanel({
           <input type="number" min={1} value={allocatedCapitalUsd} onChange={(event) => setAllocatedCapitalUsd(Number(event.target.value))} className="w-full border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d] rounded-md" />
         </label>
         <label className="grid gap-1.5 text-sm text-neutral-400">
+          Max open positions
+          <input type="number" min={1} value={maxOpenPositions} onChange={(event) => setMaxOpenPositions(Number(event.target.value))} className="w-full border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d] rounded-md" />
+        </label>
+        <label className="grid gap-1.5 text-sm text-neutral-400">
           Cooldown seconds
           <input type="number" min={0} value={cooldownSeconds} onChange={(event) => setCooldownSeconds(Number(event.target.value))} className="w-full border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d] rounded-md" />
         </label>
@@ -127,7 +134,7 @@ export function AdvancedSettingsPanel({
         </label>
       </div>
       <p className="text-xs leading-6 text-neutral-500">
-        Drawdown now uses realized plus unrealized bot PnL against this runtime allocation. If a bot with ${allocatedCapitalUsd || 0} allocated reaches a {maxDrawdownPct}% loss budget, it is stopped automatically.
+        Drawdown now uses realized plus unrealized bot PnL against this runtime allocation. If a bot with ${allocatedCapitalUsd || 0} allocated reaches a {maxDrawdownPct}% loss budget, it is stopped automatically. Open positions are capped at {maxOpenPositions} so the runtime cannot keep stacking fresh entries indefinitely.
       </p>
 
       <div className="grid gap-3 sm:grid-cols-2">

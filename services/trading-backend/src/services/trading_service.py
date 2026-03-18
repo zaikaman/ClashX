@@ -90,9 +90,18 @@ class TradingService:
             if size_usd is None:
                 raise ValueError("Either size_usd or quantity must be provided.")
             quantity = (size_usd * leverage) / reference_price
-        quantity = self._normalize_order_quantity(quantity, lot_size=float(market.get("lot_size", 0) or 0), min_order_size=float(market.get("min_order_size", 0) or 0), symbol=normalized_symbol)
+        quantity = self._normalize_order_quantity(
+            quantity,
+            lot_size=float(market.get("lot_size", 0) or 0),
+            symbol=normalized_symbol,
+        )
         if not reduce_only:
-            await self.pacifica.place_order({"type": "update_leverage", "account": credentials["account_address"], "agent_wallet": credentials["agent_wallet_address"], "__agent_private_key": credentials["agent_private_key"], "symbol": normalized_symbol, "leverage": leverage})
+            await self._ensure_leverage(
+                wallet_address=wallet_address,
+                credentials=credentials,
+                symbol=normalized_symbol,
+                leverage=leverage,
+            )
         payload: dict[str, Any] = {
             "account": credentials["account_address"],
             "agent_wallet": credentials["agent_wallet_address"],
@@ -141,6 +150,36 @@ class TradingService:
         except PacificaClientError:
             return fallback
 
+    async def _ensure_leverage(
+        self,
+        *,
+        wallet_address: str,
+        credentials: dict[str, str],
+        symbol: str,
+        leverage: int,
+    ) -> None:
+        settings = await self._safe_read(lambda: self.pacifica.get_account_settings(wallet_address), [])
+        current = next(
+            (
+                item
+                for item in settings
+                if self._normalize_symbol(str(item.get("symbol") or "")) == symbol
+            ),
+            None,
+        )
+        if isinstance(current, dict) and int(current.get("leverage") or 0) == leverage:
+            return
+        await self.pacifica.place_order(
+            {
+                "type": "update_leverage",
+                "account": credentials["account_address"],
+                "agent_wallet": credentials["agent_wallet_address"],
+                "__agent_private_key": credentials["agent_private_key"],
+                "symbol": symbol,
+                "leverage": leverage,
+            }
+        )
+
     def _upsert_user(self, db: Any, wallet_address: str) -> dict[str, Any]:
         del db
         user = self.supabase.maybe_one("users", filters={"wallet_address": wallet_address})
@@ -175,7 +214,7 @@ class TradingService:
             raise PacificaClientError(f"Unsupported Pacifica market: {normalized_symbol}")
         return market
 
-    def _normalize_order_quantity(self, quantity: float, *, lot_size: float, min_order_size: float, symbol: str) -> float:
+    def _normalize_order_quantity(self, quantity: float, *, lot_size: float, symbol: str) -> float:
         normalized = Decimal(str(quantity))
         if lot_size > 0:
             step = Decimal(str(lot_size))
@@ -183,8 +222,6 @@ class TradingService:
         normalized_float = float(normalized)
         if normalized_float <= 0:
             raise ValueError(f"Order size is below the minimum tradable increment for {symbol}.")
-        if min_order_size > 0 and normalized_float < min_order_size:
-            raise ValueError(f"Order size for {symbol} must be at least {min_order_size:g}. Adjust the USD size or leverage.")
         return normalized_float
 
     def _serialize_position(self, position: dict[str, Any]) -> dict[str, Any]:

@@ -332,6 +332,46 @@ class PacificaClient:
             "fee_level": self._coerce_int(payload.get("feeLevel", payload.get("fee_level", 0)), 0),
         }
 
+    async def get_account_settings(self, wallet_address: str) -> list[dict[str, Any]]:
+        await self._throttle()
+        response = await self._http.get(
+            f"{self.settings.pacifica_rest_url}/account/settings",
+            params={"account": wallet_address},
+            headers={"Accept": "*/*"},
+        )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return []
+            self._raise_http_error("account-settings", exc)
+
+        payload = self._extract_response_payload(response.json())
+        if not isinstance(payload, dict):
+            raise PacificaClientError("Pacifica account settings API returned an unexpected payload shape")
+
+        margin_settings = payload.get("margin_settings", payload.get("marginSettings"))
+        if not isinstance(margin_settings, list):
+            return []
+
+        normalized_settings: list[dict[str, Any]] = []
+        for item in margin_settings:
+            if not isinstance(item, dict):
+                continue
+            symbol = item.get("symbol")
+            if symbol is None:
+                continue
+            normalized_settings.append(
+                {
+                    "symbol": str(symbol),
+                    "isolated": self._coerce_bool(item.get("isolated"), False),
+                    "leverage": self._coerce_int(item.get("leverage"), 0),
+                    "created_at": item.get("created_at") or item.get("createdAt"),
+                    "updated_at": item.get("updated_at") or item.get("updatedAt"),
+                }
+            )
+        return normalized_settings
+
     async def get_markets(self) -> list[dict[str, Any]]:
         await self._throttle()
         info_response, price_response = await asyncio.gather(
