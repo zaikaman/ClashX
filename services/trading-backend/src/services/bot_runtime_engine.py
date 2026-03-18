@@ -135,6 +135,12 @@ class BotRuntimeEngine:
         rows = self._supabase.select("bot_runtimes", filters={"wallet_address": wallet_address}, order="updated_at.desc")
         return [self.serialize_runtime(row) for row in rows]
 
+    def get_runtime(self, db: Any, *, bot_id: str, wallet_address: str, user_id: str) -> dict[str, Any] | None:
+        del db
+        bot = self._resolve_bot(bot_id=bot_id, wallet_address=wallet_address, user_id=user_id)
+        runtime = self._resolve_runtime(bot_definition_id=bot["id"], wallet_address=wallet_address)
+        return self.serialize_runtime(runtime) if runtime is not None else None
+
     def get_active_runtimes(self, db: Any) -> list[dict[str, Any]]:
         del db
         return self._supabase.select("bot_runtimes", filters={"status": "active"})

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { use, useEffect, useMemo, useState } from "react";
 
 import { AdvancedSettingsPanel } from "@/components/bots/advanced-settings-panel";
+import { BotPerformancePanel } from "@/components/bots/bot-performance-panel";
 import { ExecutionLog } from "@/components/bots/execution-log";
 import { RuntimeFailurePanel } from "@/components/bots/runtime-failure-panel";
 import { RuntimeHealthCard } from "@/components/bots/runtime-health-card";
@@ -201,6 +202,8 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
           </div>
         </article>
       </section>
+
+      <BotPerformancePanel performance={visibleRuntimeOverview?.performance ?? null} />
 
       {!authenticated ? (
         <button

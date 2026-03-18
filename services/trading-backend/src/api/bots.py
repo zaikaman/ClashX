@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
@@ -10,6 +11,7 @@ from typing import Any as Session
 from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authenticated_user
 from src.db.session import get_db
 from src.services.bot_builder_service import BotBuilderService
+from src.services.bot_performance_service import BotPerformanceService
 from src.services.bot_runtime_engine import BotRuntimeEngine
 from src.services.runtime_health_service import RuntimeHealthService
 from src.services.runtime_observability_service import RuntimeObservabilityService
@@ -17,6 +19,7 @@ from src.services.runtime_observability_service import RuntimeObservabilityServi
 router = APIRouter(prefix="/api/bots", tags=["bots"])
 bot_builder_service = BotBuilderService()
 bot_runtime_engine = BotRuntimeEngine()
+bot_performance_service = BotPerformanceService()
 runtime_health_service = RuntimeHealthService()
 runtime_observability_service = RuntimeObservabilityService()
 
@@ -57,6 +60,7 @@ class BotFleetItemResponse(BaseModel):
     authoring_mode: str
     updated_at: datetime
     runtime: BotRuntimeSummaryResponse | None = None
+    performance: "RuntimePerformanceResponse | None" = None
 
 
 class BotCreateRequest(BaseModel):
@@ -149,6 +153,23 @@ class RuntimeFailureEvent(BaseModel):
     created_at: datetime
 
 
+class RuntimePositionResponse(BaseModel):
+    symbol: str
+    side: str
+    amount: float
+    entry_price: float
+    mark_price: float
+    unrealized_pnl: float
+
+
+class RuntimePerformanceResponse(BaseModel):
+    pnl_total: float
+    pnl_realized: float
+    pnl_unrealized: float
+    win_streak: int
+    positions: list[RuntimePositionResponse]
+
+
 class RuntimeMetricsResponse(BaseModel):
     runtime_id: str
     status: str
@@ -170,6 +191,7 @@ class RuntimeMetricsResponse(BaseModel):
 class RuntimeOverviewResponse(BaseModel):
     health: RuntimeHealthResponse
     metrics: RuntimeMetricsResponse
+    performance: RuntimePerformanceResponse | None = None
 
 
 class RuntimeRiskStateResponse(BaseModel):
@@ -192,8 +214,15 @@ def _resolve_wallet(user: AuthenticatedUser, wallet_address: str | None) -> str:
     return resolved
 
 
+async def _build_runtime_performance(runtime: dict[str, Any] | None) -> RuntimePerformanceResponse | None:
+    if runtime is None:
+        return None
+    payload = await bot_performance_service.calculate_runtime_performance(runtime)
+    return RuntimePerformanceResponse.model_validate(payload)
+
+
 @router.get("", response_model=list[BotFleetItemResponse])
-def list_bots(
+async def list_bots(
     wallet_address: str | None = Query(default=None, min_length=8),
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
@@ -208,6 +237,7 @@ def list_bots(
             user_id=user.user_id,
         )
     }
+    performances = await asyncio.gather(*[_build_runtime_performance(runtimes.get(row["id"])) for row in definitions])
     return [
         BotFleetItemResponse.model_validate(
             {
@@ -221,9 +251,10 @@ def list_bots(
                 "authoring_mode": row["authoring_mode"],
                 "updated_at": row["updated_at"],
                 "runtime": runtimes.get(row["id"]),
+                "performance": performances[index],
             }
         )
-        for row in definitions
+        for index, row in enumerate(definitions)
     ]
 
 
@@ -488,7 +519,7 @@ def get_runtime_metrics(
 
 
 @router.get("/{bot_id}/runtime-overview", response_model=RuntimeOverviewResponse)
-def get_runtime_overview(
+async def get_runtime_overview(
     bot_id: str,
     wallet_address: str | None = Query(default=None, min_length=8),
     db: Session = Depends(get_db),
@@ -504,7 +535,15 @@ def get_runtime_overview(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return RuntimeOverviewResponse.model_validate(payload)
+    performance = await _build_runtime_performance(
+        bot_runtime_engine.get_runtime(
+            db,
+            bot_id=bot_id,
+            wallet_address=resolved_wallet,
+            user_id=user.user_id,
+        )
+    )
+    return RuntimeOverviewResponse.model_validate({**payload, "performance": performance})
 
 
 @router.get("/{bot_id}/risk-state", response_model=RuntimeRiskStateResponse)

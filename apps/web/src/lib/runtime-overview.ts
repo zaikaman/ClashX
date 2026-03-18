@@ -1,3 +1,5 @@
+import type { BotPerformance } from "@/lib/bot-performance";
+
 export type RuntimeHealth = {
   runtime_id: string | null;
   health: string;
@@ -37,4 +39,5 @@ export type RuntimeMetrics = {
 export type RuntimeOverview = {
   health: RuntimeHealth;
   metrics: RuntimeMetrics;
+  performance: BotPerformance | null;
 };

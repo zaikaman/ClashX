@@ -15,6 +15,7 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { useClashxAuth } from "@/lib/clashx-auth";
+import type { BotPerformance } from "@/lib/bot-performance";
 
 type RuntimeSummary = {
   id: string;
@@ -36,6 +37,7 @@ type BotFleetItem = {
   market_scope: string;
   updated_at: string;
   runtime?: RuntimeSummary | null;
+  performance?: BotPerformance | null;
 };
 
 type StatusFilter = "all" | "active" | "paused" | "stopped" | "draft";
@@ -106,6 +108,14 @@ function humanize(value: string) {
 
 function authoringLabel() {
   return "Builder";
+}
+
+function formatSignedAmount(value: number) {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
+}
+
+function performanceTone(value: number) {
+  return value >= 0 ? "text-[#74b97f]" : "text-[#dce85d]";
 }
 
 function getBotStatus(bot: BotFleetItem): Exclude<StatusFilter, "all"> {
@@ -205,25 +215,43 @@ function MetaBadge({ label }: { label: string }) {
 
 function FleetRowSkeleton() {
   return (
-    <article className="grid gap-4 rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-4 py-4 md:px-5 md:py-5 xl:grid-cols-[auto_minmax(0,1.5fr)_minmax(16rem,0.9fr)_minmax(14rem,0.8fr)_auto] xl:items-start">
-      <div className="skeleton h-10 w-10 rounded-2xl" />
-      <div className="grid gap-3">
-        <div className="flex items-center gap-3">
-          <div className="skeleton h-6 w-48 rounded-md" />
-          <div className="skeleton h-5 w-16 rounded-full" />
-          <div className="skeleton h-5 w-14 rounded-full" />
+    <article className="grid gap-6 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-6 xl:grid-cols-[auto_1fr_auto] xl:items-start">
+      <div className="skeleton h-6 w-6 rounded-md" />
+      <div className="grid gap-8 xl:grid-cols-[1.5fr_2fr]">
+        <div className="grid gap-4">
+          <div className="flex items-center gap-3">
+            <div className="skeleton h-7 w-48 rounded-none" />
+            <div className="skeleton h-5 w-16 rounded-full" />
+            <div className="skeleton h-5 w-14 rounded-full" />
+          </div>
+          <div className="skeleton h-4 w-4/5 rounded-none" />
+          <div className="flex gap-2">
+            <div className="skeleton h-5 w-24 rounded-full" />
+            <div className="skeleton h-5 w-32 rounded-full" />
+          </div>
         </div>
-        <div className="skeleton h-4 w-4/5 rounded-md" />
-        <div className="flex gap-2">
-          <div className="skeleton h-5 w-24 rounded-full" />
-          <div className="skeleton h-5 w-32 rounded-full" />
+        
+        <div className="grid grid-cols-3 gap-6 pt-2">
+          <div className="grid gap-3">
+            <div className="skeleton h-3 w-16 rounded-none" />
+            <div className="skeleton h-6 w-24 rounded-none" />
+            <div className="skeleton h-3 w-32 rounded-none" />
+          </div>
+          <div className="grid gap-3">
+            <div className="skeleton h-3 w-16 rounded-none" />
+            <div className="skeleton h-6 w-24 rounded-none" />
+            <div className="skeleton h-3 w-32 rounded-none" />
+          </div>
+          <div className="grid gap-3">
+            <div className="skeleton h-3 w-16 rounded-none" />
+            <div className="skeleton h-6 w-24 rounded-none" />
+            <div className="skeleton h-3 w-32 rounded-none" />
+          </div>
         </div>
       </div>
-      <div className="skeleton h-28 rounded-2xl" />
-      <div className="skeleton h-28 rounded-2xl" />
-      <div className="flex gap-2 xl:justify-end">
-        <div className="skeleton h-10 w-28 rounded-full" />
-        <div className="skeleton h-10 w-28 rounded-full" />
+      <div className="mt-6 flex flex-col items-end gap-3 xl:mt-0">
+        <div className="skeleton h-8 w-28 rounded-none" />
+        <div className="skeleton h-8 w-28 rounded-none" />
       </div>
     </article>
   );
@@ -901,10 +929,10 @@ export function BotsFleetPage() {
                   <article
                     key={bot.id}
                     className={joinClasses(
-                      "stagger-in grid gap-4 rounded-[1.75rem] border px-4 py-4 transition-colors duration-200 md:px-5 md:py-5 xl:grid-cols-[auto_minmax(0,1.5fr)_minmax(16rem,0.9fr)_minmax(14rem,0.8fr)_auto] xl:items-start",
+                      "stagger-in group relative grid gap-6 rounded-[2rem] border bg-[#16181a] p-6 transition duration-300 xl:grid-cols-[auto_1fr_auto] xl:items-start",
                       selected
-                        ? "border-[#dce85d]/28 bg-[#1a1d16]"
-                        : "border-[rgba(255,255,255,0.06)] bg-[#16181a] hover:border-[rgba(255,255,255,0.12)] hover:bg-neutral-900",
+                        ? "border-[#dce85d]/40"
+                        : "border-[rgba(255,255,255,0.06)] hover:border-[rgba(255,255,255,0.12)]"
                     )}
                     style={{ animationDelay: `${index * 35}ms` }}
                   >
@@ -912,98 +940,101 @@ export function BotsFleetPage() {
                       type="button"
                       onClick={() => toggleBotSelection(bot.id)}
                       className={joinClasses(
-                        "flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-2xl border transition-all duration-200",
+                        "mt-1 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md border transition-all duration-200",
                         selected
-                          ? "border-[#dce85d]/40 bg-[#dce85d] text-[#090a0a] shadow-[0_0_15px_rgba(220,232,93,0.14)]"
-                          : "border-[rgba(255,255,255,0.08)] bg-[#0f1112] text-transparent hover:border-[rgba(255,255,255,0.18)]",
+                          ? "border-[#dce85d] bg-[#dce85d] text-[#090a0a]"
+                          : "border-[rgba(255,255,255,0.15)] bg-transparent text-transparent group-hover:border-[rgba(255,255,255,0.3)]"
                       )}
                       aria-label={selected ? `Deselect ${bot.name}` : `Select ${bot.name}`}
                     >
-                      <Check className={joinClasses("h-4.5 w-4.5 transition-transform duration-200", selected ? "scale-100" : "scale-50")} strokeWidth={3} />
+                      <Check className={joinClasses("h-3.5 w-3.5 transition-transform duration-200", selected ? "scale-100" : "scale-50")} strokeWidth={4} />
                     </button>
-                    <div className="grid gap-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Link
-                          href={`/bots/${bot.id}`}
-                          className="font-mono text-xl font-bold uppercase tracking-tight text-neutral-50 transition hover:text-[#dce85d]"
-                        >
-                          {bot.name}
-                        </Link>
-                        <StatusBadge status={status} />
-                        <MetaBadge label={authoringLabel()} />
-                        <MetaBadge label={bot.visibility} />
-                        <Link
-                          href={`/build?botId=${encodeURIComponent(bot.id)}`}
-                          className="rounded-full border border-[rgba(220,232,93,0.24)] px-2.5 py-1 text-[0.55rem] font-semibold uppercase tracking-[0.16em] text-[#dce85d] transition hover:border-[#dce85d] hover:bg-[#dce85d]/8"
-                        >
-                          Edit in builder
-                        </Link>
-                      </div>
-                      <p className="max-w-3xl text-sm leading-7 text-neutral-400">
-                        {bot.description || "No description yet."}
-                      </p>
-                      <div className="flex flex-wrap gap-2 text-xs text-neutral-400">
-                        <MetaBadge label={`Strategy ${humanize(bot.strategy_type)}`} />
-                        <MetaBadge label={bot.market_scope} />
-                      </div>
-                    </div>
 
-                    <div className={joinClasses("grid gap-2 rounded-2xl border px-4 py-4", meta.panelClassName)}>
-                      <span className="label text-neutral-400">Runtime state</span>
-                      <div className="font-mono text-lg font-bold uppercase text-neutral-50">{meta.label}</div>
-                      <p className="text-xs leading-6 text-neutral-400">{meta.note}</p>
-                      <div className="text-xs text-neutral-500">
-                        {bot.runtime?.updated_at
-                          ? `Runtime updated ${dateFormatter.format(new Date(bot.runtime.updated_at))}`
-                          : "Not deployed from this wallet yet"}
-                      </div>
-                    </div>
-
-                    <div className="grid gap-2 rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#101214] px-4 py-4">
-                      <span className="label text-neutral-400">Last changed</span>
-                      <div className="text-sm font-semibold text-neutral-50">
-                        {dateFormatter.format(new Date(bot.updated_at))}
-                      </div>
-                      <div className="text-xs leading-6 text-neutral-500">
-                        {bot.runtime?.deployed_at
-                          ? `Deployed ${dateFormatter.format(new Date(bot.runtime.deployed_at))}`
-                          : "Draft updated only"}
-                      </div>
-                      {bot.runtime?.stopped_at ? (
-                        <div className="text-xs leading-6 text-neutral-500">
-                          Stopped {dateFormatter.format(new Date(bot.runtime.stopped_at))}
+                    <div className="grid gap-8 xl:grid-cols-[1.5fr_2fr] xl:items-start">
+                      <div className="grid gap-4">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <Link
+                            href={`/bots/${bot.id}`}
+                            className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50 transition hover:text-[#dce85d]"
+                          >
+                            {bot.name}
+                          </Link>
+                          <StatusBadge status={status} />
+                          <MetaBadge label={bot.visibility} />
                         </div>
-                      ) : null}
+                        <p className="line-clamp-2 max-w-lg text-sm leading-relaxed text-neutral-400">
+                          {bot.description || "No description yet."}
+                        </p>
+                        <div className="flex flex-wrap gap-2 text-[0.6rem] uppercase tracking-[0.16em]">
+                          <span className="text-neutral-500">MKT: <span className="text-neutral-300">{bot.market_scope}</span></span>
+                          <span className="text-neutral-600">|</span>
+                          <span className="text-neutral-500">STR: <span className="text-neutral-300">{humanize(bot.strategy_type)}</span></span>
+                          <span className="text-neutral-600">|</span>
+                          <span className="text-neutral-500">BLD: <span className="text-neutral-300">{authoringLabel()}</span></span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-x-8 gap-y-6 md:grid-cols-3">
+                        <div className="grid gap-2">
+                          <span className="text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Runtime</span>
+                          <div className={joinClasses("font-mono text-[1.1rem] font-bold uppercase tracking-tight", status === "active" ? "text-[#74b97f]" : status === "paused" ? "text-[#dce85d]" : "text-neutral-100")}>
+                            {meta.label}
+                          </div>
+                          <div className="text-[0.6rem] uppercase tracking-[0.08em] text-neutral-400">
+                            {bot.runtime?.updated_at ? dateFormatter.format(new Date(bot.runtime.updated_at)) : "Draft mode"}
+                          </div>
+                        </div>
+
+                        <div className="grid gap-2">
+                          <span className="text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Performance</span>
+                          <div className={joinClasses("font-mono text-[1.1rem] font-bold uppercase tracking-tight", bot.performance ? performanceTone(bot.performance.pnl_total) : "text-neutral-100")}>
+                            {bot.performance ? formatSignedAmount(bot.performance.pnl_total) : "—"}
+                          </div>
+                          <div className="text-[0.6rem] uppercase tracking-[0.08em] text-neutral-400">
+                            {bot.performance ? `${bot.performance.positions.length} Live Pos` : "Awaiting data"}
+                          </div>
+                        </div>
+
+                        <div className="grid gap-2 col-span-2 md:col-span-1 border-t border-[rgba(255,255,255,0.06)] pt-4 md:border-t-0 md:pt-0">
+                          <span className="text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Latest</span>
+                          <div className="font-mono text-[1.1rem] font-bold uppercase tracking-tight text-neutral-50">
+                            {bot.runtime?.deployed_at ? "Deployed" : bot.runtime?.stopped_at ? "Stopped" : "Edited"}
+                          </div>
+                          <div className="text-[0.6rem] uppercase tracking-[0.08em] text-neutral-400">
+                            {dateFormatter.format(new Date(bot.runtime?.deployed_at || bot.runtime?.stopped_at || bot.updated_at))}
+                          </div>
+                        </div>
+                      </div>
                     </div>
 
-                    <div className="flex flex-wrap gap-2 xl:justify-end">
+                    <div className="mt-4 flex flex-wrap gap-3 xl:mt-0 xl:flex-col xl:items-end">
                       <button
                         type="button"
                         onClick={() => void runSingleAction(bot, primaryAction.action)}
                         disabled={busy}
                         className={joinClasses(
-                          "inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-[0.68rem] font-semibold uppercase tracking-[0.16em] transition disabled:cursor-not-allowed disabled:opacity-50",
+                          "inline-flex items-center gap-2 border px-4 py-2 text-[0.6rem] font-bold uppercase tracking-[0.16em] transition disabled:cursor-not-allowed disabled:opacity-50",
                           primaryAction.action === "stop"
-                            ? "border border-[rgba(255,255,255,0.12)] text-neutral-300 hover:border-[#74b97f] hover:text-[#74b97f]"
-                            : "bg-[#dce85d] text-[#090a0a] hover:bg-[#e8f06d]",
+                            ? "border-[rgba(255,255,255,0.15)] bg-transparent text-neutral-300 hover:border-[#74b97f] hover:text-[#74b97f]"
+                            : "border-[#dce85d] bg-[#dce85d] text-[#090a0a] hover:border-[#e8f06d] hover:bg-[#e8f06d]",
                         )}
                       >
-                        {primaryAction.action === "stop" ? <Power className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                        {primaryAction.action === "stop" ? <Power className="h-3 w-3" /> : <Play className="h-3 w-3" />}
                         {primaryAction.label}
                       </button>
                       <Link
                         href={`/bots/${bot.id}`}
-                        className="inline-flex items-center gap-2 rounded-full border border-[rgba(255,255,255,0.12)] px-5 py-2.5 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-white hover:text-neutral-50"
+                        className="inline-flex items-center gap-2 border border-[rgba(255,255,255,0.15)] bg-transparent px-4 py-2 text-[0.6rem] font-bold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-white hover:text-neutral-50"
                       >
-                        Open desk
-                        <ArrowUpRight className="h-3.5 w-3.5" />
+                        Desk
+                        <ArrowUpRight className="h-3 w-3" />
                       </Link>
                       <Link
                         href={`/build?botId=${encodeURIComponent(bot.id)}`}
-                        className="inline-flex items-center gap-2 rounded-full border border-[rgba(220,232,93,0.24)] px-5 py-2.5 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-[#dce85d] transition hover:border-[#dce85d] hover:bg-[#dce85d]/8"
+                        className="inline-flex items-center gap-2 border border-[rgba(255,255,255,0.15)] bg-transparent px-4 py-2 text-[0.6rem] font-bold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d]"
                       >
-                        Edit draft
-                        <ArrowUpRight className="h-3.5 w-3.5" />
+                        Edit
+                        <ArrowUpRight className="h-3 w-3" />
                       </Link>
                     </div>
                   </article>
