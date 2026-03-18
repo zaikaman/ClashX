@@ -117,6 +117,7 @@ class FakePacificaClient:
                 }
             ],
         }
+        self.live_positions: dict[str, list[dict[str, Any]]] = {}
 
     async def get_order_history_by_id(self, order_id: int) -> list[dict[str, Any]]:
         return deepcopy(self.order_history.get(order_id, []))
@@ -128,7 +129,7 @@ class FakePacificaClient:
         ]
 
     async def get_positions(self, wallet_address: str) -> list[dict[str, Any]]:
-        raise AssertionError(f"Wallet-wide positions should not be used for bot metrics ({wallet_address})")
+        return deepcopy(self.live_positions.get(wallet_address, []))
 
 
 def _tables() -> dict[str, list[dict[str, Any]]]:
@@ -228,6 +229,22 @@ async def _noop_publish(*args: Any, **kwargs: Any) -> None:
 def test_runtime_performance_is_scoped_to_each_runtime() -> None:
     fake_supabase = FakeSupabaseRestClient(_tables())
     fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = [
+        {
+            "symbol": "BTC",
+            "side": "bid",
+            "amount": 1.0,
+            "entry_price": 100.0,
+            "mark_price": 110.0,
+        },
+        {
+            "symbol": "ETH",
+            "side": "bid",
+            "amount": 2.0,
+            "entry_price": 50.0,
+            "mark_price": 40.0,
+        },
+    ]
     service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=fake_supabase)
 
     runtime_a = fake_supabase.maybe_one("bot_runtimes", filters={"id": "runtime-a"})
@@ -242,9 +259,85 @@ def test_runtime_performance_is_scoped_to_each_runtime() -> None:
     assert performance_b["pnl_total"] == -20.0
 
 
+def test_runtime_performance_falls_back_when_order_history_fill_amounts_are_zero() -> None:
+    fake_supabase = FakeSupabaseRestClient(
+        {
+            "bot_execution_events": [
+                {
+                    "id": "event-a",
+                    "runtime_id": "runtime-a",
+                    "event_type": "action.executed",
+                    "decision_summary": "btc fill",
+                    "request_payload": {"type": "open_long", "symbol": "BTC", "size_usd": 100},
+                    "result_payload": {
+                        "response": {"order_id": 11},
+                        "execution_meta": {
+                            "symbol": "BTC",
+                            "side": "bid",
+                            "amount": 1.0,
+                            "reduce_only": False,
+                            "reference_price": 100.0,
+                        },
+                    },
+                    "status": "success",
+                    "error_reason": None,
+                    "created_at": "2026-03-17T00:00:00+00:00",
+                }
+            ]
+        }
+    )
+    fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = [
+        {
+            "symbol": "BTC",
+            "side": "bid",
+            "amount": 1.0,
+            "entry_price": 100.0,
+            "mark_price": 110.0,
+        }
+    ]
+    fake_pacifica.order_history[11] = [
+        {
+            "history_id": 101,
+            "order_id": 11,
+            "symbol": "BTC",
+            "side": "bid",
+            "price": 101.0,
+            "amount": 0.0,
+            "reduce_only": False,
+            "event_type": "fulfill_market",
+            "created_at": "2026-03-17T00:00:00+00:00",
+        }
+    ]
+    service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=fake_supabase)
+
+    performance = asyncio.run(service.calculate_runtime_performance({"id": "runtime-a", "wallet_address": "shared-wallet"}))
+
+    assert performance["positions"][0]["symbol"] == "BTC"
+    assert performance["positions"][0]["amount"] == 1.0
+    assert performance["positions"][0]["entry_price"] == 100.0
+    assert performance["pnl_total"] == 10.0
+
+
 def test_public_bot_leaderboard_ranks_runtime_specific_results(monkeypatch: Any) -> None:
     fake_supabase = FakeSupabaseRestClient(_tables())
     fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = [
+        {
+            "symbol": "BTC",
+            "side": "bid",
+            "amount": 1.0,
+            "entry_price": 100.0,
+            "mark_price": 110.0,
+        },
+        {
+            "symbol": "ETH",
+            "side": "bid",
+            "amount": 2.0,
+            "entry_price": 50.0,
+            "mark_price": 40.0,
+        },
+    ]
     engine = BotLeaderboardEngine(pacifica_client=fake_pacifica)
     engine.supabase = fake_supabase
     engine.performance_service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=fake_supabase)
@@ -260,6 +353,22 @@ def test_public_bot_leaderboard_ranks_runtime_specific_results(monkeypatch: Any)
 def test_mirror_preview_uses_runtime_positions_not_wallet_positions() -> None:
     fake_supabase = FakeSupabaseRestClient(_tables())
     fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = [
+        {
+            "symbol": "BTC",
+            "side": "bid",
+            "amount": 1.0,
+            "entry_price": 100.0,
+            "mark_price": 110.0,
+        },
+        {
+            "symbol": "ETH",
+            "side": "bid",
+            "amount": 9.0,
+            "entry_price": 50.0,
+            "mark_price": 60.0,
+        }
+    ]
     engine = BotLeaderboardEngine(pacifica_client=fake_pacifica)
     engine.supabase = fake_supabase
     engine.performance_service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=fake_supabase)
@@ -279,3 +388,17 @@ def test_mirror_preview_uses_runtime_positions_not_wallet_positions() -> None:
     assert len(preview["mirrored_positions"]) == 1
     assert preview["mirrored_positions"][0]["symbol"] == "BTC"
     assert preview["mirrored_positions"][0]["size_source"] == 1.0
+
+
+def test_runtime_performance_uses_live_positions_to_drop_manually_closed_exposure() -> None:
+    fake_supabase = FakeSupabaseRestClient(_tables())
+    fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = []
+    service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=fake_supabase)
+
+    runtime_a = fake_supabase.maybe_one("bot_runtimes", filters={"id": "runtime-a"})
+    performance_a = asyncio.run(service.calculate_runtime_performance(runtime_a))
+
+    assert performance_a["positions"] == []
+    assert performance_a["pnl_unrealized"] == 0.0
+    assert performance_a["pnl_total"] == 0.0

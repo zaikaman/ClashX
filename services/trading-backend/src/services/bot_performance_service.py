@@ -43,6 +43,7 @@ class BotPerformanceService:
             realized_pnl += event_realized
 
         market_lookup = await self._load_market_lookup()
+        live_position_lookup, live_positions_loaded = await self._load_live_position_lookup(runtime)
         open_positions: list[dict[str, Any]] = []
         unrealized_pnl = 0.0
         for symbol, state in positions.items():
@@ -50,11 +51,29 @@ class BotPerformanceService:
             entry_price = float(state.get("entry_price") or 0.0)
             if abs(quantity) <= 1e-12 or entry_price <= 0:
                 continue
-            mark_price = float((market_lookup.get(symbol) or {}).get("mark_price") or 0.0)
-            if mark_price <= 0:
-                mark_price = entry_price
+            live_position = live_position_lookup.get(symbol)
+            if live_position is not None:
+                live_amount = abs(float(live_position.get("amount") or 0.0))
+                live_side = self._normalize_position_side(live_position.get("side"))
+                runtime_side = "long" if quantity > 0 else "short"
+                if live_amount <= 1e-12 or live_side != runtime_side:
+                    continue
+                size = min(abs(quantity), live_amount)
+                if size <= 1e-12:
+                    continue
+                live_entry_price = float(live_position.get("entry_price") or 0.0)
+                live_mark_price = float(live_position.get("mark_price") or 0.0)
+                if live_entry_price > 0:
+                    entry_price = live_entry_price
+                mark_price = live_mark_price if live_mark_price > 0 else live_entry_price
+            elif live_positions_loaded:
+                continue
+            else:
+                size = abs(quantity)
+                mark_price = float((market_lookup.get(symbol) or {}).get("mark_price") or 0.0)
+                if mark_price <= 0:
+                    mark_price = entry_price
             side = "long" if quantity > 0 else "short"
-            size = abs(quantity)
             pnl = (mark_price - entry_price) * size if quantity > 0 else (entry_price - mark_price) * size
             unrealized_pnl += pnl
             open_positions.append(
@@ -85,8 +104,9 @@ class BotPerformanceService:
         if order_id is not None:
             if order_id not in order_history_cache:
                 order_history_cache[order_id] = await self._load_order_history(order_id)
-            if order_history_cache[order_id]:
-                return order_history_cache[order_id]
+            fills = [row for row in order_history_cache[order_id] if self._is_usable_fill(row)]
+            if fills:
+                return fills
         fallback = self._build_fallback_fill(event)
         return [fallback] if fallback is not None else []
 
@@ -109,6 +129,23 @@ class BotPerformanceService:
             for item in markets
             if isinstance(item, dict)
         }
+
+    async def _load_live_position_lookup(self, runtime: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], bool]:
+        wallet_address = str(runtime.get("wallet_address") or "").strip()
+        if not wallet_address:
+            return {}, False
+        try:
+            positions = await self._pacifica.get_positions(wallet_address)
+        except PacificaClientError:
+            return {}, False
+        return (
+            {
+            self._normalize_symbol(item.get("symbol")): item
+            for item in positions
+            if isinstance(item, dict) and self._normalize_symbol(item.get("symbol"))
+            },
+            True,
+        )
 
     def _apply_fill(self, positions: dict[str, dict[str, float]], fill: dict[str, Any]) -> dict[str, Any]:
         symbol = self._normalize_symbol(fill.get("symbol"))
@@ -206,6 +243,15 @@ class BotPerformanceService:
         event_type = str(row.get("event_type") or "").lower()
         return event_type not in {"", "make", "cancel", "cancelled"}
 
+    @classmethod
+    def _is_usable_fill(cls, row: dict[str, Any]) -> bool:
+        if not cls._is_fill_event(row):
+            return False
+        side = str(row.get("side") or "").lower().strip()
+        amount = cls._to_float(row.get("amount"))
+        price = cls._to_float(row.get("price"))
+        return side in {"bid", "ask", "long", "short"} and amount > 0 and price > 0
+
     @staticmethod
     def _compute_win_streak(close_events: list[dict[str, Any]]) -> int:
         streak = 0
@@ -220,6 +266,15 @@ class BotPerformanceService:
     @staticmethod
     def _normalize_symbol(value: Any) -> str:
         return str(value or "").upper().replace("-PERP", "").strip()
+
+    @staticmethod
+    def _normalize_position_side(value: Any) -> str:
+        normalized = str(value or "").lower().strip()
+        if normalized in {"bid", "long", "buy"}:
+            return "long"
+        if normalized in {"ask", "short", "sell"}:
+            return "short"
+        return normalized
 
     @staticmethod
     def _to_float(value: Any) -> float:
