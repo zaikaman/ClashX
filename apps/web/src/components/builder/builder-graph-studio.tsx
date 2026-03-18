@@ -128,6 +128,15 @@ type PortableBuilderDraft = {
     };
   };
 };
+type RuntimeControlPreset = "guarded" | "balanced" | "aggressive";
+type RuntimeControlsFormState = {
+  maxLeverage: number;
+  maxOrderSizeUsd: number;
+  allocatedCapitalUsd: number;
+  cooldownSeconds: number;
+  maxDrawdownPct: number;
+  sizingMode: "fixed_usd" | "risk_adjusted";
+};
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const nodeTypes = { builderNode: BuilderFlowNodeCard };
@@ -162,6 +171,53 @@ const ACTION_CATEGORIES = [
     keys: ["close_position", "set_tpsl", "update_leverage", "cancel_order", "cancel_twap_order", "cancel_all_orders"]
   }
 ];
+const DEFAULT_RUNTIME_CONTROLS: RuntimeControlsFormState = {
+  maxLeverage: 5,
+  maxOrderSizeUsd: 200,
+  allocatedCapitalUsd: 200,
+  cooldownSeconds: 45,
+  maxDrawdownPct: 18,
+  sizingMode: "fixed_usd",
+};
+const RUNTIME_CONTROL_PRESETS: Array<{
+  id: RuntimeControlPreset;
+  label: string;
+  description: string;
+  values: RuntimeControlsFormState;
+}> = [
+    {
+      id: "guarded",
+      label: "Guarded",
+      description: "Lower leverage, slower re-entry, tighter drawdown cap.",
+      values: {
+        maxLeverage: 3,
+        maxOrderSizeUsd: 120,
+        allocatedCapitalUsd: 150,
+        cooldownSeconds: 120,
+        maxDrawdownPct: 10,
+        sizingMode: "fixed_usd",
+      },
+    },
+    {
+      id: "balanced",
+      label: "Balanced",
+      description: "A steady default for most momentum and swing bots.",
+      values: DEFAULT_RUNTIME_CONTROLS,
+    },
+    {
+      id: "aggressive",
+      label: "Aggressive",
+      description: "Higher leverage and faster cycling for advanced setups.",
+      values: {
+        maxLeverage: 8,
+        maxOrderSizeUsd: 350,
+        allocatedCapitalUsd: 400,
+        cooldownSeconds: 20,
+        maxDrawdownPct: 24,
+        sizingMode: "risk_adjusted",
+      },
+    },
+  ];
 
 function BlockCategory({
   title,
@@ -382,6 +438,28 @@ function summarizeMarketScope(selectedSymbols: string[], availableSymbols: strin
   return `${selectedSymbols.length} Pacifica markets`;
 }
 
+function buildRiskPolicyPayload(selectedSymbols: string[], runtimeControls: RuntimeControlsFormState) {
+  return {
+    max_leverage: runtimeControls.maxLeverage,
+    max_order_size_usd: runtimeControls.maxOrderSizeUsd,
+    allocated_capital_usd: runtimeControls.allocatedCapitalUsd,
+    cooldown_seconds: runtimeControls.cooldownSeconds,
+    max_drawdown_pct: runtimeControls.maxDrawdownPct,
+    allowed_symbols: selectedSymbols,
+    sizing_mode: runtimeControls.sizingMode,
+  };
+}
+
+function validateRuntimeControls(preset: RuntimeControlPreset | null, runtimeControls: RuntimeControlsFormState) {
+  if (!preset) return "Choose a runtime profile before deploying.";
+  if (runtimeControls.maxLeverage < 1) return "Max leverage must be at least 1.";
+  if (runtimeControls.maxOrderSizeUsd < 1) return "Max order size must be greater than 0.";
+  if (runtimeControls.allocatedCapitalUsd < 1) return "Allocated capital must be greater than 0.";
+  if (runtimeControls.cooldownSeconds < 0) return "Cooldown cannot be negative.";
+  if (runtimeControls.maxDrawdownPct < 0) return "Max drawdown cannot be negative.";
+  return null;
+}
+
 function buildPersistedGraph(nodes: BuilderFlowNode[], edges: BuilderFlowEdge[], selectedSymbols: string[]) {
   const serializedNodes = nodes.map((node) => serializeGraphNode(node));
   const universeSymbols = selectedSymbols.filter(Boolean);
@@ -517,6 +595,10 @@ export function BuilderGraphStudio({
   const [savedBots, setSavedBots] = useState<SavedBuilderBot[]>([]);
   const [savedBotsLoading, setSavedBotsLoading] = useState(false);
   const [savedBotsOpen, setSavedBotsOpen] = useState(false);
+  const [runtimeControlsOpen, setRuntimeControlsOpen] = useState(false);
+  const [runtimePreset, setRuntimePreset] = useState<RuntimeControlPreset | null>(null);
+  const [runtimeControls, setRuntimeControls] = useState<RuntimeControlsFormState>({ ...DEFAULT_RUNTIME_CONTROLS });
+  const [runtimeControlsError, setRuntimeControlsError] = useState<string | null>(null);
 
   useEffect(() => {
     if (authenticatedWallet) setWalletAddress(authenticatedWallet);
@@ -829,7 +911,7 @@ export function BuilderGraphStudio({
     conditionTitle(option).toLowerCase().includes(blockSearch.toLowerCase()) ||
     conditionHelper(option).toLowerCase().includes(blockSearch.toLowerCase())
   );
-  
+
   const filteredActions = ACTION_OPTIONS.filter((option) =>
     actionTitle(option).toLowerCase().includes(blockSearch.toLowerCase()) ||
     actionHelper(option).toLowerCase().includes(blockSearch.toLowerCase())
@@ -1297,7 +1379,7 @@ export function BuilderGraphStudio({
     }
   }
 
-  async function deployBot() {
+  function openDeployModal() {
     if (!authenticated) return void login();
     const blocker = getBuilderBlocker("deploy");
     if (blocker) {
@@ -1308,18 +1390,54 @@ export function BuilderGraphStudio({
       }
       return void setError(blocker);
     }
+    setError(null);
+    setRuntimeControlsError(null);
+    setRuntimeControlsOpen(true);
+  }
+
+  function closeRuntimeControlsModal() {
+    if (status === "deploying") return;
+    setRuntimeControlsOpen(false);
+    setRuntimeControlsError(null);
+  }
+
+  function selectRuntimePreset(presetId: RuntimeControlPreset) {
+    const preset = RUNTIME_CONTROL_PRESETS.find((candidate) => candidate.id === presetId);
+    if (!preset) return;
+    setRuntimePreset(preset.id);
+    setRuntimeControls({ ...preset.values });
+    setRuntimeControlsError(null);
+  }
+
+  function updateRuntimeControl<K extends keyof RuntimeControlsFormState>(key: K, value: RuntimeControlsFormState[K]) {
+    setRuntimeControls((current) => ({ ...current, [key]: value }));
+    setRuntimeControlsError(null);
+  }
+
+  async function deployBot() {
+    const runtimeBlocker = validateRuntimeControls(runtimePreset, runtimeControls);
+    if (runtimeBlocker) {
+      setRuntimeControlsError(runtimeBlocker);
+      return;
+    }
+
     setStatus("deploying");
     setError(null);
+    setRuntimeControlsError(null);
     try {
       const botId = await persistBotDraft();
       const response = await fetch(`${API_BASE_URL}/api/bots/${botId}/deploy`, {
         method: "POST",
         headers: await getAuthHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ wallet_address: walletAddress.trim(), risk_policy_json: { max_leverage: 5, max_order_size_usd: 200, allocated_capital_usd: 200, cooldown_seconds: 45, max_drawdown_pct: 18 } }),
+        body: JSON.stringify({
+          wallet_address: walletAddress.trim(),
+          risk_policy_json: buildRiskPolicyPayload(selectedMarketSymbols, runtimeControls),
+        }),
       });
       const payload = (await response.json()) as { status?: string; detail?: string };
       if (!response.ok) throw new Error(payload.detail ?? "Deploy failed");
       setRuntimeStatus(payload.status ?? "active");
+      setRuntimeControlsOpen(false);
       onNotice?.({
         eyebrow: "Deployed",
         title: "Bot is live",
@@ -1343,9 +1461,9 @@ export function BuilderGraphStudio({
               Bot Builder
             </h1>
             <div className="h-6 w-px bg-[rgba(255,255,255,0.06)]"></div>
-            
-             {/* Builder Mode Toggle */}
-             <div className="flex items-center gap-2 bg-neutral-900 border border-[rgba(255,255,255,0.06)] rounded-md p-1">
+
+            {/* Builder Mode Toggle */}
+            <div className="flex items-center gap-2 bg-neutral-900 border border-[rgba(255,255,255,0.06)] rounded-md p-1">
               <button
                 type="button"
                 onClick={() => setBuilderMode("visual")}
@@ -1376,36 +1494,36 @@ export function BuilderGraphStudio({
           </div>
 
           <div className="flex items-center gap-3 flex-1 justify-end max-w-4xl">
-             <input
-               ref={importInputRef}
-               type="file"
-               accept="application/json,.json"
-               onChange={importDraft}
-               className="hidden"
-             />
-             <div className="flex items-center gap-3 flex-1">
-               <input 
-                 value={name}
-                 onChange={(e) => setName(e.target.value)}
-                 placeholder="Enter Strategy Name..."
-                 className="bg-neutral-900 border border-[rgba(255,255,255,0.06)] rounded-md px-3 py-1.5 text-sm text-neutral-50 w-full focus:outline-none focus:border-[#dce85d] transition-colors"
-               />
-               <button
-                 type="button"
-                 onClick={createNewBotDraft}
-                 className="flex h-9 items-center gap-2 rounded-md border border-[rgba(255,255,255,0.08)] bg-neutral-900 px-3 text-sm font-semibold text-neutral-200 transition-all hover:border-[rgba(220,232,93,0.34)] hover:text-white"
-               >
-                 <Plus className="w-4 h-4" />
-                 New
-               </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json,.json"
+              onChange={importDraft}
+              className="hidden"
+            />
+            <div className="flex items-center gap-3 flex-1">
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Enter Strategy Name..."
+                className="bg-neutral-900 border border-[rgba(255,255,255,0.06)] rounded-md px-3 py-1.5 text-sm text-neutral-50 w-full focus:outline-none focus:border-[#dce85d] transition-colors"
+              />
+              <button
+                type="button"
+                onClick={createNewBotDraft}
+                className="flex h-9 items-center gap-2 rounded-md border border-[rgba(255,255,255,0.08)] bg-neutral-900 px-3 text-sm font-semibold text-neutral-200 transition-all hover:border-[rgba(220,232,93,0.34)] hover:text-white"
+              >
+                <Plus className="w-4 h-4" />
+                New
+              </button>
               <button
                 type="button"
                 onClick={() => setSavedBotsOpen((current) => !current)}
                 className={clsx(
-                   "flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-semibold transition-all",
-                   savedBotsOpen
-                     ? "border-[rgba(220,232,93,0.34)] bg-[rgba(220,232,93,0.08)] text-[#dce85d]"
-                     : "border-[rgba(255,255,255,0.08)] bg-neutral-900 text-neutral-200 hover:border-[rgba(220,232,93,0.34)] hover:text-white",
+                  "flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-semibold transition-all",
+                  savedBotsOpen
+                    ? "border-[rgba(220,232,93,0.34)] bg-[rgba(220,232,93,0.08)] text-[#dce85d]"
+                    : "border-[rgba(255,255,255,0.08)] bg-neutral-900 text-neutral-200 hover:border-[rgba(220,232,93,0.34)] hover:text-white",
                 )}
               >
                 <RefreshCcw className="w-4 h-4" />
@@ -1424,43 +1542,43 @@ export function BuilderGraphStudio({
               >
                 {status === "creating" ? "Saving..." : "Save"}
               </button>
-               <button
-                 type="button"
-                 onClick={exportDraft}
-                 className="flex h-9 items-center gap-2 rounded-md border border-[rgba(255,255,255,0.08)] bg-neutral-900 px-3 text-sm font-semibold text-neutral-200 transition-all hover:border-[rgba(116,185,127,0.34)] hover:text-white"
-               >
-                 <Download className="w-4 h-4" />
-                 Export
-               </button>
-               <button
-                 type="button"
-                 onClick={() => importInputRef.current?.click()}
-                 className="flex h-9 items-center gap-2 rounded-md border border-[rgba(255,255,255,0.08)] bg-neutral-900 px-3 text-sm font-semibold text-neutral-200 transition-all hover:border-[rgba(220,232,93,0.34)] hover:text-white"
-               >
-                 <Upload className="w-4 h-4" />
-                 Import
-               </button>
-             </div>
-             <button
-               onClick={deployBot}
-               disabled={status === "deploying"}
-               className={clsx(
-                 "flex items-center gap-2 h-9 px-4 rounded-md text-sm font-semibold transition-all whitespace-nowrap",
-                 status === "deploying"
-                   ? "bg-neutral-800 text-neutral-500"
-                   : "bg-[#dce85d] text-[#090a0a] hover:bg-[#e8f06d]"
-               )}
-             >
-               <Play className="w-4 h-4" />
-               {status === "deploying" ? "Deploying..." : "Deploy Bot"}
-             </button>
-             <button
-               type="button"
-               onClick={onOpenOnboardingGuide}
-               className="flex h-9 items-center rounded-md border border-[rgba(255,255,255,0.08)] bg-neutral-900 px-3 text-sm font-semibold text-neutral-200 transition-all hover:border-[rgba(220,232,93,0.34)] hover:text-white whitespace-nowrap"
-             >
-               Pacifica setup
-             </button>
+              <button
+                type="button"
+                onClick={exportDraft}
+                className="flex h-9 items-center gap-2 rounded-md border border-[rgba(255,255,255,0.08)] bg-neutral-900 px-3 text-sm font-semibold text-neutral-200 transition-all hover:border-[rgba(116,185,127,0.34)] hover:text-white"
+              >
+                <Download className="w-4 h-4" />
+                Export
+              </button>
+              <button
+                type="button"
+                onClick={() => importInputRef.current?.click()}
+                className="flex h-9 items-center gap-2 rounded-md border border-[rgba(255,255,255,0.08)] bg-neutral-900 px-3 text-sm font-semibold text-neutral-200 transition-all hover:border-[rgba(220,232,93,0.34)] hover:text-white"
+              >
+                <Upload className="w-4 h-4" />
+                Import
+              </button>
+            </div>
+            <button
+              onClick={openDeployModal}
+              disabled={status === "deploying"}
+              className={clsx(
+                "flex items-center gap-2 h-9 px-4 rounded-md text-sm font-semibold transition-all whitespace-nowrap",
+                status === "deploying"
+                  ? "bg-neutral-800 text-neutral-500"
+                  : "bg-[#dce85d] text-[#090a0a] hover:bg-[#e8f06d]"
+              )}
+            >
+              <Play className="w-4 h-4" />
+              {status === "deploying" ? "Deploying..." : "Deploy Bot"}
+            </button>
+            <button
+              type="button"
+              onClick={onOpenOnboardingGuide}
+              className="flex h-9 items-center rounded-md border border-[rgba(255,255,255,0.08)] bg-neutral-900 px-3 text-sm font-semibold text-neutral-200 transition-all hover:border-[rgba(220,232,93,0.34)] hover:text-white whitespace-nowrap"
+            >
+              Pacifica setup
+            </button>
           </div>
         </div>
       </div>
@@ -1540,6 +1658,186 @@ export function BuilderGraphStudio({
                   );
                 })
               )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {runtimeControlsOpen ? (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-[rgba(3,4,4,0.76)] px-4 py-8 backdrop-blur-sm">
+          <div
+            className="absolute inset-0"
+            onClick={closeRuntimeControlsModal}
+            aria-hidden="true"
+          />
+          <div className="relative z-10 w-full max-w-4xl overflow-hidden rounded-[2rem] border border-[rgba(220,232,93,0.24)] bg-[linear-gradient(180deg,rgba(18,20,18,0.98),rgba(9,10,10,0.99))] shadow-[0_28px_90px_rgba(0,0,0,0.56)]">
+            <div className="grid gap-6 border-b border-[rgba(255,255,255,0.06)] px-6 py-6 lg:grid-cols-[1.15fr_0.85fr]">
+              <div>
+                <div className="text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-[#dce85d]">Runtime controls</div>
+                <h2 className="mt-2 text-2xl font-semibold text-neutral-50">Choose how this bot behaves once it goes live.</h2>
+                <p className="mt-3 max-w-2xl text-sm leading-6 text-neutral-400">
+                  Pick a runtime profile, then fine-tune the guardrails. Deployment stays locked until you make that choice.
+                </p>
+              </div>
+              <div className="rounded-[1.5rem] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] p-5">
+                <div className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">Launch summary</div>
+                <div className="mt-3 text-lg font-semibold text-neutral-50">{name.trim() || "Untitled bot"}</div>
+                <div className="mt-2 text-sm leading-6 text-neutral-400">
+                  {selectedMarketSymbols.length > 0 ? selectedMarketSymbols.join(", ") : "No markets selected"}
+                </div>
+                <div className="mt-4 grid gap-2 text-xs text-neutral-500">
+                  <div className="flex items-center justify-between gap-4">
+                    <span>Capital at work</span>
+                    <span className="text-neutral-300">${runtimeControls.allocatedCapitalUsd}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-4">
+                    <span>Max leverage</span>
+                    <span className="text-neutral-300">{runtimeControls.maxLeverage}x</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-4">
+                    <span>Cooldown</span>
+                    <span className="text-neutral-300">{runtimeControls.cooldownSeconds}s</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-6 px-6 py-6 lg:grid-cols-[1.15fr_0.85fr]">
+              <div>
+                <div className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">Pick a profile</div>
+                <div className="mt-3 grid gap-3 md:grid-cols-3">
+                  {RUNTIME_CONTROL_PRESETS.map((preset) => {
+                    const selected = runtimePreset === preset.id;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => selectRuntimePreset(preset.id)}
+                        className={clsx(
+                          "rounded-[1.35rem] border p-4 text-left transition-all",
+                          selected
+                            ? "border-[rgba(220,232,93,0.42)] bg-[rgba(220,232,93,0.08)]"
+                            : "border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] hover:border-[rgba(220,232,93,0.22)]",
+                        )}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-sm font-semibold text-neutral-50">{preset.label}</span>
+                          {selected ? (
+                            <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#dce85d] text-[#090a0a]">
+                              <Check className="h-3.5 w-3.5" />
+                            </div>
+                          ) : null}
+                        </div>
+                        <p className="mt-2 text-sm leading-6 text-neutral-400">{preset.description}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-6 grid gap-3 sm:grid-cols-2">
+                  <label className="grid gap-1.5 text-sm text-neutral-400">
+                    Max leverage
+                    <input
+                      type="number"
+                      min={1}
+                      value={runtimeControls.maxLeverage}
+                      onChange={(event) => updateRuntimeControl("maxLeverage", Number(event.target.value))}
+                      className="w-full rounded-xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+                    />
+                  </label>
+                  <label className="grid gap-1.5 text-sm text-neutral-400">
+                    Max order size USD
+                    <input
+                      type="number"
+                      min={1}
+                      value={runtimeControls.maxOrderSizeUsd}
+                      onChange={(event) => updateRuntimeControl("maxOrderSizeUsd", Number(event.target.value))}
+                      className="w-full rounded-xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+                    />
+                  </label>
+                  <label className="grid gap-1.5 text-sm text-neutral-400">
+                    Allocated capital USD
+                    <input
+                      type="number"
+                      min={1}
+                      value={runtimeControls.allocatedCapitalUsd}
+                      onChange={(event) => updateRuntimeControl("allocatedCapitalUsd", Number(event.target.value))}
+                      className="w-full rounded-xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+                    />
+                  </label>
+                  <label className="grid gap-1.5 text-sm text-neutral-400">
+                    Cooldown seconds
+                    <input
+                      type="number"
+                      min={0}
+                      value={runtimeControls.cooldownSeconds}
+                      onChange={(event) => updateRuntimeControl("cooldownSeconds", Number(event.target.value))}
+                      className="w-full rounded-xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+                    />
+                  </label>
+                  <label className="grid gap-1.5 text-sm text-neutral-400">
+                    Max drawdown %
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.1"
+                      value={runtimeControls.maxDrawdownPct}
+                      onChange={(event) => updateRuntimeControl("maxDrawdownPct", Number(event.target.value))}
+                      className="w-full rounded-xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+                    />
+                  </label>
+                  <label className="grid gap-1.5 text-sm text-neutral-400">
+                    Sizing mode
+                    <select
+                      value={runtimeControls.sizingMode}
+                      onChange={(event) => updateRuntimeControl("sizingMode", event.target.value as RuntimeControlsFormState["sizingMode"])}
+                      className="w-full rounded-xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+                    >
+                      <option value="fixed_usd">fixed usd</option>
+                      <option value="risk_adjusted">risk adjusted</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+
+              <div className="flex h-full flex-col rounded-[1.5rem] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] p-5">
+                <div className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">Risk policy preview</div>
+                <pre className="mt-4 flex-1 overflow-auto rounded-[1.15rem] border border-[rgba(255,255,255,0.06)] bg-[#090a0a] p-4 text-xs leading-6 text-neutral-300">
+                  {JSON.stringify(buildRiskPolicyPayload(selectedMarketSymbols, runtimeControls), null, 2)}
+                </pre>
+                {runtimeControlsError ? (
+                  <p className="mt-4 text-sm text-[#dce85d]">{runtimeControlsError}</p>
+                ) : (
+                  <p className="mt-4 text-sm leading-6 text-neutral-500">
+                    These controls are sent with the deploy request and become the bot&apos;s live runtime guardrails.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-3 border-t border-[rgba(255,255,255,0.06)] px-6 py-5">
+              <button
+                type="button"
+                onClick={closeRuntimeControlsModal}
+                disabled={status === "deploying"}
+                className="flex h-10 items-center rounded-full border border-[rgba(255,255,255,0.1)] px-4 text-sm font-semibold text-neutral-300 transition hover:border-[rgba(255,255,255,0.18)] hover:text-white disabled:opacity-60"
+              >
+                Back to builder
+              </button>
+              <button
+                type="button"
+                onClick={() => void deployBot()}
+                disabled={status === "deploying"}
+                className={clsx(
+                  "flex h-10 items-center gap-2 rounded-full px-5 text-sm font-semibold transition-all",
+                  status === "deploying"
+                    ? "bg-neutral-800 text-neutral-500"
+                    : "bg-[#dce85d] text-[#090a0a] hover:bg-[#e8f06d]",
+                )}
+              >
+                <Play className="h-4 w-4" />
+                {status === "deploying" ? "Deploying..." : "Deploy with runtime controls"}
+              </button>
             </div>
           </div>
         </div>
@@ -1726,7 +2024,7 @@ export function BuilderGraphStudio({
         </div>
 
         {/* Center - Canvas */}
-        <div 
+        <div
           className="flex-1 relative bg-[#090a0a]"
           onDragOver={handlePaneDragOver}
           onDrop={onPaneDrop}
@@ -1790,12 +2088,12 @@ export function BuilderGraphStudio({
           >
             <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="rgba(255,255,255,0.08)" />
             <Controls className="!bg-secondary !border-[rgba(255,255,255,0.08)] !shadow-xl !flex !flex-col !gap-1 !p-1 [&_button]:!bg-transparent [&_button]:!border-none [&_button]:!rounded-md hover:[&_button]:!bg-white/10 [&_button_svg]:!fill-neutral-400" />
-            <MiniMap 
-               className="!bg-secondary !border-[rgba(255,255,255,0.06)] rounded-lg overflow-hidden" 
-               nodeColor={(node) => {
-                  return node.data?.kind === 'condition' ? '#dce85d' : '#74b97f';
-               }}
-               maskColor="rgba(9, 10, 10, 0.7)"
+            <MiniMap
+              className="!bg-secondary !border-[rgba(255,255,255,0.06)] rounded-lg overflow-hidden"
+              nodeColor={(node) => {
+                return node.data?.kind === 'condition' ? '#dce85d' : '#74b97f';
+              }}
+              maskColor="rgba(9, 10, 10, 0.7)"
             />
           </ReactFlow>
         </div>
@@ -1834,7 +2132,7 @@ export function BuilderGraphStudio({
           <div className="border-b border-[rgba(255,255,255,0.06)]">
             <div className="p-4 bg-transparent">
               <h2 className="text-sm font-semibold text-neutral-50 mb-4">Bot Configuration</h2>
-              
+
               <div className="space-y-4">
                 <div>
                   <label className="block text-xs font-medium text-neutral-400 mb-1.5">Description</label>
@@ -1846,7 +2144,7 @@ export function BuilderGraphStudio({
                     className="w-full px-3 py-2 bg-neutral-800 border border-[rgba(255,255,255,0.06)] rounded-md text-neutral-50 text-xs focus:outline-none focus:border-[#dce85d] resize-none transition-colors"
                   />
                 </div>
-                
+
                 <div>
                   <div className="mb-1.5 flex items-center justify-between gap-3">
                     <label className="block text-xs font-medium text-neutral-400">Market Universe</label>
@@ -2818,7 +3116,7 @@ export function BuilderGraphStudio({
           <div className="border-b border-[rgba(255,255,255,0.06)]">
             <div className="p-4 bg-transparent">
               <h2 className="text-sm font-semibold text-neutral-50 mb-4">Execution Guardrails</h2>
-              
+
               <div className="grid gap-4">
                 <div>
                   <label className="block text-xs font-medium text-neutral-400 mb-1.5">Owner Wallet</label>
@@ -2830,7 +3128,7 @@ export function BuilderGraphStudio({
                     className="w-full px-3 py-2 bg-neutral-800 border border-[rgba(255,255,255,0.06)] rounded-md text-neutral-50 text-xs focus:outline-none text-neutral-400 transition-colors"
                   />
                 </div>
-                
+
                 <div>
                   <label className="block text-xs font-medium text-neutral-400 mb-1.5">Visibility</label>
                   <select
@@ -2843,38 +3141,38 @@ export function BuilderGraphStudio({
                     <option value="unlisted">Unlisted (Link only)</option>
                   </select>
                 </div>
-                
+
                 <div className="mt-2 bg-app border border-[rgba(255,255,255,0.06)] rounded-lg p-3">
                   <div className="flex items-center justify-between mb-2">
-                     <span className="text-xs font-medium text-neutral-300">Readiness Score</span>
-                     <span className="text-xs font-bold text-[#dce85d]">{readyCount}/4</span>
+                    <span className="text-xs font-medium text-neutral-300">Readiness Score</span>
+                    <span className="text-xs font-bold text-[#dce85d]">{readyCount}/4</span>
                   </div>
                   <div className="w-full bg-neutral-800 rounded-full h-1.5">
-                     <div className="bg-[#dce85d] h-1.5 rounded-full" style={{ width: `${(readyCount / 4) * 100}%` }}></div>
+                    <div className="bg-[#dce85d] h-1.5 rounded-full" style={{ width: `${(readyCount / 4) * 100}%` }}></div>
                   </div>
                 </div>
               </div>
-              
+
               <div className="mt-6 pt-4 border-t border-[rgba(255,255,255,0.06)]">
-                 {onboardingStatus.blocker ? (
-                   <button
-                     type="button"
-                     onClick={onOpenOnboardingGuide}
-                     className="mb-3 w-full rounded-lg border border-[rgba(220,232,93,0.24)] bg-[rgba(220,232,93,0.08)] px-3 py-2 text-left text-xs leading-5 text-[#dce85d] transition hover:bg-[rgba(220,232,93,0.12)]"
-                   >
-                     {onboardingStatus.blocker}
-                   </button>
-                 ) : null}
-                 <button
-                   onClick={createBot}
-                   disabled={status === "creating"}
-                   className={clsx(
-                     "w-full flex justify-center items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all",
-                     status === "creating" ? "bg-neutral-800 text-neutral-500" : "bg-white/5 text-white hover:bg-white/10"
-                   )}
-                 >
-                   {status === "creating" ? "Saving..." : createdBotId ? "Update Draft" : "Save Sandbox Draft"}
-                 </button>
+                {onboardingStatus.blocker ? (
+                  <button
+                    type="button"
+                    onClick={onOpenOnboardingGuide}
+                    className="mb-3 w-full rounded-lg border border-[rgba(220,232,93,0.24)] bg-[rgba(220,232,93,0.08)] px-3 py-2 text-left text-xs leading-5 text-[#dce85d] transition hover:bg-[rgba(220,232,93,0.12)]"
+                  >
+                    {onboardingStatus.blocker}
+                  </button>
+                ) : null}
+                <button
+                  onClick={createBot}
+                  disabled={status === "creating"}
+                  className={clsx(
+                    "w-full flex justify-center items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all",
+                    status === "creating" ? "bg-neutral-800 text-neutral-500" : "bg-white/5 text-white hover:bg-white/10"
+                  )}
+                >
+                  {status === "creating" ? "Saving..." : createdBotId ? "Update Draft" : "Save Sandbox Draft"}
+                </button>
               </div>
             </div>
           </div>

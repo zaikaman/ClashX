@@ -44,6 +44,7 @@ class BotRuntimeWorker:
         if self._task and not self._task.done():
             return self._task
         self._running = True
+        logger.info("Starting bot runtime worker with poll interval %.1fs", self.poll_interval_seconds)
         self._task = asyncio.create_task(self.run_forever(), name="bot-runtime-worker")
         return self._task
 
@@ -53,6 +54,7 @@ class BotRuntimeWorker:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
+        logger.info("Stopped bot runtime worker")
 
     async def run_forever(self) -> None:
         while self._running:
@@ -80,6 +82,11 @@ class BotRuntimeWorker:
         now = datetime.now(tz=UTC)
         bot = self._supabase.maybe_one("bot_definitions", filters={"id": runtime["bot_definition_id"]})
         if bot is None:
+            logger.error(
+                "Runtime %s failed because bot definition %s was not found",
+                runtime["id"],
+                runtime["bot_definition_id"],
+            )
             runtime = self._update_runtime(runtime, {"status": "failed", "updated_at": now})
             self._engine.append_execution_event(
                 None,
@@ -117,6 +124,11 @@ class BotRuntimeWorker:
         runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
         drawdown_reason = self._risk.drawdown_breach_reason(policy=runtime_policy, runtime_state=runtime_state)
         if drawdown_reason is not None:
+            logger.warning(
+                "Runtime %s stopped by risk policy: %s",
+                runtime["id"],
+                drawdown_reason,
+            )
             runtime = self._update_runtime(
                 runtime,
                 {
@@ -148,6 +160,11 @@ class BotRuntimeWorker:
 
         credentials = self._auth.get_trading_credentials(None, runtime["wallet_address"])
         if credentials is None:
+            logger.warning(
+                "Runtime %s paused because delegated Pacifica authorization is missing for wallet %s",
+                runtime["id"],
+                runtime["wallet_address"],
+            )
             runtime = self._update_runtime(runtime, {"status": "paused", "updated_at": now})
             self._engine.append_execution_event(
                 None,
@@ -178,9 +195,18 @@ class BotRuntimeWorker:
         if not evaluation.get("triggered"):
             return
 
+        actions = evaluation.get("actions") or []
+        logger.info(
+            "Runtime %s triggered for bot %s on wallet %s with %d action(s)",
+            runtime["id"],
+            bot["id"],
+            runtime["wallet_address"],
+            len(actions),
+        )
+
         runtime_touched = False
         coordination = self._coordination if getattr(self._coordination, "_supabase", None) is self._supabase else WorkerCoordinationService(self._supabase)
-        for action in evaluation.get("actions") or []:
+        for action in actions:
             issues = self._risk.assess_action(policy=runtime_policy, action=action, runtime_state=runtime_state)
             if issues:
                 skipped_key = self._build_idempotency_key(
@@ -201,6 +227,13 @@ class BotRuntimeWorker:
                     channel=f"user:{runtime['user_id']}",
                     event="bot.execution.skipped",
                     payload=self._serialize_event_payload(event),
+                )
+                logger.warning(
+                    "Runtime %s skipped action %s for %s: %s",
+                    runtime["id"],
+                    action.get("type"),
+                    action.get("symbol"),
+                    "; ".join(issues),
                 )
                 continue
 
@@ -240,6 +273,12 @@ class BotRuntimeWorker:
                     event="bot.execution.success",
                     payload=self._serialize_event_payload(event),
                 )
+                logger.info(
+                    "Runtime %s executed action %s for %s successfully",
+                    runtime["id"],
+                    action.get("type"),
+                    action.get("symbol"),
+                )
             except (PacificaClientError, ValueError) as exc:
                 runtime_policy = self._risk.mark_execution(policy=runtime_policy, success=False)
                 runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
@@ -262,6 +301,13 @@ class BotRuntimeWorker:
                     channel=f"user:{runtime['user_id']}",
                     event="bot.execution.failed",
                     payload=self._serialize_event_payload(event),
+                )
+                logger.error(
+                    "Runtime %s failed action %s for %s: %s",
+                    runtime["id"],
+                    action.get("type"),
+                    action.get("symbol"),
+                    exc,
                 )
         if not runtime_touched:
             return
