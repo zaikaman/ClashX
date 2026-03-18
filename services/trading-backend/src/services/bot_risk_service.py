@@ -70,6 +70,12 @@ class BotRiskService:
         pending_entries = runtime_state.get("pending_entry_symbols")
         if not isinstance(pending_entries, dict):
             pending_entries = {}
+        managed_positions = runtime_state.get("managed_positions")
+        if not isinstance(managed_positions, dict):
+            managed_positions = {}
+        managed_position = managed_positions.get(symbol)
+        if not isinstance(managed_position, dict):
+            managed_position = {}
 
         allowed_symbols = normalized.get("allowed_symbols") or []
         if symbol and allowed_symbols and symbol not in allowed_symbols:
@@ -92,27 +98,45 @@ class BotRiskService:
                 f"requested size_usd {size_usd:g} exceeds max_order_size_usd {normalized['max_order_size_usd']:g}"
             )
         if action_type in {"open_long", "open_short", "place_market_order", "place_limit_order", "place_twap_order"}:
-            open_positions = sum(1 for item in positions.values() if abs(self._to_float(item.get("amount"), 0.0)) > 0)
+            open_positions = sum(
+                1
+                for item in managed_positions.values()
+                if isinstance(item, dict) and abs(self._to_float(item.get("amount"), 0.0)) > 0
+            )
             if open_positions >= normalized["max_open_positions"]:
                 issues.append(
                     f"max_open_positions {normalized['max_open_positions']} reached"
                 )
-            symbol_position = positions.get(symbol) or {}
-            if abs(self._to_float(symbol_position.get("amount"), 0.0)) > 0:
-                issues.append(f"existing open position on {symbol} blocks a new entry")
+            if abs(self._to_float(managed_position.get("amount"), 0.0)) > 0:
+                issues.append(f"bot already manages an open position on {symbol}")
             symbol_orders = open_orders.get(symbol) or []
-            if any(not self._to_bool(item.get("reduce_only"), False) for item in symbol_orders):
-                issues.append(f"existing open entry order on {symbol} blocks a new entry")
+            entry_client_order_id = str(managed_position.get("entry_client_order_id") or "").strip()
+            if entry_client_order_id and any(
+                str(item.get("client_order_id") or "").strip() == entry_client_order_id
+                and not self._to_bool(item.get("reduce_only"), False)
+                for item in symbol_orders
+            ):
+                issues.append(f"existing bot entry order on {symbol} is still open")
             if symbol and symbol in pending_entries:
                 issues.append(f"pending entry on {symbol} is still syncing")
 
         if action_type == "set_tpsl":
+            if abs(self._to_float(managed_position.get("amount"), 0.0)) <= 0:
+                issues.append(f"bot does not manage an open position on {symbol}")
             symbol_position = positions.get(symbol) or {}
             if abs(self._to_float(symbol_position.get("amount"), 0.0)) <= 0 and symbol in pending_entries:
                 issues.append(f"awaiting position sync on {symbol} before TP/SL")
             symbol_orders = open_orders.get(symbol) or []
-            if any(self._to_bool(item.get("reduce_only"), False) for item in symbol_orders):
+            take_profit_client_order_id = str(managed_position.get("take_profit_client_order_id") or "").strip()
+            stop_loss_client_order_id = str(managed_position.get("stop_loss_client_order_id") or "").strip()
+            if any(
+                str(item.get("client_order_id") or "").strip() in {take_profit_client_order_id, stop_loss_client_order_id}
+                for item in symbol_orders
+            ):
                 issues.append(f"existing protective order on {symbol} already covers this position")
+
+        if action_type == "close_position" and abs(self._to_float(managed_position.get("amount"), 0.0)) <= 0:
+            issues.append(f"bot does not manage an open position on {symbol}")
 
         drawdown_reason = self.drawdown_breach_reason(policy=normalized, runtime_state=runtime_state)
         if drawdown_reason is not None:

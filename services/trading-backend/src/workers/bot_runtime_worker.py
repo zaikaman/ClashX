@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import uuid
 from datetime import UTC, datetime
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from typing import Any
@@ -265,18 +266,26 @@ class BotRuntimeWorker:
 
             try:
                 response = await self._execute_action(
+                    runtime=runtime,
+                    runtime_state=cycle_runtime_state,
                     action=action,
                     credentials=credentials,
                     market_lookup=market_lookup,
                     position_lookup=position_lookup,
                 )
+                execution_meta = response.get("execution_meta") if isinstance(response.get("execution_meta"), dict) else {}
+                action_for_state = {**action, "_execution_meta": execution_meta}
+                if "take_profit_client_order_id" in execution_meta:
+                    action_for_state["_take_profit_client_order_id"] = execution_meta.get("take_profit_client_order_id")
+                if "stop_loss_client_order_id" in execution_meta:
+                    action_for_state["_stop_loss_client_order_id"] = execution_meta.get("stop_loss_client_order_id")
                 runtime_policy = self._risk.mark_execution(policy=runtime_policy, success=True)
                 persisted_runtime_state = (
                     runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
                 )
                 cycle_runtime_state = self._update_runtime_state_for_action(
                     runtime_state=cycle_runtime_state,
-                    action=action,
+                    action=action_for_state,
                     position_lookup=position_lookup,
                     open_order_lookup=open_order_lookup,
                     success=True,
@@ -357,6 +366,8 @@ class BotRuntimeWorker:
     async def _execute_action(
         self,
         *,
+        runtime: dict[str, Any] | None = None,
+        runtime_state: dict[str, Any] | None = None,
         action: dict[str, Any],
         credentials: dict[str, str],
         market_lookup: dict[str, dict[str, Any]],
@@ -364,6 +375,8 @@ class BotRuntimeWorker:
     ) -> dict[str, Any]:
         action_type = str(action.get("type") or "")
         symbol = self._normalize_symbol(action.get("symbol"))
+        runtime_state = runtime_state if isinstance(runtime_state, dict) else {}
+        runtime_id = str(runtime.get("id")) if isinstance(runtime, dict) else "runtime"
         payload: dict[str, Any] = {
             "account": credentials["account_address"],
             "agent_wallet": credentials["agent_wallet_address"],
@@ -382,6 +395,7 @@ class BotRuntimeWorker:
             reduce_only = self._to_bool(action.get("reduce_only"), False)
             reference_price = float((market_lookup.get(symbol) or {}).get("mark_price") or 0)
             amount = self._resolve_order_quantity(action=action, market_lookup=market_lookup, symbol=symbol, reference_price=None)
+            client_order_id = None if reduce_only else self._build_entry_client_order_id(runtime_id=runtime_id, symbol=symbol)
             if not reduce_only:
                 await self._ensure_leverage(
                     wallet_address=credentials["account_address"],
@@ -397,6 +411,7 @@ class BotRuntimeWorker:
                     "amount": amount,
                     "reduce_only": reduce_only,
                     "slippage_percent": float(action.get("slippage_percent") or 0.5),
+                    "client_order_id": client_order_id,
                 }
             )
             response["execution_meta"] = {
@@ -405,6 +420,7 @@ class BotRuntimeWorker:
                 "amount": amount,
                 "reduce_only": reduce_only,
                 "reference_price": reference_price,
+                "client_order_id": client_order_id,
             }
             return response
 
@@ -420,6 +436,9 @@ class BotRuntimeWorker:
             leverage = max(1, int(float(action.get("leverage") or 1)))
             reduce_only = self._to_bool(action.get("reduce_only"), False)
             amount = self._resolve_order_quantity(action=action, market_lookup=market_lookup, symbol=symbol, reference_price=price)
+            client_order_id = str(action.get("client_order_id") or "").strip() or (
+                None if reduce_only else self._build_entry_client_order_id(runtime_id=runtime_id, symbol=symbol)
+            )
             if not reduce_only:
                 await self._ensure_leverage(
                     wallet_address=credentials["account_address"],
@@ -436,7 +455,7 @@ class BotRuntimeWorker:
                     "price": price,
                     "tif": str(action.get("tif") or "GTC"),
                     "reduce_only": reduce_only,
-                    "client_order_id": action.get("client_order_id"),
+                    "client_order_id": client_order_id,
                 }
             )
             response["execution_meta"] = {
@@ -445,6 +464,7 @@ class BotRuntimeWorker:
                 "amount": amount,
                 "reduce_only": reduce_only,
                 "reference_price": price,
+                "client_order_id": client_order_id,
             }
             return response
 
@@ -459,6 +479,9 @@ class BotRuntimeWorker:
             reduce_only = self._to_bool(action.get("reduce_only"), False)
             reference_price = float((market_lookup.get(symbol) or {}).get("mark_price") or 0)
             amount = self._resolve_order_quantity(action=action, market_lookup=market_lookup, symbol=symbol, reference_price=None)
+            client_order_id = str(action.get("client_order_id") or "").strip() or (
+                None if reduce_only else self._build_entry_client_order_id(runtime_id=runtime_id, symbol=symbol)
+            )
             if not reduce_only:
                 await self._ensure_leverage(
                     wallet_address=credentials["account_address"],
@@ -475,7 +498,7 @@ class BotRuntimeWorker:
                     "reduce_only": reduce_only,
                     "duration_in_seconds": duration_seconds,
                     "slippage_percent": float(action.get("slippage_percent") or 0.5),
-                    "client_order_id": action.get("client_order_id"),
+                    "client_order_id": client_order_id,
                 }
             )
             response["execution_meta"] = {
@@ -484,16 +507,18 @@ class BotRuntimeWorker:
                 "amount": amount,
                 "reduce_only": reduce_only,
                 "reference_price": reference_price,
+                "client_order_id": client_order_id,
             }
             return response
 
         if action_type == "close_position":
             if not symbol:
                 raise ValueError("Close position requires a symbol")
+            managed_position = self._maybe_get_managed_position(runtime_state=runtime_state, symbol=symbol) or {}
             position = position_lookup.get(symbol)
             if not isinstance(position, dict):
                 raise ValueError(f"No open position to close for {symbol}")
-            amount = abs(float(position.get("amount") or 0))
+            amount = abs(float(managed_position.get("amount") or position.get("amount") or 0))
             if amount <= 0:
                 raise ValueError(f"No open position to close for {symbol}")
             side = str(position.get("side") or "").lower()
@@ -512,10 +537,11 @@ class BotRuntimeWorker:
             return response
 
         if action_type == "set_tpsl":
+            managed_position = self._maybe_get_managed_position(runtime_state=runtime_state, symbol=symbol) or {}
             position = position_lookup.get(symbol)
             if not isinstance(position, dict):
                 raise ValueError(f"No open position available for TP/SL on {symbol}")
-            amount = abs(float(position.get("amount") or 0))
+            amount = abs(float(managed_position.get("amount") or position.get("amount") or 0))
             market = self._resolve_market(market_lookup, symbol)
             mark_price = float(position.get("mark_price") or market.get("mark_price") or 0)
             tick_size = float(market.get("tick_size") or 0)
@@ -547,15 +573,36 @@ class BotRuntimeWorker:
                     tick_size=tick_size,
                     rounding=ROUND_UP,
                 )
-            return await self._pacifica.place_order(
+            take_profit_client_order_id, stop_loss_client_order_id = self._build_tpsl_client_order_ids(
+                runtime_id=runtime_id,
+                symbol=symbol,
+                managed_position=managed_position,
+            )
+            response = await self._pacifica.place_order(
                 {
                     "type": "set_position_tpsl",
                     **payload,
                     "side": close_side,
-                    "take_profit": {"stop_price": take_profit_price, "amount": amount},
-                    "stop_loss": {"stop_price": stop_loss_price, "amount": amount},
+                    "take_profit": {
+                        "stop_price": take_profit_price,
+                        "amount": amount,
+                        "client_order_id": take_profit_client_order_id,
+                    },
+                    "stop_loss": {
+                        "stop_price": stop_loss_price,
+                        "amount": amount,
+                        "client_order_id": stop_loss_client_order_id,
+                    },
                 }
             )
+            response["execution_meta"] = {
+                "symbol": symbol,
+                "side": close_side,
+                "amount": amount,
+                "take_profit_client_order_id": take_profit_client_order_id,
+                "stop_loss_client_order_id": stop_loss_client_order_id,
+            }
+            return response
 
         if action_type == "update_leverage":
             if not symbol:
@@ -772,6 +819,34 @@ class BotRuntimeWorker:
             next_state["pending_entry_symbols"] = synced_pending
         else:
             next_state.pop("pending_entry_symbols", None)
+        managed_positions = next_state.get("managed_positions")
+        if not isinstance(managed_positions, dict):
+            managed_positions = {}
+        reconciled_positions: dict[str, dict[str, Any]] = {}
+        for symbol, managed_position in managed_positions.items():
+            if not isinstance(managed_position, dict):
+                continue
+            wallet_position = position_lookup.get(symbol) or {}
+            wallet_amount = abs(float(wallet_position.get("amount") or 0.0))
+            managed_amount = abs(float(managed_position.get("amount") or 0.0))
+            if managed_amount <= 0:
+                continue
+            if wallet_amount <= 0:
+                if symbol in synced_pending:
+                    reconciled_positions[symbol] = dict(managed_position)
+                continue
+            side = str(wallet_position.get("side") or managed_position.get("side") or "").lower()
+            reconciled_positions[symbol] = {
+                **managed_position,
+                "side": side,
+                "mark_price": wallet_position.get("mark_price"),
+                "entry_price": managed_position.get("entry_price") or wallet_position.get("entry_price"),
+                "updated_at": datetime.now(tz=UTC).isoformat(),
+            }
+        if reconciled_positions:
+            next_state["managed_positions"] = reconciled_positions
+        else:
+            next_state.pop("managed_positions", None)
         return next_state
 
     def _update_runtime_state_for_action(
@@ -792,8 +867,45 @@ class BotRuntimeWorker:
         if success and symbol and action_type in {"open_long", "open_short", "place_market_order", "place_limit_order", "place_twap_order"}:
             if not self._to_bool(action.get("reduce_only"), False):
                 pending_entries[symbol] = datetime.now(tz=UTC).isoformat()
+                managed_positions = next_state.get("managed_positions")
+                if not isinstance(managed_positions, dict):
+                    managed_positions = {}
+                amount = float(((action.get("_execution_meta") or {}).get("amount")) or 0.0)
+                side = str(((action.get("_execution_meta") or {}).get("side")) or "").lower()
+                entry_client_order_id = str(((action.get("_execution_meta") or {}).get("client_order_id")) or "").strip()
+                if amount > 0 and entry_client_order_id:
+                    managed_positions[symbol] = {
+                        "symbol": symbol,
+                        "amount": amount,
+                        "side": side,
+                        "entry_client_order_id": entry_client_order_id,
+                        "entry_price": ((action.get("_execution_meta") or {}).get("reference_price")) or 0.0,
+                        "opened_at": datetime.now(tz=UTC).isoformat(),
+                        "updated_at": datetime.now(tz=UTC).isoformat(),
+                    }
+                    next_state["managed_positions"] = managed_positions
         if success and symbol and action_type == "close_position":
             pending_entries.pop(symbol, None)
+            managed_positions = next_state.get("managed_positions")
+            if isinstance(managed_positions, dict):
+                managed_positions.pop(symbol, None)
+                if managed_positions:
+                    next_state["managed_positions"] = managed_positions
+                else:
+                    next_state.pop("managed_positions", None)
+        if success and symbol and action_type == "set_tpsl":
+            managed_positions = next_state.get("managed_positions")
+            if not isinstance(managed_positions, dict):
+                managed_positions = {}
+            managed_position = managed_positions.get(symbol)
+            if isinstance(managed_position, dict):
+                managed_position = dict(managed_position)
+                managed_position["take_profit_client_order_id"] = str(action.get("_take_profit_client_order_id") or "").strip()
+                managed_position["stop_loss_client_order_id"] = str(action.get("_stop_loss_client_order_id") or "").strip()
+                managed_position["tpsl_set_at"] = datetime.now(tz=UTC).isoformat()
+                managed_position["updated_at"] = datetime.now(tz=UTC).isoformat()
+                managed_positions[symbol] = managed_position
+                next_state["managed_positions"] = managed_positions
         if pending_entries:
             next_state["pending_entry_symbols"] = pending_entries
         else:
@@ -810,6 +922,41 @@ class BotRuntimeWorker:
             return datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return None
+
+    @staticmethod
+    def _get_managed_position(*, runtime_state: dict[str, Any], symbol: str) -> dict[str, Any]:
+        managed_positions = runtime_state.get("managed_positions")
+        if not isinstance(managed_positions, dict):
+            raise ValueError(f"No bot-managed position available for {symbol}")
+        managed_position = managed_positions.get(symbol)
+        if not isinstance(managed_position, dict):
+            raise ValueError(f"No bot-managed position available for {symbol}")
+        return managed_position
+
+    @staticmethod
+    def _maybe_get_managed_position(*, runtime_state: dict[str, Any], symbol: str) -> dict[str, Any] | None:
+        managed_positions = runtime_state.get("managed_positions")
+        if not isinstance(managed_positions, dict):
+            return None
+        managed_position = managed_positions.get(symbol)
+        if not isinstance(managed_position, dict):
+            return None
+        return managed_position
+
+    @staticmethod
+    def _build_entry_client_order_id(*, runtime_id: str, symbol: str) -> str:
+        digest = hashlib.sha256(f"{runtime_id}:{symbol}:{uuid.uuid4().hex}".encode()).hexdigest()[:12]
+        return f"bot-{runtime_id.replace('-', '')[:10]}-{symbol.lower()}-en-{digest}"
+
+    @staticmethod
+    def _build_tpsl_client_order_ids(*, runtime_id: str, symbol: str, managed_position: dict[str, Any]) -> tuple[str, str]:
+        entry_client_order_id = str(managed_position.get("entry_client_order_id") or "").strip()
+        base = entry_client_order_id or f"bot-{runtime_id.replace('-', '')[:10]}-{symbol.lower()}-px"
+        digest = hashlib.sha256(f"{runtime_id}:{symbol}:{base}".encode()).hexdigest()[:8]
+        return (
+            f"{base[:32]}-tp-{digest}",
+            f"{base[:32]}-sl-{digest}",
+        )
 
     @staticmethod
     def _resolve_market(market_lookup: dict[str, dict[str, Any]], symbol: str) -> dict[str, Any]:

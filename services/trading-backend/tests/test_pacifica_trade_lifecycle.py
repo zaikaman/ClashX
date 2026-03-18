@@ -156,12 +156,17 @@ class FakePacificaClient:
         if request_type == "create_market_order":
             amount = float(payload.get("amount") or 0)
             side = str(payload.get("side") or "")
+            symbol = str(payload.get("symbol") or "")
             if payload.get("reduce_only"):
-                self._open_orders = []
+                self._open_orders = [
+                    item
+                    for item in self._open_orders
+                    if str(item.get("symbol") or "") != symbol
+                ]
                 self._fills.append(
                     {
                         "history_id": len(self._fills) + 1,
-                        "symbol": str(payload.get("symbol") or ""),
+                        "symbol": symbol,
                         "amount": amount,
                         "price": 105_000.0,
                         "fee": 0.0,
@@ -171,36 +176,62 @@ class FakePacificaClient:
                         "created_at": "2026-03-16T00:00:00Z",
                     }
                 )
-                self._position = None
+                if self._position and str(self._position.get("symbol") or "") == symbol:
+                    remaining = max(0.0, float(self._position.get("amount") or 0.0) - amount)
+                    if remaining > 0:
+                        self._position["amount"] = remaining
+                        self._position["updated_at"] = "2026-03-16T00:01:00Z"
+                    else:
+                        self._position = None
             else:
-                self._open_orders = []
-                self._position = {
-                    "symbol": str(payload.get("symbol") or ""),
-                    "side": side,
-                    "amount": amount,
-                    "entry_price": 105_000.0,
-                    "mark_price": 105_000.0,
-                    "margin": 105.0,
-                    "isolated": True,
-                    "created_at": "2026-03-16T00:00:00Z",
-                    "updated_at": "2026-03-16T00:00:00Z",
-                }
+                self._open_orders = [
+                    item
+                    for item in self._open_orders
+                    if not (
+                        str(item.get("symbol") or "") == symbol
+                        and not bool(item.get("reduce_only"))
+                    )
+                ]
+                if self._position and str(self._position.get("symbol") or "") == symbol and str(self._position.get("side") or "") == side:
+                    self._position["amount"] = float(self._position.get("amount") or 0.0) + amount
+                    self._position["updated_at"] = "2026-03-16T00:01:00Z"
+                else:
+                    self._position = {
+                        "symbol": symbol,
+                        "side": side,
+                        "amount": amount,
+                        "entry_price": 105_000.0,
+                        "mark_price": 105_000.0,
+                        "margin": 105.0,
+                        "isolated": True,
+                        "created_at": "2026-03-16T00:00:00Z",
+                        "updated_at": "2026-03-16T00:00:00Z",
+                    }
         if request_type == "set_position_tpsl":
             symbol = str(payload.get("symbol") or "")
             self._open_orders = [
+                item
+                for item in self._open_orders
+                if str(item.get("symbol") or "") != symbol or not bool(item.get("reduce_only"))
+            ]
+            self._open_orders.extend(
+                [
                 {
                     "symbol": symbol,
                     "reduce_only": True,
                     "kind": "take_profit",
                     "stop_price": payload.get("take_profit", {}).get("stop_price"),
+                    "client_order_id": payload.get("take_profit", {}).get("client_order_id"),
                 },
                 {
                     "symbol": symbol,
                     "reduce_only": True,
                     "kind": "stop_loss",
                     "stop_price": payload.get("stop_loss", {}).get("stop_price"),
+                    "client_order_id": payload.get("stop_loss", {}).get("client_order_id"),
                 },
-            ]
+                ]
+            )
 
         return {
             "status": "submitted",
@@ -456,7 +487,7 @@ def test_bot_risk_service_blocks_new_entry_when_max_open_positions_is_reached() 
     issues = risk.assess_action(
         policy={"max_open_positions": 1},
         action={"type": "open_long", "symbol": "ETH", "size_usd": 100, "leverage": 2},
-        runtime_state={},
+        runtime_state={"managed_positions": {"BTC": {"symbol": "BTC", "amount": 0.01}}},
         position_lookup={"BTC": {"symbol": "BTC", "amount": 0.01}},
     )
 
@@ -483,7 +514,10 @@ def test_bot_risk_service_waits_for_position_sync_before_setting_tpsl() -> None:
     issues = risk.assess_action(
         policy={},
         action={"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.8, "stop_loss_pct": 0.9},
-        runtime_state={"pending_entry_symbols": {"BTC": "2026-03-18T07:00:00+00:00"}},
+        runtime_state={
+            "pending_entry_symbols": {"BTC": "2026-03-18T07:00:00+00:00"},
+            "managed_positions": {"BTC": {"symbol": "BTC", "amount": 0.003}},
+        },
         position_lookup={},
         open_order_lookup={},
     )
@@ -670,3 +704,91 @@ def test_runtime_process_does_not_reenter_or_duplicate_tpsl_while_position_sync_
         "create_market_order",
         "set_position_tpsl",
     ]
+
+
+def test_two_bots_can_manage_separate_btc_slices_on_the_same_wallet(monkeypatch: Any) -> None:
+    monkeypatch.setattr("src.workers.bot_runtime_worker.broadcaster.publish", _noop_publish)
+
+    supabase = FakeSupabaseRestClient()
+    wallet_address = "wallet-1"
+    user_id = "user-1"
+    supabase.tables["bot_definitions"] = [
+        {
+            "id": "bot-1",
+            "user_id": user_id,
+            "wallet_address": wallet_address,
+            "rules_json": {
+                "conditions": [{"type": "price_below", "symbol": "BTC", "value": 200000}],
+                "actions": [
+                    {"type": "open_long", "symbol": "BTC", "size_usd": 105.0, "leverage": 3},
+                    {"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.8, "stop_loss_pct": 0.9},
+                ],
+            },
+        },
+        {
+            "id": "bot-2",
+            "user_id": user_id,
+            "wallet_address": wallet_address,
+            "rules_json": {
+                "conditions": [{"type": "price_below", "symbol": "BTC", "value": 200000}],
+                "actions": [
+                    {"type": "open_long", "symbol": "BTC", "size_usd": 105.0, "leverage": 3},
+                    {"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.8, "stop_loss_pct": 0.9},
+                ],
+            },
+        },
+    ]
+    supabase.tables["bot_runtimes"] = [
+        {
+            "id": "runtime-1",
+            "bot_definition_id": "bot-1",
+            "user_id": user_id,
+            "wallet_address": wallet_address,
+            "status": "active",
+            "mode": "live",
+            "risk_policy_json": {"max_open_positions": 1, "cooldown_seconds": 0},
+            "updated_at": "2026-03-18T07:00:00+00:00",
+        },
+        {
+            "id": "runtime-2",
+            "bot_definition_id": "bot-2",
+            "user_id": user_id,
+            "wallet_address": wallet_address,
+            "status": "active",
+            "mode": "live",
+            "risk_policy_json": {"max_open_positions": 1, "cooldown_seconds": 0},
+            "updated_at": "2026-03-18T07:00:00+00:00",
+        },
+    ]
+    supabase.tables["bot_execution_events"] = []
+
+    pacifica = FakePacificaClient()
+    pacifica._margin_settings = [{"symbol": "BTC", "isolated": False, "leverage": 3}]
+
+    worker = BotRuntimeWorker()
+    worker._supabase = supabase
+    worker._engine._supabase = supabase
+    worker._auth = FakeAuthService()
+    worker._pacifica = pacifica
+    worker._indicator_context = FakeIndicatorContextService()
+    worker._coordination = FakeCoordinationService()
+
+    async def fake_performance(runtime: dict[str, Any]) -> dict[str, Any]:
+        del runtime
+        return {"pnl_total": 0.0, "pnl_realized": 0.0, "pnl_unrealized": 0.0}
+
+    worker._calculate_runtime_performance = fake_performance  # type: ignore[method-assign]
+
+    asyncio.run(worker._process_runtime(None, supabase.tables["bot_runtimes"][0]))
+    asyncio.run(worker._process_runtime(None, supabase.tables["bot_runtimes"][1]))
+
+    assert [call.get("type") for call in pacifica.order_calls] == [
+        "create_market_order",
+        "set_position_tpsl",
+        "create_market_order",
+        "set_position_tpsl",
+    ]
+    assert pacifica.order_calls[1]["take_profit"]["amount"] == 0.003
+    assert pacifica.order_calls[3]["take_profit"]["amount"] == 0.003
+    assert pacifica._position is not None
+    assert pacifica._position["amount"] == 0.006
