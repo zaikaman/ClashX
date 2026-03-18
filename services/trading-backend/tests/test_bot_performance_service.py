@@ -118,6 +118,7 @@ class FakePacificaClient:
             ],
         }
         self.live_positions: dict[str, list[dict[str, Any]]] = {}
+        self.position_history: dict[str, list[dict[str, Any]]] = {}
 
     async def get_order_history_by_id(self, order_id: int) -> list[dict[str, Any]]:
         return deepcopy(self.order_history.get(order_id, []))
@@ -130,6 +131,10 @@ class FakePacificaClient:
 
     async def get_positions(self, wallet_address: str) -> list[dict[str, Any]]:
         return deepcopy(self.live_positions.get(wallet_address, []))
+
+    async def get_position_history(self, wallet_address: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        del limit, offset
+        return deepcopy(self.position_history.get(wallet_address, []))
 
 
 def _tables() -> dict[str, list[dict[str, Any]]]:
@@ -402,3 +407,41 @@ def test_runtime_performance_uses_live_positions_to_drop_manually_closed_exposur
     assert performance_a["positions"] == []
     assert performance_a["pnl_unrealized"] == 0.0
     assert performance_a["pnl_total"] == 0.0
+
+
+def test_runtime_performance_attributes_manual_close_realized_pnl_to_bot() -> None:
+    fake_supabase = FakeSupabaseRestClient(_tables())
+    fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = []
+    fake_pacifica.position_history["shared-wallet"] = [
+        {
+            "symbol": "BTC",
+            "amount": 1.0,
+            "price": 120.0,
+            "entry_price": 100.0,
+            "fee": 0.0,
+            "pnl": 20.0,
+            "event_type": "open_long",
+            "created_at": "2026-03-17T00:00:00+00:00",
+        },
+        {
+            "symbol": "BTC",
+            "amount": 1.0,
+            "price": 120.0,
+            "entry_price": 100.0,
+            "fee": 0.0,
+            "pnl": 20.0,
+            "event_type": "close_long",
+            "created_at": "2026-03-17T00:05:00+00:00",
+        },
+    ]
+    service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=fake_supabase)
+
+    runtime_a = fake_supabase.maybe_one("bot_runtimes", filters={"id": "runtime-a"})
+    performance_a = asyncio.run(service.calculate_runtime_performance(runtime_a))
+
+    assert performance_a["positions"] == []
+    assert performance_a["pnl_unrealized"] == 0.0
+    assert performance_a["pnl_realized"] == 20.0
+    assert performance_a["pnl_total"] == 20.0
+    assert performance_a["win_streak"] == 1
