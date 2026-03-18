@@ -108,6 +108,8 @@ class FakePacificaClient:
         self._position: dict[str, Any] | None = None
         self._fills: list[dict[str, Any]] = []
         self._margin_settings: list[dict[str, Any]] = []
+        self._open_orders: list[dict[str, Any]] = []
+        self._positions_visible = True
 
     async def get_account_info(self, wallet_address: str) -> dict[str, Any]:
         del wallet_address
@@ -130,13 +132,13 @@ class FakePacificaClient:
 
     async def get_positions(self, wallet_address: str) -> list[dict[str, Any]]:
         del wallet_address
-        if self._position is None:
+        if self._position is None or not self._positions_visible:
             return []
         return [deepcopy(self._position)]
 
     async def get_open_orders(self, wallet_address: str) -> list[dict[str, Any]]:
         del wallet_address
-        return []
+        return [deepcopy(item) for item in self._open_orders]
 
     async def get_position_history(self, wallet_address: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         del wallet_address, limit, offset
@@ -155,6 +157,7 @@ class FakePacificaClient:
             amount = float(payload.get("amount") or 0)
             side = str(payload.get("side") or "")
             if payload.get("reduce_only"):
+                self._open_orders = []
                 self._fills.append(
                     {
                         "history_id": len(self._fills) + 1,
@@ -170,6 +173,7 @@ class FakePacificaClient:
                 )
                 self._position = None
             else:
+                self._open_orders = []
                 self._position = {
                     "symbol": str(payload.get("symbol") or ""),
                     "side": side,
@@ -181,6 +185,22 @@ class FakePacificaClient:
                     "created_at": "2026-03-16T00:00:00Z",
                     "updated_at": "2026-03-16T00:00:00Z",
                 }
+        if request_type == "set_position_tpsl":
+            symbol = str(payload.get("symbol") or "")
+            self._open_orders = [
+                {
+                    "symbol": symbol,
+                    "reduce_only": True,
+                    "kind": "take_profit",
+                    "stop_price": payload.get("take_profit", {}).get("stop_price"),
+                },
+                {
+                    "symbol": symbol,
+                    "reduce_only": True,
+                    "kind": "stop_loss",
+                    "stop_price": payload.get("stop_loss", {}).get("stop_price"),
+                },
+            ]
 
         return {
             "status": "submitted",
@@ -443,6 +463,34 @@ def test_bot_risk_service_blocks_new_entry_when_max_open_positions_is_reached() 
     assert "max_open_positions 1 reached" in issues
 
 
+def test_bot_risk_service_blocks_new_entry_while_same_symbol_entry_is_pending() -> None:
+    risk = BotRiskService()
+
+    issues = risk.assess_action(
+        policy={"max_open_positions": 1},
+        action={"type": "open_long", "symbol": "BTC", "size_usd": 100, "leverage": 2},
+        runtime_state={"pending_entry_symbols": {"BTC": "2026-03-18T07:00:00+00:00"}},
+        position_lookup={},
+        open_order_lookup={},
+    )
+
+    assert "pending entry on BTC is still syncing" in issues
+
+
+def test_bot_risk_service_waits_for_position_sync_before_setting_tpsl() -> None:
+    risk = BotRiskService()
+
+    issues = risk.assess_action(
+        policy={},
+        action={"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.8, "stop_loss_pct": 0.9},
+        runtime_state={"pending_entry_symbols": {"BTC": "2026-03-18T07:00:00+00:00"}},
+        position_lookup={},
+        open_order_lookup={},
+    )
+
+    assert "awaiting position sync on BTC before TP/SL" in issues
+
+
 def test_runtime_process_allows_tpsl_immediately_after_entry(monkeypatch: Any) -> None:
     monkeypatch.setattr("src.workers.bot_runtime_worker.broadcaster.publish", _noop_publish)
 
@@ -553,3 +601,72 @@ def test_tpsl_idempotency_key_stays_stable_for_same_position_across_runtime_tick
     )
 
     assert first_key == second_key
+
+
+def test_runtime_process_does_not_reenter_or_duplicate_tpsl_while_position_sync_catches_up(monkeypatch: Any) -> None:
+    monkeypatch.setattr("src.workers.bot_runtime_worker.broadcaster.publish", _noop_publish)
+
+    supabase = FakeSupabaseRestClient()
+    bot_id = "bot-1"
+    runtime_id = "runtime-1"
+    wallet_address = "wallet-1"
+    user_id = "user-1"
+    supabase.tables["bot_definitions"] = [
+        {
+            "id": bot_id,
+            "user_id": user_id,
+            "wallet_address": wallet_address,
+            "rules_json": {
+                "conditions": [{"type": "price_below", "symbol": "BTC", "value": 200000}],
+                "actions": [
+                    {"type": "open_long", "symbol": "BTC", "size_usd": 105.0, "leverage": 3},
+                    {"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.8, "stop_loss_pct": 0.9},
+                ],
+            },
+        }
+    ]
+    supabase.tables["bot_runtimes"] = [
+        {
+            "id": runtime_id,
+            "bot_definition_id": bot_id,
+            "user_id": user_id,
+            "wallet_address": wallet_address,
+            "status": "active",
+            "mode": "live",
+            "risk_policy_json": {"max_open_positions": 1, "cooldown_seconds": 0},
+            "updated_at": "2026-03-18T07:00:00+00:00",
+        }
+    ]
+    supabase.tables["bot_execution_events"] = []
+
+    pacifica = FakePacificaClient()
+    pacifica._margin_settings = [{"symbol": "BTC", "isolated": False, "leverage": 3}]
+    pacifica._positions_visible = False
+
+    worker = BotRuntimeWorker()
+    worker._supabase = supabase
+    worker._engine._supabase = supabase
+    worker._auth = FakeAuthService()
+    worker._pacifica = pacifica
+    worker._indicator_context = FakeIndicatorContextService()
+    worker._coordination = FakeCoordinationService()
+
+    async def fake_performance(runtime: dict[str, Any]) -> dict[str, Any]:
+        del runtime
+        return {"pnl_total": 0.0, "pnl_realized": 0.0, "pnl_unrealized": 0.0}
+
+    worker._calculate_runtime_performance = fake_performance  # type: ignore[method-assign]
+
+    asyncio.run(worker._process_runtime(None, supabase.tables["bot_runtimes"][0]))
+    asyncio.run(worker._process_runtime(None, supabase.tables["bot_runtimes"][0]))
+
+    assert [call.get("type") for call in pacifica.order_calls] == ["create_market_order"]
+
+    pacifica._positions_visible = True
+    asyncio.run(worker._process_runtime(None, supabase.tables["bot_runtimes"][0]))
+    asyncio.run(worker._process_runtime(None, supabase.tables["bot_runtimes"][0]))
+
+    assert [call.get("type") for call in pacifica.order_calls] == [
+        "create_market_order",
+        "set_position_tpsl",
+    ]

@@ -22,6 +22,7 @@ from src.services.worker_coordination_service import WorkerCoordinationService
 
 
 logger = logging.getLogger(__name__)
+PENDING_ENTRY_TTL_SECONDS = 120
 
 
 class BotRuntimeWorker:
@@ -100,12 +101,14 @@ class BotRuntimeWorker:
             )
             return
 
-        markets, positions = await asyncio.gather(
+        markets, positions, open_orders = await asyncio.gather(
             self._safe_load(self._pacifica.get_markets, []),
             self._safe_load(lambda: self._pacifica.get_positions(runtime["wallet_address"]), []),
+            self._safe_load(lambda: self._pacifica.get_open_orders(runtime["wallet_address"]), []),
         )
         market_lookup = self._build_market_lookup(markets)
         position_lookup = self._build_position_lookup(positions)
+        open_order_lookup = self._build_open_order_lookup(open_orders)
         rules_json = bot["rules_json"] if isinstance(bot.get("rules_json"), dict) else {}
         candle_lookup = await self._indicator_context.load_candle_lookup(rules_json)
 
@@ -122,6 +125,12 @@ class BotRuntimeWorker:
             {"risk_policy_json": runtime_policy, "updated_at": now},
         )
         runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
+        runtime_state = self._reconcile_runtime_state(
+            runtime_state=runtime_state,
+            position_lookup=position_lookup,
+            open_order_lookup=open_order_lookup,
+        )
+        runtime_policy["_runtime_state"] = runtime_state
         drawdown_reason = self._risk.drawdown_breach_reason(policy=runtime_policy, runtime_state=runtime_state)
         if drawdown_reason is not None:
             logger.warning(
@@ -213,6 +222,7 @@ class BotRuntimeWorker:
                 action=action,
                 runtime_state=cycle_runtime_state,
                 position_lookup=position_lookup,
+                open_order_lookup=open_order_lookup,
             )
             if issues:
                 skipped_key = self._build_idempotency_key(
@@ -261,12 +271,34 @@ class BotRuntimeWorker:
                     position_lookup=position_lookup,
                 )
                 runtime_policy = self._risk.mark_execution(policy=runtime_policy, success=True)
-                runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
+                persisted_runtime_state = (
+                    runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
+                )
+                cycle_runtime_state = self._update_runtime_state_for_action(
+                    runtime_state=cycle_runtime_state,
+                    action=action,
+                    position_lookup=position_lookup,
+                    open_order_lookup=open_order_lookup,
+                    success=True,
+                )
+                runtime_policy["_runtime_state"] = {**persisted_runtime_state, **cycle_runtime_state}
                 runtime = self._update_runtime(
                     runtime,
                     {"risk_policy_json": runtime_policy, "updated_at": datetime.now(tz=UTC)},
                 )
                 position_lookup = await self._refresh_position_lookup(credentials["account_address"])
+                open_order_lookup = await self._refresh_open_order_lookup(credentials["account_address"])
+                cycle_runtime_state = self._reconcile_runtime_state(
+                    runtime_state=cycle_runtime_state,
+                    position_lookup=position_lookup,
+                    open_order_lookup=open_order_lookup,
+                )
+                runtime_policy["_runtime_state"] = {**persisted_runtime_state, **cycle_runtime_state}
+                runtime = self._update_runtime(
+                    runtime,
+                    {"risk_policy_json": runtime_policy, "updated_at": datetime.now(tz=UTC)},
+                )
+                runtime_state = runtime_policy["_runtime_state"]
                 runtime_touched = True
                 event = self._engine.append_execution_event(
                     None,
@@ -291,6 +323,7 @@ class BotRuntimeWorker:
             except (PacificaClientError, ValueError) as exc:
                 runtime_policy = self._risk.mark_execution(policy=runtime_policy, success=False)
                 runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
+                runtime_policy["_runtime_state"] = {**runtime_state, **cycle_runtime_state}
                 runtime = self._update_runtime(
                     runtime,
                     {"risk_policy_json": runtime_policy, "updated_at": datetime.now(tz=UTC)},
@@ -564,6 +597,10 @@ class BotRuntimeWorker:
         positions = await self._safe_load(lambda: self._pacifica.get_positions(wallet_address), [])
         return self._build_position_lookup(positions)
 
+    async def _refresh_open_order_lookup(self, wallet_address: str) -> dict[str, list[dict[str, Any]]]:
+        open_orders = await self._safe_load(lambda: self._pacifica.get_open_orders(wallet_address), [])
+        return self._build_open_order_lookup(open_orders)
+
     async def _ensure_leverage(
         self,
         *,
@@ -695,6 +732,84 @@ class BotRuntimeWorker:
             if symbol:
                 lookup[symbol] = item
         return lookup
+
+    def _build_open_order_lookup(self, open_orders: list[Any]) -> dict[str, list[dict[str, Any]]]:
+        lookup: dict[str, list[dict[str, Any]]] = {}
+        for item in open_orders:
+            if not isinstance(item, dict):
+                continue
+            symbol = self._normalize_symbol(item.get("symbol"))
+            if not symbol:
+                continue
+            lookup.setdefault(symbol, []).append(item)
+        return lookup
+
+    def _reconcile_runtime_state(
+        self,
+        *,
+        runtime_state: dict[str, Any],
+        position_lookup: dict[str, dict[str, Any]],
+        open_order_lookup: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, Any]:
+        next_state = dict(runtime_state)
+        pending_entries = next_state.get("pending_entry_symbols")
+        if not isinstance(pending_entries, dict):
+            pending_entries = {}
+        synced_pending: dict[str, str] = {}
+        for symbol, started_at in pending_entries.items():
+            position = position_lookup.get(symbol) or {}
+            if abs(float(position.get("amount") or 0.0)) > 0:
+                continue
+            started_at_str = str(started_at)
+            started_dt = self._parse_runtime_state_timestamp(started_at_str)
+            if started_dt is None:
+                synced_pending[symbol] = started_at_str
+                continue
+            age_seconds = (datetime.now(tz=UTC) - started_dt).total_seconds()
+            if age_seconds < PENDING_ENTRY_TTL_SECONDS:
+                synced_pending[symbol] = started_at_str
+        if synced_pending:
+            next_state["pending_entry_symbols"] = synced_pending
+        else:
+            next_state.pop("pending_entry_symbols", None)
+        return next_state
+
+    def _update_runtime_state_for_action(
+        self,
+        *,
+        runtime_state: dict[str, Any],
+        action: dict[str, Any],
+        position_lookup: dict[str, dict[str, Any]],
+        open_order_lookup: dict[str, list[dict[str, Any]]],
+        success: bool,
+    ) -> dict[str, Any]:
+        next_state = dict(runtime_state)
+        pending_entries = next_state.get("pending_entry_symbols")
+        if not isinstance(pending_entries, dict):
+            pending_entries = {}
+        action_type = str(action.get("type") or "")
+        symbol = self._normalize_symbol(action.get("symbol"))
+        if success and symbol and action_type in {"open_long", "open_short", "place_market_order", "place_limit_order", "place_twap_order"}:
+            if not self._to_bool(action.get("reduce_only"), False):
+                pending_entries[symbol] = datetime.now(tz=UTC).isoformat()
+        if success and symbol and action_type == "close_position":
+            pending_entries.pop(symbol, None)
+        if pending_entries:
+            next_state["pending_entry_symbols"] = pending_entries
+        else:
+            next_state.pop("pending_entry_symbols", None)
+        return self._reconcile_runtime_state(
+            runtime_state=next_state,
+            position_lookup=position_lookup,
+            open_order_lookup=open_order_lookup,
+        )
+
+    @staticmethod
+    def _parse_runtime_state_timestamp(value: str) -> datetime | None:
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
 
     @staticmethod
     def _resolve_market(market_lookup: dict[str, dict[str, Any]], symbol: str) -> dict[str, Any]:

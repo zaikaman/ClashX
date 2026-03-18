@@ -59,12 +59,17 @@ class BotRiskService:
         action: dict[str, Any],
         runtime_state: dict[str, Any],
         position_lookup: dict[str, dict[str, Any]] | None = None,
+        open_order_lookup: dict[str, list[dict[str, Any]]] | None = None,
     ) -> list[str]:
         issues: list[str] = []
         normalized = self.normalize_policy(policy)
         action_type = str(action.get("type") or "")
         symbol = str(action.get("symbol") or "").upper().replace("-PERP", "")
         positions = position_lookup if isinstance(position_lookup, dict) else {}
+        open_orders = open_order_lookup if isinstance(open_order_lookup, dict) else {}
+        pending_entries = runtime_state.get("pending_entry_symbols")
+        if not isinstance(pending_entries, dict):
+            pending_entries = {}
 
         allowed_symbols = normalized.get("allowed_symbols") or []
         if symbol and allowed_symbols and symbol not in allowed_symbols:
@@ -87,11 +92,27 @@ class BotRiskService:
                 f"requested size_usd {size_usd:g} exceeds max_order_size_usd {normalized['max_order_size_usd']:g}"
             )
         if action_type in {"open_long", "open_short", "place_market_order", "place_limit_order", "place_twap_order"}:
-            open_positions = sum(1 for item in positions.values() if self._to_float(item.get("amount"), 0.0) > 0)
+            open_positions = sum(1 for item in positions.values() if abs(self._to_float(item.get("amount"), 0.0)) > 0)
             if open_positions >= normalized["max_open_positions"]:
                 issues.append(
                     f"max_open_positions {normalized['max_open_positions']} reached"
                 )
+            symbol_position = positions.get(symbol) or {}
+            if abs(self._to_float(symbol_position.get("amount"), 0.0)) > 0:
+                issues.append(f"existing open position on {symbol} blocks a new entry")
+            symbol_orders = open_orders.get(symbol) or []
+            if any(not self._to_bool(item.get("reduce_only"), False) for item in symbol_orders):
+                issues.append(f"existing open entry order on {symbol} blocks a new entry")
+            if symbol and symbol in pending_entries:
+                issues.append(f"pending entry on {symbol} is still syncing")
+
+        if action_type == "set_tpsl":
+            symbol_position = positions.get(symbol) or {}
+            if abs(self._to_float(symbol_position.get("amount"), 0.0)) <= 0 and symbol in pending_entries:
+                issues.append(f"awaiting position sync on {symbol} before TP/SL")
+            symbol_orders = open_orders.get(symbol) or []
+            if any(self._to_bool(item.get("reduce_only"), False) for item in symbol_orders):
+                issues.append(f"existing protective order on {symbol} already covers this position")
 
         drawdown_reason = self.drawdown_breach_reason(policy=normalized, runtime_state=runtime_state)
         if drawdown_reason is not None:
@@ -181,3 +202,17 @@ class BotRiskService:
             return float(value)
         except (TypeError, ValueError):
             return default
+
+    @staticmethod
+    def _to_bool(value: Any, default: bool) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "y"}:
+                return True
+            if normalized in {"0", "false", "no", "n"}:
+                return False
+        return bool(value)
