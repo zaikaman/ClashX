@@ -606,6 +606,7 @@ class BotRuntimeWorker:
         runtime_state: dict[str, Any],
         position_lookup: dict[str, dict[str, Any]],
     ) -> str:
+        action_type = str(action.get("type") or "")
         payload = json.dumps(action, sort_keys=True, default=str)
         execution_cursor = int(runtime_state.get("executions_total") or 0)
         failure_cursor = int(runtime_state.get("failures_total") or 0)
@@ -614,6 +615,10 @@ class BotRuntimeWorker:
             action=action,
             position_lookup=position_lookup,
         )
+        if action_type == "set_tpsl":
+            digest_source = f"{runtime_id}:{action_type}:{position_fingerprint}:{payload}"
+            digest = hashlib.sha256(digest_source.encode()).hexdigest()[:24]
+            return f"idem:{runtime_id}:tpsl:{digest}"
         digest = hashlib.sha256(
             f"{runtime_id}:{execution_cursor}:{failure_cursor}:{last_executed_at}:{position_fingerprint}:{payload}".encode()
         ).hexdigest()[:24]
@@ -631,7 +636,9 @@ class BotRuntimeWorker:
         has_position = amount > 0
         if action_type == "set_tpsl":
             entry_price = float(position.get("entry_price") or 0.0) if isinstance(position, dict) else 0.0
-            return f"{symbol}:tpsl:{has_position}:{side}:{amount:.8f}:{entry_price:.8f}"
+            created_at = str(position.get("created_at") or "") if isinstance(position, dict) else ""
+            updated_at = str(position.get("updated_at") or "") if isinstance(position, dict) else ""
+            return f"{symbol}:tpsl:{has_position}:{side}:{amount:.8f}:{entry_price:.8f}:{created_at}:{updated_at}"
         if action_type in {"open_long", "open_short", "place_market_order", "place_limit_order", "place_twap_order"}:
             return f"{symbol}:entry:{has_position}:{side}:{amount:.8f}"
         if action_type == "close_position":

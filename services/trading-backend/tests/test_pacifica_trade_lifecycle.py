@@ -522,3 +522,34 @@ def test_runtime_idempotency_key_changes_after_position_is_closed() -> None:
     )
 
     assert with_position != without_position
+
+
+def test_tpsl_idempotency_key_stays_stable_for_same_position_across_runtime_ticks() -> None:
+    action = {"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.8, "stop_loss_pct": 0.9}
+    first_runtime_state = {"executions_total": 10, "failures_total": 2, "last_executed_at": "2026-03-18T07:00:00+00:00"}
+    second_runtime_state = {"executions_total": 18, "failures_total": 2, "last_executed_at": "2026-03-18T07:09:00+00:00"}
+    position_lookup = {
+        "BTC": {
+            "symbol": "BTC",
+            "side": "bid",
+            "amount": 0.00608,
+            "entry_price": 73964.309211,
+            "created_at": "1773818088003",
+            "updated_at": "1773818088003",
+        }
+    }
+
+    first_key = BotRuntimeWorker._build_idempotency_key(
+        runtime_id="runtime-1",
+        action=action,
+        runtime_state=first_runtime_state,
+        position_lookup=position_lookup,
+    )
+    second_key = BotRuntimeWorker._build_idempotency_key(
+        runtime_id="runtime-1",
+        action=action,
+        runtime_state=second_runtime_state,
+        position_lookup=position_lookup,
+    )
+
+    assert first_key == second_key
