@@ -4,6 +4,9 @@ drop table if exists public.bot_leaderboard_snapshots cascade;
 drop table if exists public.bot_clones cascade;
 drop table if exists public.bot_copy_relationships cascade;
 drop table if exists public.bot_execution_events cascade;
+drop table if exists public.bot_trade_closures cascade;
+drop table if exists public.bot_trade_lots cascade;
+drop table if exists public.bot_trade_sync_state cascade;
 drop table if exists public.bot_action_claims cascade;
 drop table if exists public.worker_leases cascade;
 drop table if exists public.bot_runtimes cascade;
@@ -62,6 +65,57 @@ create index ix_bot_execution_events_runtime_id on public.bot_execution_events(r
 create index ix_bot_execution_events_event_type on public.bot_execution_events(event_type);
 create index ix_bot_execution_events_status on public.bot_execution_events(status);
 create index ix_bot_execution_events_created_at on public.bot_execution_events(created_at);
+
+create table public.bot_trade_lots (
+  id uuid primary key,
+  runtime_id uuid not null references public.bot_runtimes(id) on delete cascade,
+  symbol varchar(32) not null,
+  side varchar(16) not null,
+  opened_at timestamptz not null,
+  source varchar(24) not null default 'bot',
+  source_event_id uuid,
+  source_order_id varchar(64),
+  source_history_id bigint,
+  entry_price double precision not null default 0,
+  quantity_opened double precision not null default 0,
+  quantity_remaining double precision not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index ix_bot_trade_lots_runtime_id on public.bot_trade_lots(runtime_id);
+create index ix_bot_trade_lots_symbol on public.bot_trade_lots(symbol);
+create index ix_bot_trade_lots_opened_at on public.bot_trade_lots(opened_at);
+
+create table public.bot_trade_closures (
+  id uuid primary key,
+  runtime_id uuid not null references public.bot_runtimes(id) on delete cascade,
+  lot_id uuid not null references public.bot_trade_lots(id) on delete cascade,
+  symbol varchar(32) not null,
+  side varchar(16) not null,
+  closed_at timestamptz not null,
+  source varchar(24) not null,
+  source_event_id uuid,
+  source_order_id varchar(64),
+  source_history_id bigint,
+  quantity_closed double precision not null default 0,
+  entry_price double precision not null default 0,
+  exit_price double precision not null default 0,
+  realized_pnl double precision not null default 0,
+  created_at timestamptz not null default now()
+);
+create index ix_bot_trade_closures_runtime_id on public.bot_trade_closures(runtime_id);
+create index ix_bot_trade_closures_lot_id on public.bot_trade_closures(lot_id);
+create index ix_bot_trade_closures_closed_at on public.bot_trade_closures(closed_at);
+
+create table public.bot_trade_sync_state (
+  runtime_id uuid primary key references public.bot_runtimes(id) on delete cascade,
+  synced_at timestamptz not null default now(),
+  execution_events_count integer not null default 0,
+  position_history_count integer not null default 0,
+  last_execution_at timestamptz,
+  last_history_at timestamptz,
+  last_error text
+);
 
 create table public.bot_action_claims (
   id uuid primary key,

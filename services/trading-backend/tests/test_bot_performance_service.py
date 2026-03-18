@@ -445,3 +445,8 @@ def test_runtime_performance_attributes_manual_close_realized_pnl_to_bot() -> No
     assert performance_a["pnl_realized"] == 20.0
     assert performance_a["pnl_total"] == 20.0
     assert performance_a["win_streak"] == 1
+    assert len(fake_supabase.tables["bot_trade_lots"]) == 1
+    assert fake_supabase.tables["bot_trade_lots"][0]["quantity_remaining"] == 0.0
+    assert len(fake_supabase.tables["bot_trade_closures"]) == 1
+    assert fake_supabase.tables["bot_trade_closures"][0]["source"] == "manual"
+    assert fake_supabase.tables["bot_trade_sync_state"][0]["runtime_id"] == "runtime-a"

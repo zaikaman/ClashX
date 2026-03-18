@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -32,7 +33,7 @@ class BotPerformanceService:
             fills = await self._resolve_event_fills(event, order_history_cache)
             for fill in fills:
                 applied = self._apply_fill(bot_positions, fill)
-                bot_records.extend(self._build_bot_records(fill, applied, event.get("created_at")))
+                bot_records.extend(self._build_bot_records(event, fill, applied, event.get("created_at")))
                 event_realized += applied["realized_pnl"]
                 event_closed = event_closed or applied["closed"]
             if event_closed:
@@ -45,31 +46,17 @@ class BotPerformanceService:
             realized_pnl += event_realized
 
         manual_close_records = await self._load_manual_close_records(runtime, bot_records)
-        positions: dict[str, dict[str, float]] = {}
-        manual_realized_pnl = 0.0
-        for record in sorted([*bot_records, *manual_close_records], key=self._timeline_sort_key):
-            applied = self._apply_fill(positions, record["fill"])
-            if record.get("source") != "manual":
-                continue
-            close_size = float(applied.get("close_size") or 0.0)
-            fill_amount = self._to_float(record["fill"].get("amount"))
-            if close_size <= 1e-12 or fill_amount <= 1e-12:
-                continue
-            realized_slice = float(record.get("pnl") or 0.0) * min(1.0, close_size / fill_amount)
-            manual_realized_pnl += realized_slice
-            close_events.append(
-                {
-                    "created_at": record.get("created_at"),
-                    "pnl": round(realized_slice, 8),
-                }
-            )
-        realized_pnl += manual_realized_pnl
+        lots, closures, close_events = self._build_runtime_ledger(runtime, bot_records, manual_close_records, close_events)
+        self._persist_runtime_ledger(runtime, events, lots, closures)
+        realized_pnl = round(sum(float(item.get("realized_pnl") or 0.0) for item in closures), 8)
 
         market_lookup = await self._load_market_lookup()
         live_position_lookup, live_positions_loaded = await self._load_live_position_lookup(runtime)
         open_positions: list[dict[str, Any]] = []
         unrealized_pnl = 0.0
-        for symbol, state in positions.items():
+        open_lots = [item for item in lots if self._to_float(item.get("quantity_remaining")) > 1e-12]
+        position_states = self._summarize_open_lots(open_lots)
+        for symbol, state in position_states.items():
             quantity = float(state.get("quantity") or 0.0)
             entry_price = float(state.get("entry_price") or 0.0)
             if abs(quantity) <= 1e-12 or entry_price <= 0:
@@ -117,6 +104,106 @@ class BotPerformanceService:
             "win_streak": self._compute_win_streak(close_events),
             "positions": open_positions,
         }
+
+    def _build_runtime_ledger(
+        self,
+        runtime: dict[str, Any],
+        bot_records: list[dict[str, Any]],
+        manual_close_records: list[dict[str, Any]],
+        initial_close_events: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        open_lots_by_symbol: dict[str, list[dict[str, Any]]] = {}
+        all_lots: list[dict[str, Any]] = []
+        closures: list[dict[str, Any]] = []
+        close_events = list(initial_close_events)
+
+        for record in sorted([*bot_records, *manual_close_records], key=self._timeline_sort_key):
+            fill = record["fill"]
+            symbol = self._normalize_symbol(fill.get("symbol"))
+            if not symbol:
+                continue
+            event_kind = str(record.get("event_kind") or "")
+            position_side = str(record.get("position_side") or "")
+            if event_kind == "open":
+                lot = self._make_lot(runtime["id"], record, fill, position_side)
+                open_lots_by_symbol.setdefault(symbol, []).append(lot)
+                all_lots.append(lot)
+                continue
+            if event_kind != "close":
+                continue
+            remaining = self._to_float(fill.get("amount"))
+            if remaining <= 1e-12:
+                continue
+            symbol_lots = open_lots_by_symbol.get(symbol, [])
+            matched_realized = 0.0
+            for lot in list(symbol_lots):
+                if remaining <= 1e-12:
+                    break
+                if lot["side"] != position_side:
+                    continue
+                available = self._to_float(lot.get("quantity_remaining"))
+                if available <= 1e-12:
+                    continue
+                matched = min(remaining, available)
+                remaining -= matched
+                lot["quantity_remaining"] = round(available - matched, 12)
+                lot["updated_at"] = self._coerce_iso(record.get("created_at"))
+                realized = self._calculate_realized_pnl(position_side, self._to_float(lot.get("entry_price")), self._to_float(fill.get("price")), matched)
+                matched_realized += realized
+                closures.append(self._make_closure(runtime["id"], lot, record, fill, matched, realized))
+            open_lots_by_symbol[symbol] = [item for item in symbol_lots if self._to_float(item.get("quantity_remaining")) > 1e-12]
+            if matched_realized:
+                close_events.append({"created_at": record.get("created_at"), "pnl": round(matched_realized, 8)})
+
+        return all_lots, closures, close_events
+
+    def _persist_runtime_ledger(
+        self,
+        runtime: dict[str, Any],
+        events: list[dict[str, Any]],
+        lots: list[dict[str, Any]],
+        closures: list[dict[str, Any]],
+    ) -> None:
+        runtime_id = runtime["id"]
+        self._supabase.delete("bot_trade_closures", filters={"runtime_id": runtime_id})
+        self._supabase.delete("bot_trade_lots", filters={"runtime_id": runtime_id})
+        self._supabase.delete("bot_trade_sync_state", filters={"runtime_id": runtime_id})
+        if lots:
+            self._supabase.insert("bot_trade_lots", lots)
+        if closures:
+            self._supabase.insert("bot_trade_closures", closures)
+        last_execution_at = events[-1].get("created_at") if events else None
+        last_history_at = max((item.get("closed_at") for item in closures), default=None)
+        self._supabase.insert(
+            "bot_trade_sync_state",
+            {
+                "runtime_id": runtime_id,
+                "synced_at": datetime.now(tz=UTC).isoformat(),
+                "execution_events_count": len(events),
+                "position_history_count": len(closures),
+                "last_execution_at": last_execution_at,
+                "last_history_at": last_history_at,
+                "last_error": None,
+            },
+        )
+
+    def _summarize_open_lots(self, lots: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
+        states: dict[str, dict[str, float]] = {}
+        for lot in lots:
+            symbol = self._normalize_symbol(lot.get("symbol"))
+            remaining = self._to_float(lot.get("quantity_remaining"))
+            entry_price = self._to_float(lot.get("entry_price"))
+            side = str(lot.get("side") or "")
+            if not symbol or remaining <= 1e-12 or entry_price <= 0 or side not in {"long", "short"}:
+                continue
+            state = states.setdefault(symbol, {"quantity": 0.0, "entry_notional": 0.0, "entry_price": 0.0})
+            signed = remaining if side == "long" else -remaining
+            state["quantity"] += signed
+            state["entry_notional"] += remaining * entry_price
+        for state in states.values():
+            size = abs(float(state.get("quantity") or 0.0))
+            state["entry_price"] = (float(state.get("entry_notional") or 0.0) / size) if size > 1e-12 else 0.0
+        return states
 
     async def _resolve_event_fills(
         self,
@@ -199,6 +286,7 @@ class BotPerformanceService:
                     "remaining_amount": amount,
                     "price": price,
                     "pnl": self._to_float(row.get("pnl")),
+                    "history_id": row.get("history_id"),
                     "created_at": created_at,
                 }
             )
@@ -219,6 +307,7 @@ class BotPerformanceService:
                     "event_kind": "close",
                     "position_side": row.get("position_side"),
                     "pnl": float(row.get("pnl") or 0.0) * min(1.0, remaining_amount / max(self._to_float(row.get("amount")), 1e-12)),
+                    "source_history_id": row.get("history_id"),
                     "fill": {
                         "symbol": row.get("symbol"),
                         "side": close_side,
@@ -258,9 +347,17 @@ class BotPerformanceService:
                 if remaining <= 1e-12:
                     break
 
-    def _build_bot_records(self, fill: dict[str, Any], applied: dict[str, Any], created_at: Any) -> list[dict[str, Any]]:
+    def _build_bot_records(
+        self,
+        event: dict[str, Any],
+        fill: dict[str, Any],
+        applied: dict[str, Any],
+        created_at: Any,
+    ) -> list[dict[str, Any]]:
         symbol = self._normalize_symbol(fill.get("symbol"))
         price = self._to_float(fill.get("price"))
+        order_id = self._extract_order_id(event)
+        history_id = fill.get("history_id")
         if not symbol or price <= 0:
             return []
         records: list[dict[str, Any]] = []
@@ -277,6 +374,9 @@ class BotPerformanceService:
                         "event_kind": "open",
                         "position_side": position_side,
                         "amount": open_size,
+                        "source_event_id": event.get("id"),
+                        "source_order_id": str(order_id) if order_id is not None else None,
+                        "source_history_id": history_id,
                         "fill": {
                             "symbol": symbol,
                             "side": position_side,
@@ -300,6 +400,9 @@ class BotPerformanceService:
                     "event_kind": "close",
                     "position_side": closed_position_side,
                     "amount": close_size,
+                    "source_event_id": event.get("id"),
+                    "source_order_id": str(order_id) if order_id is not None else None,
+                    "source_history_id": history_id,
                     "fill": {
                         "symbol": symbol,
                         "side": close_side,
@@ -311,6 +414,84 @@ class BotPerformanceService:
                 }
             )
         return records
+
+    def _make_lot(self, runtime_id: str, record: dict[str, Any], fill: dict[str, Any], side: str) -> dict[str, Any]:
+        source_event_id = record.get("source_event_id")
+        source_order_id = record.get("source_order_id")
+        source_history_id = record.get("source_history_id")
+        opened_at = self._coerce_iso(record.get("created_at"))
+        lot_id = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"lot:{runtime_id}:{record.get('source')}:{source_event_id}:{source_order_id}:{source_history_id}:{record.get('symbol')}:{side}:{record.get('amount')}:{opened_at}",
+            )
+        )
+        return {
+            "id": lot_id,
+            "runtime_id": runtime_id,
+            "symbol": self._normalize_symbol(record.get("symbol")),
+            "side": side,
+            "opened_at": opened_at,
+            "source": record.get("source") or "bot",
+            "source_event_id": source_event_id,
+            "source_order_id": source_order_id,
+            "source_history_id": source_history_id,
+            "entry_price": self._to_float(fill.get("price")),
+            "quantity_opened": self._to_float(fill.get("amount")),
+            "quantity_remaining": self._to_float(fill.get("amount")),
+            "created_at": datetime.now(tz=UTC).isoformat(),
+            "updated_at": datetime.now(tz=UTC).isoformat(),
+        }
+
+    def _make_closure(
+        self,
+        runtime_id: str,
+        lot: dict[str, Any],
+        record: dict[str, Any],
+        fill: dict[str, Any],
+        quantity_closed: float,
+        realized_pnl: float,
+    ) -> dict[str, Any]:
+        source_event_id = record.get("source_event_id")
+        source_order_id = record.get("source_order_id")
+        source_history_id = record.get("source_history_id")
+        closed_at = self._coerce_iso(record.get("created_at"))
+        closure_id = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"closure:{runtime_id}:{lot['id']}:{record.get('source')}:{source_event_id}:{source_order_id}:{source_history_id}:{quantity_closed}:{closed_at}",
+            )
+        )
+        return {
+            "id": closure_id,
+            "runtime_id": runtime_id,
+            "lot_id": lot["id"],
+            "symbol": lot["symbol"],
+            "side": lot["side"],
+            "closed_at": closed_at,
+            "source": record.get("source") or "bot",
+            "source_event_id": source_event_id,
+            "source_order_id": source_order_id,
+            "source_history_id": source_history_id,
+            "quantity_closed": quantity_closed,
+            "entry_price": self._to_float(lot.get("entry_price")),
+            "exit_price": self._to_float(fill.get("price")),
+            "realized_pnl": realized_pnl,
+            "created_at": datetime.now(tz=UTC).isoformat(),
+        }
+
+    @staticmethod
+    def _calculate_realized_pnl(position_side: str, entry_price: float, exit_price: float, quantity: float) -> float:
+        if position_side == "long":
+            return (exit_price - entry_price) * quantity
+        if position_side == "short":
+            return (entry_price - exit_price) * quantity
+        return 0.0
+
+    @staticmethod
+    def _coerce_iso(value: Any) -> str:
+        text = str(value or "").strip()
+        return text if text else datetime.now(tz=UTC).isoformat()
 
     def _apply_fill(self, positions: dict[str, dict[str, float]], fill: dict[str, Any]) -> dict[str, Any]:
         symbol = self._normalize_symbol(fill.get("symbol"))

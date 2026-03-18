@@ -76,6 +76,55 @@ CREATE TABLE public.bot_execution_events (
   CONSTRAINT bot_execution_events_pkey PRIMARY KEY (id),
   CONSTRAINT bot_execution_events_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id)
 );
+CREATE TABLE public.bot_trade_lots (
+  id uuid NOT NULL,
+  runtime_id uuid NOT NULL,
+  symbol character varying NOT NULL,
+  side character varying NOT NULL,
+  opened_at timestamp with time zone NOT NULL,
+  source character varying NOT NULL DEFAULT 'bot'::character varying,
+  source_event_id uuid,
+  source_order_id character varying,
+  source_history_id bigint,
+  entry_price double precision NOT NULL DEFAULT 0,
+  quantity_opened double precision NOT NULL DEFAULT 0,
+  quantity_remaining double precision NOT NULL DEFAULT 0,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT bot_trade_lots_pkey PRIMARY KEY (id),
+  CONSTRAINT bot_trade_lots_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id)
+);
+CREATE TABLE public.bot_trade_closures (
+  id uuid NOT NULL,
+  runtime_id uuid NOT NULL,
+  lot_id uuid NOT NULL,
+  symbol character varying NOT NULL,
+  side character varying NOT NULL,
+  closed_at timestamp with time zone NOT NULL,
+  source character varying NOT NULL,
+  source_event_id uuid,
+  source_order_id character varying,
+  source_history_id bigint,
+  quantity_closed double precision NOT NULL DEFAULT 0,
+  entry_price double precision NOT NULL DEFAULT 0,
+  exit_price double precision NOT NULL DEFAULT 0,
+  realized_pnl double precision NOT NULL DEFAULT 0,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT bot_trade_closures_pkey PRIMARY KEY (id),
+  CONSTRAINT bot_trade_closures_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id),
+  CONSTRAINT bot_trade_closures_lot_id_fkey FOREIGN KEY (lot_id) REFERENCES public.bot_trade_lots(id)
+);
+CREATE TABLE public.bot_trade_sync_state (
+  runtime_id uuid NOT NULL,
+  synced_at timestamp with time zone NOT NULL DEFAULT now(),
+  execution_events_count integer NOT NULL DEFAULT 0,
+  position_history_count integer NOT NULL DEFAULT 0,
+  last_execution_at timestamp with time zone,
+  last_history_at timestamp with time zone,
+  last_error text,
+  CONSTRAINT bot_trade_sync_state_pkey PRIMARY KEY (runtime_id),
+  CONSTRAINT bot_trade_sync_state_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id)
+);
 CREATE TABLE public.bot_leaderboard_snapshots (
   id uuid NOT NULL,
   runtime_id uuid NOT NULL,
