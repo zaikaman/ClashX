@@ -120,6 +120,36 @@ def test_try_claim_action_reclaims_terminal_failed_claim() -> None:
     assert supabase.tables["bot_action_claims"][0]["claimed_by"] == "worker-2"
 
 
+def test_try_claim_action_does_not_reclaim_terminal_executed_claim() -> None:
+    supabase = _FakeSupabaseRestClient()
+    runtime_id = "runtime-1"
+    idempotency_key = "idem:runtime-1:2:1:deadbeef"
+    supabase.tables["bot_action_claims"] = [
+        {
+            "id": "claim-1",
+            "runtime_id": runtime_id,
+            "idempotency_key": idempotency_key,
+            "claimed_by": "worker-1",
+            "created_at": datetime.now(tz=UTC).isoformat(),
+        }
+    ]
+    supabase.tables["bot_execution_events"] = [
+        {
+            "id": "event-1",
+            "runtime_id": runtime_id,
+            "event_type": "action.executed",
+            "decision_summary": idempotency_key,
+            "created_at": datetime.now(tz=UTC).isoformat(),
+        }
+    ]
+
+    service = _build_service(supabase)
+
+    assert service.try_claim_action(runtime_id=runtime_id, idempotency_key=idempotency_key) is False
+    assert len(supabase.tables["bot_action_claims"]) == 1
+    assert supabase.tables["bot_action_claims"][0]["claimed_by"] == "worker-1"
+
+
 def test_try_claim_action_does_not_reclaim_recent_inflight_claim() -> None:
     supabase = _FakeSupabaseRestClient()
     runtime_id = "runtime-1"

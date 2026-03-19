@@ -270,7 +270,7 @@ class BotRuntimeWorker:
                         event="bot.execution.skipped",
                         payload=self._serialize_event_payload(event),
                     )
-                    logger.warning(
+                    logger.debug(
                         "Runtime %s skipped action %s for %s: %s",
                         runtime["id"],
                         action.get("type"),

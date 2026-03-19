@@ -1670,8 +1670,8 @@ export function BuilderGraphStudio({
             onClick={closeRuntimeControlsModal}
             aria-hidden="true"
           />
-          <div className="relative z-10 w-full max-w-4xl overflow-hidden rounded-[2rem] border border-[rgba(220,232,93,0.24)] bg-[linear-gradient(180deg,rgba(18,20,18,0.98),rgba(9,10,10,0.99))] shadow-[0_28px_90px_rgba(0,0,0,0.56)]">
-            <div className="grid gap-6 border-b border-[rgba(255,255,255,0.06)] px-6 py-6 lg:grid-cols-[1.15fr_0.85fr]">
+          <div className="relative z-10 flex w-full max-w-4xl flex-col overflow-hidden max-h-full rounded-[2rem] border border-[rgba(220,232,93,0.24)] bg-[linear-gradient(180deg,rgba(18,20,18,0.98),rgba(9,10,10,0.99))] shadow-[0_28px_90px_rgba(0,0,0,0.56)]">
+            <div className="grid shrink-0 gap-6 border-b border-[rgba(255,255,255,0.06)] px-6 py-6 lg:grid-cols-[1.15fr_0.85fr]">
               <div>
                 <div className="text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-[#dce85d]">Runtime controls</div>
                 <h2 className="mt-2 text-2xl font-semibold text-neutral-50">Choose how this bot behaves once it goes live.</h2>
@@ -1682,7 +1682,7 @@ export function BuilderGraphStudio({
               <div className="rounded-[1.5rem] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] p-5">
                 <div className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">Launch summary</div>
                 <div className="mt-3 text-lg font-semibold text-neutral-50">{name.trim() || "Untitled bot"}</div>
-                <div className="mt-2 text-sm leading-6 text-neutral-400">
+                <div className="mt-2 line-clamp-2 text-sm leading-6 text-neutral-400" title={selectedMarketSymbols.join(", ")}>
                   {selectedMarketSymbols.length > 0 ? selectedMarketSymbols.join(", ") : "No markets selected"}
                 </div>
                 <div className="mt-4 grid gap-2 text-xs text-neutral-500">
@@ -1702,10 +1702,11 @@ export function BuilderGraphStudio({
               </div>
             </div>
 
-            <div className="grid gap-6 px-6 py-6 lg:grid-cols-[1.15fr_0.85fr]">
-              <div>
-                <div className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">Pick a profile</div>
-                <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <div className="custom-scrollbar grid min-h-0 gap-6 overflow-y-auto px-6 py-6 lg:grid-cols-[1.15fr_0.85fr]">
+              <div className="flex flex-col gap-6">
+                <div>
+                  <div className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">Pick a profile</div>
+                  <div className="mt-3 grid gap-3 md:grid-cols-3">
                   {RUNTIME_CONTROL_PRESETS.map((preset) => {
                     const selected = runtimePreset === preset.id;
                     return (
@@ -1799,23 +1800,26 @@ export function BuilderGraphStudio({
                   </label>
                 </div>
               </div>
+            </div>
 
-              <div className="flex h-full flex-col rounded-[1.5rem] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] p-5">
-                <div className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">Risk policy preview</div>
-                <pre className="mt-4 flex-1 overflow-auto rounded-[1.15rem] border border-[rgba(255,255,255,0.06)] bg-[#090a0a] p-4 text-xs leading-6 text-neutral-300">
-                  {JSON.stringify(buildRiskPolicyPayload(selectedMarketSymbols, runtimeControls), null, 2)}
-                </pre>
+            <div className="flex h-[32rem] lg:h-full max-h-[32rem] flex-col rounded-[1.5rem] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] p-5">
+                <div className="mb-4 shrink-0 text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">Risk policy preview</div>
+                <div className="min-h-0 flex-1 overflow-hidden rounded-[1.15rem] border border-[rgba(255,255,255,0.06)] bg-[#090a0a]">
+                  <pre className="custom-scrollbar h-full w-full overflow-auto p-4 text-xs leading-6 text-neutral-300">
+                    {JSON.stringify(buildRiskPolicyPayload(selectedMarketSymbols, runtimeControls), null, 2)}
+                  </pre>
+                </div>
                 {runtimeControlsError ? (
-                  <p className="mt-4 text-sm text-[#dce85d]">{runtimeControlsError}</p>
+                  <p className="mt-4 shrink-0 text-sm text-[#dce85d]">{runtimeControlsError}</p>
                 ) : (
-                  <p className="mt-4 text-sm leading-6 text-neutral-500">
+                  <p className="mt-4 shrink-0 text-sm leading-6 text-neutral-500">
                     These controls are sent with the deploy request and become the bot&apos;s live runtime guardrails.
                   </p>
                 )}
               </div>
             </div>
 
-            <div className="flex items-center justify-between gap-3 border-t border-[rgba(255,255,255,0.06)] px-6 py-5">
+            <div className="flex shrink-0 items-center justify-between gap-3 border-t border-[rgba(255,255,255,0.06)] px-6 py-5">
               <button
                 type="button"
                 onClick={closeRuntimeControlsModal}

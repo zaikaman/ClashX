@@ -11,7 +11,8 @@ from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
 
 logger = logging.getLogger(__name__)
 ACTION_CLAIM_TTL_SECONDS = 90
-TERMINAL_ACTION_EVENTS = {"action.executed", "action.failed"}
+RETRYABLE_TERMINAL_ACTION_EVENTS = {"action.failed"}
+NON_RETRYABLE_TERMINAL_ACTION_EVENTS = {"action.executed"}
 
 
 class WorkerCoordinationService:
@@ -94,9 +95,23 @@ class WorkerCoordinationService:
             filters={"runtime_id": runtime_id, "decision_summary": idempotency_key},
             order="created_at.desc",
         )
-        if isinstance(terminal_event, dict) and str(terminal_event.get("event_type") or "") in TERMINAL_ACTION_EVENTS:
+        if (
+            isinstance(terminal_event, dict)
+            and str(terminal_event.get("event_type") or "") in NON_RETRYABLE_TERMINAL_ACTION_EVENTS
+        ):
+            logger.info(
+                "Keeping completed action claim for runtime %s and key %s",
+                runtime_id,
+                idempotency_key,
+            )
+            return False
+
+        if (
+            isinstance(terminal_event, dict)
+            and str(terminal_event.get("event_type") or "") in RETRYABLE_TERMINAL_ACTION_EVENTS
+        ):
             logger.warning(
-                "Reclaiming terminal action claim for runtime %s and key %s",
+                "Reclaiming failed action claim for runtime %s and key %s",
                 runtime_id,
                 idempotency_key,
             )
