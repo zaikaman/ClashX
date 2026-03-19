@@ -581,6 +581,25 @@ def test_bot_risk_service_requires_both_known_tpsl_orders_before_marking_positio
     assert "existing protective order on BTC already covers this position" in full_issues
 
 
+def test_bot_risk_service_recognizes_existing_tpsl_orders_without_client_order_ids() -> None:
+    risk = BotRiskService()
+
+    issues = risk.assess_action(
+        policy={},
+        action={"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.8, "stop_loss_pct": 0.9},
+        runtime_state={"managed_positions": {"BTC": {"symbol": "BTC", "amount": 0.003}}},
+        position_lookup={"BTC": {"symbol": "BTC", "amount": 0.003}},
+        open_order_lookup={
+            "BTC": [
+                {"symbol": "BTC", "reduce_only": True, "order_type": "take_profit_market"},
+                {"symbol": "BTC", "reduce_only": True, "order_type": "stop_loss_market"},
+            ]
+        },
+    )
+
+    assert "existing protective order on BTC already covers this position" in issues
+
+
 def test_runtime_process_allows_tpsl_immediately_after_entry(monkeypatch: Any) -> None:
     monkeypatch.setattr("src.workers.bot_runtime_worker.broadcaster.publish", _noop_publish)
 

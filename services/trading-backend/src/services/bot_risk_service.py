@@ -129,6 +129,15 @@ class BotRiskService:
             symbol_orders = open_orders.get(symbol) or []
             take_profit_client_order_id = str(managed_position.get("take_profit_client_order_id") or "").strip()
             stop_loss_client_order_id = str(managed_position.get("stop_loss_client_order_id") or "").strip()
+            managed_amount = abs(self._to_float(managed_position.get("amount"), 0.0))
+            symbol_amount = abs(self._to_float(symbol_position.get("amount"), 0.0))
+            has_take_profit_order = any(self._is_take_profit_order(item) for item in symbol_orders)
+            has_stop_loss_order = any(self._is_stop_loss_order(item) for item in symbol_orders)
+            covers_full_position = (
+                managed_amount > 0
+                and symbol_amount > 0
+                and abs(symbol_amount - managed_amount) <= max(1e-9, managed_amount * 0.001)
+            )
             if take_profit_client_order_id and stop_loss_client_order_id:
                 open_client_order_ids = {
                     str(item.get("client_order_id") or "").strip()
@@ -137,6 +146,10 @@ class BotRiskService:
                 }
                 if {take_profit_client_order_id, stop_loss_client_order_id}.issubset(open_client_order_ids):
                     issues.append(f"existing protective order on {symbol} already covers this position")
+                elif covers_full_position and has_take_profit_order and has_stop_loss_order:
+                    issues.append(f"existing protective order on {symbol} already covers this position")
+            elif covers_full_position and has_take_profit_order and has_stop_loss_order:
+                issues.append(f"existing protective order on {symbol} already covers this position")
 
         if action_type == "close_position" and abs(self._to_float(managed_position.get("amount"), 0.0)) <= 0:
             issues.append(f"bot does not manage an open position on {symbol}")
@@ -243,3 +256,15 @@ class BotRiskService:
             if normalized in {"0", "false", "no", "n"}:
                 return False
         return bool(value)
+
+    def _is_take_profit_order(self, order: dict[str, Any]) -> bool:
+        if not self._to_bool(order.get("reduce_only"), False):
+            return False
+        order_type = str(order.get("order_type") or order.get("kind") or "").strip().lower()
+        return "take_profit" in order_type or order_type.startswith("tp")
+
+    def _is_stop_loss_order(self, order: dict[str, Any]) -> bool:
+        if not self._to_bool(order.get("reduce_only"), False):
+            return False
+        order_type = str(order.get("order_type") or order.get("kind") or "").strip().lower()
+        return "stop_loss" in order_type or order_type.startswith("sl")

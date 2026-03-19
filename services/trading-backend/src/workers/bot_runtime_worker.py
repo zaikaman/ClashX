@@ -223,7 +223,7 @@ class BotRuntimeWorker:
             return
 
         actions = evaluation.get("actions") or []
-        logger.info(
+        logger.debug(
             "Runtime %s triggered for bot %s on wallet %s with %d action(s)",
             runtime["id"],
             bot["id"],
