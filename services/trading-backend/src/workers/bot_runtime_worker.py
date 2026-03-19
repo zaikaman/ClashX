@@ -727,10 +727,23 @@ class BotRuntimeWorker:
             action=action,
             position_lookup=position_lookup,
         )
+        symbol = BotRuntimeWorker._normalize_symbol(action.get("symbol"))
+        entry_retry_generation = BotRuntimeWorker._entry_retry_generation(
+            runtime_state=runtime_state,
+            symbol=symbol,
+        )
         if action_type == "set_tpsl":
             digest_source = f"{runtime_id}:{action_type}:{position_fingerprint}:{payload}"
             digest = hashlib.sha256(digest_source.encode()).hexdigest()[:24]
             return f"idem:{runtime_id}:tpsl:{digest}"
+        if action_type in ENTRY_ACTION_TYPES:
+            digest = hashlib.sha256(
+                (
+                    f"{runtime_id}:{execution_cursor}:{failure_cursor}:{last_executed_at}:"
+                    f"{entry_retry_generation}:{position_fingerprint}:{payload}"
+                ).encode()
+            ).hexdigest()[:24]
+            return f"idem:{runtime_id}:{execution_cursor}:{failure_cursor}:{entry_retry_generation}:{digest}"
         digest = hashlib.sha256(
             f"{runtime_id}:{execution_cursor}:{failure_cursor}:{last_executed_at}:{position_fingerprint}:{payload}".encode()
         ).hexdigest()[:24]
@@ -916,10 +929,14 @@ class BotRuntimeWorker:
         position_lookup: dict[str, dict[str, Any]],
         open_order_lookup: dict[str, list[dict[str, Any]]],
     ) -> dict[str, Any]:
+        del open_order_lookup
         next_state = dict(runtime_state)
         pending_entries = next_state.get("pending_entry_symbols")
         if not isinstance(pending_entries, dict):
             pending_entries = {}
+        entry_retry_generations = next_state.get("entry_retry_generations")
+        if not isinstance(entry_retry_generations, dict):
+            entry_retry_generations = {}
         synced_pending: dict[str, str] = {}
         for symbol, started_at in pending_entries.items():
             position = position_lookup.get(symbol) or {}
@@ -933,6 +950,8 @@ class BotRuntimeWorker:
             age_seconds = (datetime.now(tz=UTC) - started_dt).total_seconds()
             if age_seconds < PENDING_ENTRY_TTL_SECONDS:
                 synced_pending[symbol] = started_at_str
+                continue
+            self._bump_entry_retry_generation(entry_retry_generations, symbol)
         if synced_pending:
             next_state["pending_entry_symbols"] = synced_pending
         else:
@@ -952,6 +971,8 @@ class BotRuntimeWorker:
             if wallet_amount <= 0:
                 if symbol in synced_pending:
                     reconciled_positions[symbol] = dict(managed_position)
+                else:
+                    self._bump_entry_retry_generation(entry_retry_generations, symbol)
                 continue
             side = str(wallet_position.get("side") or managed_position.get("side") or "").lower()
             reconciled_positions[symbol] = {
@@ -965,6 +986,10 @@ class BotRuntimeWorker:
             next_state["managed_positions"] = reconciled_positions
         else:
             next_state.pop("managed_positions", None)
+        if entry_retry_generations:
+            next_state["entry_retry_generations"] = entry_retry_generations
+        else:
+            next_state.pop("entry_retry_generations", None)
         return next_state
 
     def _update_runtime_state_for_action(
@@ -1060,6 +1085,22 @@ class BotRuntimeWorker:
         if not isinstance(managed_position, dict):
             return None
         return managed_position
+
+    @staticmethod
+    def _entry_retry_generation(*, runtime_state: dict[str, Any], symbol: str) -> int:
+        if not symbol:
+            return 0
+        entry_retry_generations = runtime_state.get("entry_retry_generations")
+        if not isinstance(entry_retry_generations, dict):
+            return 0
+        return int(entry_retry_generations.get(symbol) or 0)
+
+    @staticmethod
+    def _bump_entry_retry_generation(entry_retry_generations: dict[str, Any], symbol: str) -> None:
+        normalized_symbol = BotRuntimeWorker._normalize_symbol(symbol)
+        if not normalized_symbol:
+            return
+        entry_retry_generations[normalized_symbol] = int(entry_retry_generations.get(normalized_symbol) or 0) + 1
 
     @staticmethod
     def _build_entry_client_order_id(*, runtime_id: str, symbol: str) -> str:

@@ -681,6 +681,79 @@ def test_runtime_idempotency_key_changes_after_position_is_closed() -> None:
     assert with_position != without_position
 
 
+def test_runtime_idempotency_key_changes_after_pending_entry_expires_without_position() -> None:
+    worker = BotRuntimeWorker()
+    action = {"type": "open_long", "symbol": "BTC", "size_usd": 150.0, "leverage": 3}
+    runtime_state = {
+        "executions_total": 2,
+        "failures_total": 1,
+        "last_executed_at": "2026-03-18T07:00:00+00:00",
+        "pending_entry_symbols": {"BTC": "2026-03-18T07:00:00+00:00"},
+    }
+
+    pending_key = BotRuntimeWorker._build_idempotency_key(
+        runtime_id="runtime-1",
+        action=action,
+        runtime_state=runtime_state,
+        position_lookup={},
+    )
+    reconciled_state = worker._reconcile_runtime_state(
+        runtime_state=runtime_state,
+        position_lookup={},
+        open_order_lookup={},
+    )
+    retried_key = BotRuntimeWorker._build_idempotency_key(
+        runtime_id="runtime-1",
+        action=action,
+        runtime_state=reconciled_state,
+        position_lookup={},
+    )
+
+    assert reconciled_state.get("pending_entry_symbols") is None
+    assert reconciled_state["entry_retry_generations"]["BTC"] == 1
+    assert pending_key != retried_key
+
+
+def test_runtime_idempotency_key_changes_after_managed_position_disappears() -> None:
+    worker = BotRuntimeWorker()
+    action = {"type": "open_long", "symbol": "BTC", "size_usd": 150.0, "leverage": 3}
+    runtime_state = {
+        "executions_total": 2,
+        "failures_total": 1,
+        "last_executed_at": "2026-03-18T07:00:00+00:00",
+        "managed_positions": {
+            "BTC": {
+                "symbol": "BTC",
+                "amount": 0.00608,
+                "side": "bid",
+                "entry_client_order_id": "entry-1",
+            }
+        },
+    }
+
+    existing_key = BotRuntimeWorker._build_idempotency_key(
+        runtime_id="runtime-1",
+        action=action,
+        runtime_state=runtime_state,
+        position_lookup={},
+    )
+    reconciled_state = worker._reconcile_runtime_state(
+        runtime_state=runtime_state,
+        position_lookup={},
+        open_order_lookup={},
+    )
+    retried_key = BotRuntimeWorker._build_idempotency_key(
+        runtime_id="runtime-1",
+        action=action,
+        runtime_state=reconciled_state,
+        position_lookup={},
+    )
+
+    assert reconciled_state.get("managed_positions") is None
+    assert reconciled_state["entry_retry_generations"]["BTC"] == 1
+    assert existing_key != retried_key
+
+
 def test_tpsl_idempotency_key_stays_stable_for_same_position_across_runtime_ticks() -> None:
     action = {"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.8, "stop_loss_pct": 0.9}
     first_runtime_state = {"executions_total": 10, "failures_total": 2, "last_executed_at": "2026-03-18T07:00:00+00:00"}
