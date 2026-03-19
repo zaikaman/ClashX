@@ -184,10 +184,21 @@ class FakeReadinessService:
 
 
 class FakePacificaClient:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        positions: list[dict[str, Any]] | None = None,
+        open_orders: list[dict[str, Any]] | None = None,
+        account_settings: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.orders: list[dict[str, Any]] = []
+        self.positions = deepcopy(positions or [])
+        self.open_orders = deepcopy(open_orders or [])
+        self.account_settings = deepcopy(account_settings or [])
+        self.market_requests = 0
 
     async def get_markets(self) -> list[dict[str, Any]]:
+        self.market_requests += 1
         return [
             {
                 "symbol": "BTC-PERP",
@@ -200,7 +211,15 @@ class FakePacificaClient:
 
     async def get_positions(self, wallet_address: str) -> list[dict[str, Any]]:
         del wallet_address
-        return []
+        return deepcopy(self.positions)
+
+    async def get_open_orders(self, wallet_address: str) -> list[dict[str, Any]]:
+        del wallet_address
+        return deepcopy(self.open_orders)
+
+    async def get_account_settings(self, wallet_address: str) -> list[dict[str, Any]]:
+        del wallet_address
+        return deepcopy(self.account_settings)
 
     async def place_order(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.orders.append(deepcopy(payload))
@@ -212,8 +231,12 @@ class FakePacificaClient:
 
 
 class FakeIndicatorContextService:
+    def __init__(self) -> None:
+        self.load_requests = 0
+
     async def load_candle_lookup(self, rules_json: dict[str, Any]) -> dict[str, Any]:
         del rules_json
+        self.load_requests += 1
         return {}
 
 
@@ -429,6 +452,84 @@ def test_runtime_worker_stops_bot_when_allocation_drawdown_is_breached() -> None
     assert "allocated drawdown budget" in execution_events[-1]["decision_summary"]
 
 
+def test_runtime_worker_skips_market_evaluation_for_entry_only_bot_at_position_capacity() -> None:
+    tables = _seed_tables()
+    tables["bot_runtimes"][0]["risk_policy_json"]["max_open_positions"] = 1
+    tables["bot_runtimes"][0]["risk_policy_json"]["_runtime_state"] = {
+        "managed_positions": {
+            "BTC": {
+                "symbol": "BTC",
+                "amount": 0.005,
+                "side": "bid",
+                "entry_client_order_id": "entry-1",
+                "entry_price": 101000,
+                "opened_at": "2026-03-16T00:05:00+00:00",
+                "updated_at": "2026-03-16T00:05:00+00:00",
+            }
+        }
+    }
+
+    fake_supabase = FakeSupabaseRestClient(tables)
+    fake_pacifica = FakePacificaClient(
+        positions=[
+            {
+                "symbol": "BTC-PERP",
+                "amount": 0.005,
+                "side": "bid",
+                "entry_price": 101000,
+                "mark_price": 105000,
+                "created_at": "2026-03-16T00:05:00+00:00",
+                "updated_at": "2026-03-16T00:06:00+00:00",
+            }
+        ]
+    )
+    fake_indicator_context = FakeIndicatorContextService()
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+    worker._supabase = fake_supabase
+    worker._engine._supabase = fake_supabase
+    worker._auth = FakeAuthService()
+    worker._pacifica = fake_pacifica
+    worker._indicator_context = fake_indicator_context
+    worker._calculate_runtime_performance = _fake_runtime_performance  # type: ignore[method-assign]
+
+    asyncio.run(worker._process_runtime(None, fake_supabase.tables["bot_runtimes"][0]))
+
+    assert fake_pacifica.market_requests == 0
+    assert fake_indicator_context.load_requests == 0
+    assert fake_pacifica.orders == []
+    assert fake_supabase.tables["bot_execution_events"] == []
+
+
+def test_runtime_worker_deduplicates_identical_skip_events_within_recent_window() -> None:
+    fake_supabase = FakeSupabaseRestClient(_seed_tables())
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+    worker._supabase = fake_supabase
+
+    fake_supabase.insert(
+        "bot_execution_events",
+        {
+            "id": "event-skip-1",
+            "runtime_id": "runtime-1",
+            "event_type": "action.skipped",
+            "decision_summary": "idem:runtime-1:skip",
+            "request_payload": {"type": "open_long", "symbol": "BTC"},
+            "result_payload": {"issues": ["max_open_positions 1 reached"]},
+            "status": "skipped",
+            "error_reason": None,
+            "created_at": datetime.now(tz=UTC).isoformat(),
+        },
+    )
+
+    should_record = worker._should_record_skip_event(
+        runtime_id="runtime-1",
+        decision_summary="idem:runtime-1:skip",
+        request_payload={"type": "open_long", "symbol": "BTC"},
+        result_payload={"issues": ["max_open_positions 1 reached"]},
+    )
+
+    assert should_record is False
+
+
 def test_runtime_worker_idempotency_key_tracks_execution_state_not_fixed_time_bucket() -> None:
     worker = BotRuntimeWorker(poll_interval_seconds=0.01)
 
@@ -437,11 +538,13 @@ def test_runtime_worker_idempotency_key_tracks_execution_state_not_fixed_time_bu
         runtime_id="runtime-1",
         action=action,
         runtime_state={"executions_total": 0, "failures_total": 0, "last_executed_at": ""},
+        position_lookup={},
     )
     second_key = worker._build_idempotency_key(
         runtime_id="runtime-1",
         action=action,
         runtime_state={"executions_total": 1, "failures_total": 0, "last_executed_at": "2026-03-17T00:00:00+00:00"},
+        position_lookup={},
     )
 
     assert first_key != second_key

@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from typing import Any
 
@@ -24,6 +24,15 @@ from src.services.worker_coordination_service import WorkerCoordinationService
 
 logger = logging.getLogger(__name__)
 PENDING_ENTRY_TTL_SECONDS = 120
+RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 30
+SKIP_EVENT_DEDUP_SECONDS = 300
+ENTRY_ACTION_TYPES = {
+    "open_long",
+    "open_short",
+    "place_market_order",
+    "place_limit_order",
+    "place_twap_order",
+}
 
 
 class BotRuntimeWorker:
@@ -102,16 +111,13 @@ class BotRuntimeWorker:
             )
             return
 
-        markets, positions, open_orders = await asyncio.gather(
-            self._safe_load(self._pacifica.get_markets, []),
+        positions, open_orders = await asyncio.gather(
             self._safe_load(lambda: self._pacifica.get_positions(runtime["wallet_address"]), []),
             self._safe_load(lambda: self._pacifica.get_open_orders(runtime["wallet_address"]), []),
         )
-        market_lookup = self._build_market_lookup(markets)
         position_lookup = self._build_position_lookup(positions)
         open_order_lookup = self._build_open_order_lookup(open_orders)
         rules_json = bot["rules_json"] if isinstance(bot.get("rules_json"), dict) else {}
-        candle_lookup = await self._indicator_context.load_candle_lookup(rules_json)
 
         runtime_policy = self._risk.normalize_policy(runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {})
         performance = await self._calculate_runtime_performance(runtime)
@@ -121,10 +127,6 @@ class BotRuntimeWorker:
             pnl_realized=float(performance.get("pnl_realized") or 0.0),
             pnl_unrealized=float(performance.get("pnl_unrealized") or 0.0),
         )
-        runtime = self._update_runtime(
-            runtime,
-            {"risk_policy_json": runtime_policy, "updated_at": now},
-        )
         runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
         runtime_state = self._reconcile_runtime_state(
             runtime_state=runtime_state,
@@ -132,6 +134,7 @@ class BotRuntimeWorker:
             open_order_lookup=open_order_lookup,
         )
         runtime_policy["_runtime_state"] = runtime_state
+        runtime = self._persist_runtime_policy(runtime, runtime_policy, now=now)
         drawdown_reason = self._risk.drawdown_breach_reason(policy=runtime_policy, runtime_state=runtime_state)
         if drawdown_reason is not None:
             logger.warning(
@@ -193,6 +196,20 @@ class BotRuntimeWorker:
             )
             return
 
+        if self._should_suspend_entry_evaluation(
+            rules_json=rules_json,
+            runtime_policy=runtime_policy,
+            runtime_state=runtime_state,
+        ):
+            logger.debug(
+                "Runtime %s skipped rule evaluation because entry capacity is full and no exit actions are declared",
+                runtime["id"],
+            )
+            return
+
+        markets = await self._safe_load(self._pacifica.get_markets, [])
+        market_lookup = self._build_market_lookup(markets)
+        candle_lookup = await self._indicator_context.load_candle_lookup(rules_json)
         evaluation = self._rules.evaluate(
             rules_json=rules_json,
             context={
@@ -298,10 +315,7 @@ class BotRuntimeWorker:
                     success=True,
                 )
                 runtime_policy["_runtime_state"] = {**persisted_runtime_state, **cycle_runtime_state}
-                runtime = self._update_runtime(
-                    runtime,
-                    {"risk_policy_json": runtime_policy, "updated_at": datetime.now(tz=UTC)},
-                )
+                runtime = self._persist_runtime_policy(runtime, runtime_policy)
                 position_lookup = await self._refresh_position_lookup(credentials["account_address"])
                 open_order_lookup = await self._refresh_open_order_lookup(credentials["account_address"])
                 cycle_runtime_state = self._reconcile_runtime_state(
@@ -310,10 +324,7 @@ class BotRuntimeWorker:
                     open_order_lookup=open_order_lookup,
                 )
                 runtime_policy["_runtime_state"] = {**persisted_runtime_state, **cycle_runtime_state}
-                runtime = self._update_runtime(
-                    runtime,
-                    {"risk_policy_json": runtime_policy, "updated_at": datetime.now(tz=UTC)},
-                )
+                runtime = self._persist_runtime_policy(runtime, runtime_policy)
                 runtime_state = runtime_policy["_runtime_state"]
                 runtime_touched = True
                 event = self._engine.append_execution_event(
@@ -340,10 +351,7 @@ class BotRuntimeWorker:
                 runtime_policy = self._risk.mark_execution(policy=runtime_policy, success=False)
                 runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
                 runtime_policy["_runtime_state"] = {**runtime_state, **cycle_runtime_state}
-                runtime = self._update_runtime(
-                    runtime,
-                    {"risk_policy_json": runtime_policy, "updated_at": datetime.now(tz=UTC)},
-                )
+                runtime = self._persist_runtime_policy(runtime, runtime_policy)
                 runtime_touched = True
                 event = self._engine.append_execution_event(
                     None,
@@ -740,6 +748,29 @@ class BotRuntimeWorker:
         serialized_updates = {key: value.isoformat() if isinstance(value, datetime) else value for key, value in updates.items()}
         return self._supabase.update("bot_runtimes", serialized_updates, filters={"id": runtime["id"]})[0]
 
+    def _persist_runtime_policy(
+        self,
+        runtime: dict[str, Any],
+        runtime_policy: dict[str, Any],
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        resolved_now = now or datetime.now(tz=UTC)
+        runtime_updated_at = self._parse_runtime_state_timestamp(str(runtime.get("updated_at") or ""))
+        heartbeat_due = runtime_updated_at is None or (
+            resolved_now - runtime_updated_at
+        ).total_seconds() >= RUNTIME_HEARTBEAT_INTERVAL_SECONDS
+
+        if runtime.get("risk_policy_json") == runtime_policy and not heartbeat_due:
+            next_runtime = dict(runtime)
+            next_runtime["risk_policy_json"] = runtime_policy
+            return next_runtime
+
+        return self._update_runtime(
+            runtime,
+            {"risk_policy_json": runtime_policy, "updated_at": resolved_now},
+        )
+
     def _should_record_skip_event(
         self,
         *,
@@ -752,18 +783,60 @@ class BotRuntimeWorker:
             "bot_execution_events",
             filters={"runtime_id": runtime_id},
             order="created_at.desc",
-            limit=1,
+            limit=12,
         )
         if not latest_events:
             return True
-        latest_event = latest_events[0]
-        return not (
-            latest_event.get("event_type") == "action.skipped"
-            and latest_event.get("status") == "skipped"
-            and latest_event.get("decision_summary") == decision_summary
-            and latest_event.get("request_payload") == request_payload
-            and latest_event.get("result_payload") == result_payload
-        )
+        cutoff = datetime.now(tz=UTC) - timedelta(seconds=SKIP_EVENT_DEDUP_SECONDS)
+        for event in latest_events:
+            created_at = self._parse_runtime_state_timestamp(str(event.get("created_at") or ""))
+            if created_at is None or created_at < cutoff:
+                continue
+            if (
+                event.get("event_type") == "action.skipped"
+                and event.get("status") == "skipped"
+                and event.get("decision_summary") == decision_summary
+                and event.get("request_payload") == request_payload
+                and event.get("result_payload") == result_payload
+            ):
+                return False
+        return True
+
+    def _should_suspend_entry_evaluation(
+        self,
+        *,
+        rules_json: dict[str, Any],
+        runtime_policy: dict[str, Any],
+        runtime_state: dict[str, Any],
+    ) -> bool:
+        declared_actions = self._rules.declared_actions(rules_json=rules_json)
+        if not declared_actions:
+            return False
+        if any(not self._is_entry_action(action) for action in declared_actions):
+            return False
+
+        max_open_positions = max(1, int(runtime_policy.get("max_open_positions") or 1))
+        managed_positions = runtime_state.get("managed_positions")
+        if not isinstance(managed_positions, dict):
+            managed_positions = {}
+        pending_entries = runtime_state.get("pending_entry_symbols")
+        if not isinstance(pending_entries, dict):
+            pending_entries = {}
+
+        reserved_symbols = {
+            str(item.get("symbol") or symbol).strip().upper()
+            for symbol, item in managed_positions.items()
+            if isinstance(item, dict) and abs(float(item.get("amount") or 0.0)) > 0
+        }
+        reserved_symbols.update(str(symbol).strip().upper() for symbol in pending_entries if str(symbol).strip())
+        return len(reserved_symbols) >= max_open_positions
+
+    @staticmethod
+    def _is_entry_action(action: dict[str, Any]) -> bool:
+        action_type = str(action.get("type") or "")
+        if action_type not in ENTRY_ACTION_TYPES:
+            return False
+        return not BotRuntimeWorker._to_bool(action.get("reduce_only"), False)
 
     @staticmethod
     def _normalize_symbol(value: Any) -> str:

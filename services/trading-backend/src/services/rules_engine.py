@@ -92,6 +92,19 @@ class RulesEngine:
         "cancel_all_orders",
     }
 
+    def declared_actions(self, *, rules_json: dict[str, Any]) -> list[dict[str, Any]]:
+        if not isinstance(rules_json, dict):
+            return []
+
+        if "graph" in rules_json:
+            inspection = self._inspect_graph(rules_json.get("graph"))
+            if inspection.issues:
+                return []
+            return self._reachable_graph_actions(inspection)
+
+        actions = rules_json.get("actions") if isinstance(rules_json.get("actions"), list) else []
+        return [action for action in (self._normalize_action(item) for item in actions) if action is not None]
+
     def validation_issues(self, *, rules_json: dict[str, Any]) -> list[str]:
         if not isinstance(rules_json, dict):
             return ["rules_json must be an object"]
@@ -197,6 +210,31 @@ class RulesEngine:
             "actions": actions,
             "evaluated_conditions": evaluated_conditions,
         }
+
+    def _reachable_graph_actions(self, inspection: _GraphInspection) -> list[dict[str, Any]]:
+        reachable_actions: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        stack = [inspection.entry]
+
+        while stack:
+            node_id = stack.pop()
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+
+            node = inspection.nodes.get(node_id)
+            if node is None:
+                continue
+
+            if node.kind == "action":
+                normalized = self._normalize_action(node.config)
+                if normalized is not None:
+                    reachable_actions.append(normalized)
+
+            for edge in inspection.outgoing.get(node_id, []):
+                stack.append(edge.target)
+
+        return reachable_actions
 
     def _visit_graph_node(
         self,
