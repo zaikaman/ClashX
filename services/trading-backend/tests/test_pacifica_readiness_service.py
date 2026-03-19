@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from src.services.pacifica_client import PacificaClientError
 from src.services.pacifica_readiness_service import PacificaReadinessService
 
 
@@ -55,9 +56,9 @@ def test_readiness_returns_specific_blockers_when_checks_fail() -> None:
         del wallet_address
         return 0.05
 
-    async def fake_account_state(wallet_address: str) -> tuple[bool, float]:
+    async def fake_account_state(wallet_address: str) -> tuple[bool, float, None]:
         del wallet_address
-        return False, 80.0
+        return False, 80.0, None
 
     service._get_sol_balance = fake_sol_balance  # type: ignore[method-assign]
     service._get_account_access_and_equity = fake_account_state  # type: ignore[method-assign]
@@ -129,3 +130,30 @@ def test_readiness_prefers_account_equity_before_portfolio_history() -> None:
     assert readiness["ready"] is True
     assert readiness["metrics"]["equity_usd"] == 990.67
     assert readiness["steps"][1]["verified"] is True
+
+
+def test_readiness_reports_pacifica_rate_limit_as_verification_issue() -> None:
+    service = PacificaReadinessService()
+
+    class RateLimitedPacificaClient:
+        async def get_account_info(self, wallet_address: str) -> dict[str, Any]:
+            del wallet_address
+            raise PacificaClientError("Pacifica account request failed (429): Rate limit exceeded", status_code=429)
+
+    service.pacifica = RateLimitedPacificaClient()
+    service.auth = FakeAuthService()
+
+    async def fake_sol_balance(wallet_address: str) -> float:
+        del wallet_address
+        return 0.2
+
+    service._get_sol_balance = fake_sol_balance  # type: ignore[method-assign]
+
+    readiness = asyncio.run(service.get_readiness(None, "wallet-1"))
+
+    assert readiness["ready"] is False
+    assert readiness["metrics"]["equity_usd"] is None
+    assert readiness["steps"][1]["verified"] is False
+    assert "Pacifica readiness could not be verified right now because the Pacifica API is rate-limiting requests." in readiness["blockers"]
+    assert "Pacifica equity must be at least $100." not in readiness["blockers"]
+    assert "Pacifica account access is not verified yet." not in readiness["blockers"]

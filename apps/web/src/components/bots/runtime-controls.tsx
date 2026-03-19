@@ -7,7 +7,11 @@ import {
   type PacificaOnboardingStatus,
 } from "@/components/pacifica/onboarding-checklist";
 import { useClashxAuth } from "@/lib/clashx-auth";
-
+import {
+  PacificaReadinessError,
+  fetchPacificaReadiness,
+  type PacificaReadinessPayload,
+} from "@/lib/pacifica-readiness";
 type RuntimeResponse = {
   id: string;
   status: string;
@@ -16,13 +20,7 @@ type RuntimeResponse = {
   deployed_at?: string | null;
   stopped_at?: string | null;
 };
-
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-
-type PacificaReadinessPayload = {
-  ready: boolean;
-  blockers: string[];
-};
 
 export function RuntimeControls({
   botId,
@@ -87,19 +85,9 @@ export function RuntimeControls({
     async function loadReadiness() {
       setReadinessStatus("loading");
       try {
-        const response = await fetch(
-          `${API_BASE_URL}/api/pacifica/readiness?wallet_address=${encodeURIComponent(walletAddress.trim())}`,
-          {
-            cache: "no-store",
-            headers: await getAuthHeaders(),
-          },
-        );
-        const payload = (await response.json()) as PacificaReadinessPayload | { detail?: string };
-        if (!response.ok) {
-          throw new Error("detail" in payload ? payload.detail ?? "Pacifica readiness check failed." : "Pacifica readiness check failed.");
-        }
+        const payload = await fetchPacificaReadiness(walletAddress, getAuthHeaders);
         if (!cancelled) {
-          setReadiness(payload as PacificaReadinessPayload);
+          setReadiness(payload);
           setReadinessStatus("idle");
         }
       } catch {
@@ -140,6 +128,15 @@ export function RuntimeControls({
     setStatus(action);
     setError(null);
     try {
+      if (action === "deploy") {
+        await fetchPacificaReadiness(walletAddress, getAuthHeaders).then((payload) => {
+          setReadiness(payload);
+          if (!payload.ready) {
+            throw new PacificaReadinessError(payload);
+          }
+        });
+      }
+
       const endpoint = `${API_BASE_URL}/api/bots/${botId}/${action}`;
       const body =
         action === "deploy"
@@ -157,6 +154,9 @@ export function RuntimeControls({
       }
       onRuntimeUpdate?.(payload as RuntimeResponse);
     } catch (runtimeError) {
+      if (action === "deploy" && runtimeError instanceof PacificaReadinessError) {
+        setSetupOpen(true);
+      }
       setError(runtimeError instanceof Error ? runtimeError.message : "Runtime action failed");
     } finally {
       setStatus("idle");
@@ -170,6 +170,7 @@ export function RuntimeControls({
         onClose={() => setSetupOpen(false)}
         mode="builder"
         onStatusChange={setSetupStatus}
+        walletAddressOverride={walletAddress}
       />
       <div className="flex items-center justify-between">
         <span className="label text-[#74b97f]">runtime controls</span>

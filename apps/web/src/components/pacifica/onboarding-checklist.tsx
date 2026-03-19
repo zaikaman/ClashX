@@ -3,32 +3,11 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
+import {
+  fetchPacificaReadiness,
+  type PacificaReadinessPayload,
+} from "@/lib/pacifica-readiness";
 import { useClashxAuth } from "@/lib/clashx-auth";
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-
-type PacificaReadinessStep = {
-  id: "funding" | "app_access" | "agent_authorization";
-  title: string;
-  verified: boolean;
-  detail: string;
-};
-
-type PacificaReadinessPayload = {
-  wallet_address: string;
-  ready: boolean;
-  blockers: string[];
-  metrics: {
-    sol_balance: number;
-    min_sol_balance: number;
-    equity_usd: number;
-    min_equity_usd: number;
-    agent_wallet_address: string | null;
-    authorization_status: string;
-    builder_code: string | null;
-  };
-  steps: PacificaReadinessStep[];
-};
 
 export type PacificaOnboardingStatus = {
   ready: boolean;
@@ -46,6 +25,10 @@ function formatUsd(value: number) {
   }).format(value);
 }
 
+function formatMetricUsd(value: number | null) {
+  return value === null ? "--" : formatUsd(value);
+}
+
 function formatSol(value: number) {
   return new Intl.NumberFormat("en-US", {
     minimumFractionDigits: 0,
@@ -58,44 +41,43 @@ export function PacificaOnboardingChecklist({
   onClose,
   mode = "builder",
   onStatusChange,
+  walletAddressOverride,
 }: {
   open: boolean;
   onClose: () => void;
   mode?: "builder" | "agent";
   onStatusChange?: (status: PacificaOnboardingStatus) => void;
+  walletAddressOverride?: string | null;
 }) {
   const { authenticated, login, walletAddress, getAuthHeaders } = useClashxAuth();
+  const resolvedWalletAddress = walletAddressOverride?.trim() || walletAddress || null;
   const [readiness, setReadiness] = useState<PacificaReadinessPayload | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
+  const resolvedReadiness = authenticated && resolvedWalletAddress ? readiness : null;
+  const resolvedStatus = authenticated && resolvedWalletAddress ? status : "idle";
+  const resolvedError = authenticated && resolvedWalletAddress ? error : null;
 
   useEffect(() => {
-    if (!authenticated || !walletAddress) {
-      setReadiness(null);
-      setStatus("idle");
-      setError(null);
+    if (!authenticated || !resolvedWalletAddress) {
       return;
     }
 
     let cancelled = false;
 
     async function loadReadiness() {
-      const resolvedWalletAddress = walletAddress!;
+      const activeWalletAddress = resolvedWalletAddress;
+      if (!activeWalletAddress) {
+        return;
+      }
       setStatus("loading");
       setError(null);
       try {
-        const response = await fetch(`${API_BASE_URL}/api/pacifica/readiness?wallet_address=${encodeURIComponent(resolvedWalletAddress)}`, {
-          cache: "no-store",
-          headers: await getAuthHeaders(),
-        });
-        const payload = (await response.json()) as PacificaReadinessPayload | { detail?: string };
-        if (!response.ok) {
-          throw new Error("detail" in payload ? payload.detail ?? "Unable to load Pacifica readiness." : "Unable to load Pacifica readiness.");
-        }
+        const payload = await fetchPacificaReadiness(activeWalletAddress, getAuthHeaders);
         if (cancelled) {
           return;
         }
-        setReadiness(payload as PacificaReadinessPayload);
+        setReadiness(payload);
         setStatus("idle");
       } catch (loadError) {
         if (cancelled) {
@@ -110,26 +92,26 @@ export function PacificaOnboardingChecklist({
     return () => {
       cancelled = true;
     };
-  }, [authenticated, getAuthHeaders, walletAddress]);
+  }, [authenticated, getAuthHeaders, resolvedWalletAddress]);
 
-  const fundingStep = readiness?.steps.find((step) => step.id === "funding");
-  const appAccessStep = readiness?.steps.find((step) => step.id === "app_access");
-  const agentStep = readiness?.steps.find((step) => step.id === "agent_authorization");
+  const fundingStep = resolvedReadiness?.steps.find((step) => step.id === "funding");
+  const appAccessStep = resolvedReadiness?.steps.find((step) => step.id === "app_access");
+  const agentStep = resolvedReadiness?.steps.find((step) => step.id === "agent_authorization");
   const blocker = useMemo(() => {
     if (!authenticated) {
       return "Sign in with your trading wallet before you deploy.";
     }
-    if (!walletAddress) {
+    if (!resolvedWalletAddress) {
       return "Connect the Solana wallet you want ClashX to trade with.";
     }
-    if (status === "loading") {
+    if (resolvedStatus === "loading") {
       return "Checking Pacifica readiness.";
     }
-    if (error) {
-      return error;
+    if (resolvedError) {
+      return resolvedError;
     }
-    return readiness?.blockers[0] ?? null;
-  }, [authenticated, error, readiness?.blockers, status, walletAddress]);
+    return resolvedReadiness?.blockers[0] ?? null;
+  }, [authenticated, resolvedError, resolvedReadiness?.blockers, resolvedStatus, resolvedWalletAddress]);
 
   useEffect(() => {
     onStatusChange?.({
@@ -177,42 +159,42 @@ export function PacificaOnboardingChecklist({
               <div className="font-mono text-sm font-bold uppercase tracking-tight text-neutral-50">
                 {blocker ?? "All Pacifica checks are verified."}
               </div>
-              {walletAddress ? <div className="truncate text-[0.7rem] text-neutral-500">{walletAddress}</div> : null}
+              {resolvedWalletAddress ? <div className="truncate text-[0.7rem] text-neutral-500">{resolvedWalletAddress}</div> : null}
             </article>
 
             <article className="grid gap-1 rounded-[1.2rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] p-4">
               <span className="text-[0.56rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">SOL on devnet</span>
               <div className="font-mono text-xl font-bold uppercase tracking-tight text-neutral-50">
-                {readiness ? `${formatSol(readiness.metrics.sol_balance)} SOL` : "--"}
+                {resolvedReadiness ? `${formatSol(resolvedReadiness.metrics.sol_balance)} SOL` : "--"}
               </div>
               <p className="text-[0.7rem] leading-4 text-neutral-500">
-                Need {readiness ? `${formatSol(readiness.metrics.min_sol_balance)} SOL` : "0.1 SOL"} minimum.
+                Need {resolvedReadiness ? `${formatSol(resolvedReadiness.metrics.min_sol_balance)} SOL` : "0.1 SOL"} minimum.
               </p>
             </article>
 
             <article className="grid gap-1 rounded-[1.2rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] p-4">
-              <span className="text-[0.56rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Pacifica equity</span>
-              <div className="font-mono text-xl font-bold uppercase tracking-tight text-neutral-50">
-                {readiness ? formatUsd(readiness.metrics.equity_usd) : "--"}
-              </div>
-              <p className="text-[0.7rem] leading-4 text-neutral-500">
-                Need {readiness ? formatUsd(readiness.metrics.min_equity_usd) : "$100"} minimum.
+                <span className="text-[0.56rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Pacifica equity</span>
+                <div className="font-mono text-xl font-bold uppercase tracking-tight text-neutral-50">
+                  {resolvedReadiness ? formatMetricUsd(resolvedReadiness.metrics.equity_usd) : "--"}
+                </div>
+                <p className="text-[0.7rem] leading-4 text-neutral-500">
+                  Need {resolvedReadiness ? formatUsd(resolvedReadiness.metrics.min_equity_usd) : "$100"} minimum.
               </p>
             </article>
 
             <article className="grid gap-1 rounded-[1.2rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] p-4">
               <span className="text-[0.56rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Agent wallet</span>
               <div className={`font-mono text-xl font-bold uppercase tracking-tight ${agentStep?.verified ? "text-[#74b97f]" : "text-neutral-50"}`}>
-                {readiness ? readiness.metrics.authorization_status : "inactive"}
+                {resolvedReadiness ? resolvedReadiness.metrics.authorization_status : "inactive"}
               </div>
               <p className="text-[0.7rem] leading-4 text-neutral-500">
-                {readiness?.metrics.builder_code ? `Builder ${readiness.metrics.builder_code}` : "Delegated signer required."}
+                {resolvedReadiness?.metrics.builder_code ? `Builder ${resolvedReadiness.metrics.builder_code}` : "Delegated signer required."}
               </p>
             </article>
           </div>
 
           <div className="grid gap-4 lg:grid-cols-3">
-            {readiness?.steps.map((step) => (
+            {resolvedReadiness?.steps.map((step) => (
               <article key={step.id} className="grid gap-3 rounded-[1.2rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="grid gap-1.5">
@@ -230,8 +212,8 @@ export function PacificaOnboardingChecklist({
 
                 {step.id === "funding" ? (
                   <div className="grid gap-2 rounded-[1rem] border border-[rgba(255,255,255,0.06)] bg-[#090a0a] p-3 text-xs leading-5 text-neutral-400">
-                    <div>SOL: <span className="text-neutral-200">{readiness ? `${formatSol(readiness.metrics.sol_balance)} / ${formatSol(readiness.metrics.min_sol_balance)} required` : "--"}</span></div>
-                    <div>Equity: <span className="text-neutral-200">{readiness ? `${formatUsd(readiness.metrics.equity_usd)} / ${formatUsd(readiness.metrics.min_equity_usd)} required` : "--"}</span></div>
+                    <div>SOL: <span className="text-neutral-200">{resolvedReadiness ? `${formatSol(resolvedReadiness.metrics.sol_balance)} / ${formatSol(resolvedReadiness.metrics.min_sol_balance)} required` : "--"}</span></div>
+                    <div>Equity: <span className="text-neutral-200">{resolvedReadiness ? `${formatMetricUsd(resolvedReadiness.metrics.equity_usd)} / ${formatUsd(resolvedReadiness.metrics.min_equity_usd)} required` : "--"}</span></div>
                     <div className="flex flex-wrap gap-2 pt-1">
                       <a
                         href="https://test-app.pacifica.fi/faucet"
@@ -279,8 +261,8 @@ export function PacificaOnboardingChecklist({
 
                 {step.id === "agent_authorization" ? (
                   <div className="grid gap-2 rounded-[1rem] border border-[rgba(255,255,255,0.06)] bg-[#090a0a] p-3 text-xs leading-5 text-neutral-400">
-                    <div>Status: <span className="text-neutral-200">{readiness?.metrics.authorization_status ?? "inactive"}</span></div>
-                    <div className="break-all">Agent: <span className="text-neutral-200">{readiness?.metrics.agent_wallet_address ?? "not bound yet"}</span></div>
+                    <div>Status: <span className="text-neutral-200">{resolvedReadiness?.metrics.authorization_status ?? "inactive"}</span></div>
+                    <div className="break-all">Agent: <span className="text-neutral-200">{resolvedReadiness?.metrics.agent_wallet_address ?? "not bound yet"}</span></div>
                     <div className="flex flex-wrap gap-2 pt-1">
                       <Link
                         href="/build"

@@ -15,6 +15,7 @@ import {
 export function BuilderStudio() {
   const [notice, setNotice] = useState<(BuilderNoticePayload & { id: number }) | null>(null);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [builderWalletAddress, setBuilderWalletAddress] = useState("");
   const [onboardingStatus, setOnboardingStatus] = useState<PacificaOnboardingStatus>({
     ready: false,
     blocker: "Sign in with your trading wallet before you deploy.",
@@ -42,6 +43,7 @@ export function BuilderStudio() {
         onClose={() => setOnboardingOpen(false)}
         mode="builder"
         onStatusChange={setOnboardingStatus}
+        walletAddressOverride={builderWalletAddress}
       />
       {notice ? (
         <div className="absolute right-4 top-4 z-20">
@@ -76,6 +78,7 @@ export function BuilderStudio() {
         onNotice={handleNotice}
         onboardingStatus={onboardingStatus}
         onOpenOnboardingGuide={() => setOnboardingOpen(true)}
+        onWalletAddressChange={setBuilderWalletAddress}
       />
     </div>
   );

@@ -19,6 +19,10 @@ import {
   type PacificaOnboardingStatus,
 } from "@/components/pacifica/onboarding-checklist";
 import { useClashxAuth } from "@/lib/clashx-auth";
+import {
+  PacificaReadinessError,
+  assertPacificaDeployReadiness,
+} from "@/lib/pacifica-readiness";
 import type { BotPerformance } from "@/lib/bot-performance";
 
 type RuntimeSummary = {
@@ -482,6 +486,21 @@ export function BotsFleetPage() {
       return;
     }
 
+    if (action === "deploy" && walletAddress) {
+      try {
+        await assertPacificaDeployReadiness(walletAddress, getAuthHeaders);
+      } catch (actionError) {
+        if (actionError instanceof PacificaReadinessError) {
+          setDeployGuideOpen(true);
+        }
+        setFeedback({
+          tone: "error",
+          message: actionError instanceof Error ? actionError.message : "Pacifica readiness check failed",
+        });
+        return;
+      }
+    }
+
     const label = `${action === "deploy" ? "Deploying" : action === "resume" ? "Resuming" : "Stopping"} ${bot.name}`;
     setFeedback(null);
     setActionState({ label, completed: 0, total: 1 });
@@ -541,6 +560,21 @@ export function BotsFleetPage() {
         });
         setPolicyEditorOpen(true);
         return;
+      }
+
+      if (walletAddress) {
+        try {
+          await assertPacificaDeployReadiness(walletAddress, getAuthHeaders);
+        } catch (actionError) {
+          if (actionError instanceof PacificaReadinessError) {
+            setDeployGuideOpen(true);
+          }
+          setFeedback({
+            tone: "error",
+            message: actionError instanceof Error ? actionError.message : "Pacifica readiness check failed",
+          });
+          return;
+        }
       }
     }
 
@@ -622,6 +656,7 @@ export function BotsFleetPage() {
         onClose={() => setDeployGuideOpen(false)}
         mode="builder"
         onStatusChange={setDeployGuideStatus}
+        walletAddressOverride={walletAddress}
       />
       <section className="flex flex-wrap items-center gap-2">
         {!authenticated ? (

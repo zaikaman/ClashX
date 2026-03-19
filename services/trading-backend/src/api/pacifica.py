@@ -62,7 +62,7 @@ class PacificaReadinessStepResponse(BaseModel):
 class PacificaReadinessMetricsResponse(BaseModel):
     sol_balance: float
     min_sol_balance: float
-    equity_usd: float
+    equity_usd: float | None = None
     min_equity_usd: float
     agent_wallet_address: str | None = None
     authorization_status: str

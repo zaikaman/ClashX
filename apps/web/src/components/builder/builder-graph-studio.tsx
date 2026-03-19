@@ -17,7 +17,7 @@ import {
 } from "@xyflow/react";
 import { Box, Sparkles, Grid3x3, Activity, Play, Search, ChevronDown, ChevronRight, Plus, Globe, Check, ArrowUp, RefreshCcw, Download, Upload } from "lucide-react";
 import { clsx } from "clsx";
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 
 import { BuilderFlowNodeCard } from "@/components/builder/builder-flow-node";
 import {
@@ -57,6 +57,10 @@ import {
 } from "@/components/builder/builder-flow-utils";
 import { type PacificaOnboardingStatus } from "@/components/pacifica/onboarding-checklist";
 import { useClashxAuth } from "@/lib/clashx-auth";
+import {
+  PacificaReadinessError,
+  assertPacificaDeployReadiness,
+} from "@/lib/pacifica-readiness";
 
 type BuilderCatalogTemplate = {
   id: string;
@@ -546,10 +550,12 @@ export function BuilderGraphStudio({
   onNotice,
   onboardingStatus,
   onOpenOnboardingGuide,
+  onWalletAddressChange,
 }: {
   onNotice?: (notice: BuilderNoticePayload) => void;
   onboardingStatus: PacificaOnboardingStatus;
   onOpenOnboardingGuide?: () => void;
+  onWalletAddressChange?: (walletAddress: string) => void;
 }) {
   const searchParams = useSearchParams();
   const requestedBotId = searchParams.get("botId");
@@ -603,6 +609,10 @@ export function BuilderGraphStudio({
   useEffect(() => {
     if (authenticatedWallet) setWalletAddress(authenticatedWallet);
   }, [authenticatedWallet]);
+
+  useEffect(() => {
+    onWalletAddressChange?.(walletAddress.trim());
+  }, [onWalletAddressChange, walletAddress]);
 
   useEffect(() => {
     void (async () => {
@@ -660,7 +670,7 @@ export function BuilderGraphStudio({
     };
   }, [authenticated, walletAddress, getAuthHeaders]);
 
-  async function loadBotIntoBuilder(botId: string) {
+  const loadBotIntoBuilder = useCallback(async (botId: string) => {
     if (!authenticated || !walletAddress) {
       login();
       return;
@@ -722,14 +732,14 @@ export function BuilderGraphStudio({
     } finally {
       setLoadingBotId(null);
     }
-  }
+  }, [authenticated, flow, getAuthHeaders, login, onNotice, setEdges, setNodes, walletAddress]);
 
   useEffect(() => {
     if (!authenticated || !walletAddress || !requestedBotId || requestedBotId === loadedBotId || requestedBotId === loadingBotId) {
       return;
     }
     void loadBotIntoBuilder(requestedBotId);
-  }, [authenticated, walletAddress, requestedBotId, loadedBotId, loadingBotId]);
+  }, [authenticated, walletAddress, requestedBotId, loadedBotId, loadingBotId, loadBotIntoBuilder]);
 
   useEffect(() => {
     if (selectedNodeId && nodes.some((node) => node.id === selectedNodeId && node.data.kind !== "entry")) return;
@@ -1426,6 +1436,7 @@ export function BuilderGraphStudio({
     setRuntimeControlsError(null);
     try {
       const botId = await persistBotDraft();
+      await assertPacificaDeployReadiness(walletAddress.trim(), getAuthHeaders);
       const response = await fetch(`${API_BASE_URL}/api/bots/${botId}/deploy`, {
         method: "POST",
         headers: await getAuthHeaders({ "Content-Type": "application/json" }),
@@ -1444,6 +1455,10 @@ export function BuilderGraphStudio({
         detail: "It will start trading as soon as the strategy conditions are met.",
       });
     } catch (deployError) {
+      if (deployError instanceof PacificaReadinessError) {
+        setRuntimeControlsOpen(false);
+        onOpenOnboardingGuide?.();
+      }
       setError(deployError instanceof Error ? deployError.message : "Deploy failed");
     } finally {
       setStatus("idle");
