@@ -525,6 +525,62 @@ def test_bot_risk_service_waits_for_position_sync_before_setting_tpsl() -> None:
     assert "awaiting position sync on BTC before TP/SL" in issues
 
 
+def test_bot_risk_service_ignores_blank_protective_order_ids_when_assessing_tpsl() -> None:
+    risk = BotRiskService()
+
+    issues = risk.assess_action(
+        policy={},
+        action={"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.8, "stop_loss_pct": 0.9},
+        runtime_state={},
+        position_lookup={},
+        open_order_lookup={
+            "BTC": [
+                {"symbol": "BTC", "reduce_only": True, "kind": "take_profit", "client_order_id": ""},
+                {"symbol": "BTC", "reduce_only": True, "kind": "stop_loss"},
+            ]
+        },
+    )
+
+    assert "existing protective order on BTC already covers this position" not in issues
+
+
+def test_bot_risk_service_requires_both_known_tpsl_orders_before_marking_position_as_covered() -> None:
+    risk = BotRiskService()
+    runtime_state = {
+        "managed_positions": {
+            "BTC": {
+                "symbol": "BTC",
+                "amount": 0.003,
+                "take_profit_client_order_id": "tp-1",
+                "stop_loss_client_order_id": "sl-1",
+            }
+        }
+    }
+
+    partial_issues = risk.assess_action(
+        policy={},
+        action={"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.8, "stop_loss_pct": 0.9},
+        runtime_state=runtime_state,
+        position_lookup={"BTC": {"symbol": "BTC", "amount": 0.003}},
+        open_order_lookup={"BTC": [{"symbol": "BTC", "reduce_only": True, "client_order_id": "tp-1"}]},
+    )
+    full_issues = risk.assess_action(
+        policy={},
+        action={"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.8, "stop_loss_pct": 0.9},
+        runtime_state=runtime_state,
+        position_lookup={"BTC": {"symbol": "BTC", "amount": 0.003}},
+        open_order_lookup={
+            "BTC": [
+                {"symbol": "BTC", "reduce_only": True, "client_order_id": "tp-1"},
+                {"symbol": "BTC", "reduce_only": True, "client_order_id": "sl-1"},
+            ]
+        },
+    )
+
+    assert "existing protective order on BTC already covers this position" not in partial_issues
+    assert "existing protective order on BTC already covers this position" in full_issues
+
+
 def test_runtime_process_allows_tpsl_immediately_after_entry(monkeypatch: Any) -> None:
     monkeypatch.setattr("src.workers.bot_runtime_worker.broadcaster.publish", _noop_publish)
 
@@ -704,6 +760,67 @@ def test_runtime_process_does_not_reenter_or_duplicate_tpsl_while_position_sync_
         "create_market_order",
         "set_position_tpsl",
     ]
+
+
+def test_runtime_process_does_not_append_duplicate_skipped_tpsl_events_for_unchanged_state(monkeypatch: Any) -> None:
+    monkeypatch.setattr("src.workers.bot_runtime_worker.broadcaster.publish", _noop_publish)
+
+    supabase = FakeSupabaseRestClient()
+    bot_id = "bot-1"
+    runtime_id = "runtime-1"
+    wallet_address = "wallet-1"
+    user_id = "user-1"
+    supabase.tables["bot_definitions"] = [
+        {
+            "id": bot_id,
+            "user_id": user_id,
+            "wallet_address": wallet_address,
+            "rules_json": {
+                "conditions": [{"type": "price_below", "symbol": "BTC", "value": 200000}],
+                "actions": [
+                    {"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.8, "stop_loss_pct": 0.9},
+                ],
+            },
+        }
+    ]
+    supabase.tables["bot_runtimes"] = [
+        {
+            "id": runtime_id,
+            "bot_definition_id": bot_id,
+            "user_id": user_id,
+            "wallet_address": wallet_address,
+            "status": "active",
+            "mode": "live",
+            "risk_policy_json": {"max_open_positions": 1, "cooldown_seconds": 0},
+            "updated_at": "2026-03-18T07:00:00+00:00",
+        }
+    ]
+    supabase.tables["bot_execution_events"] = []
+
+    worker = BotRuntimeWorker()
+    worker._supabase = supabase
+    worker._engine._supabase = supabase
+    worker._auth = FakeAuthService()
+    worker._pacifica = FakePacificaClient()
+    worker._indicator_context = FakeIndicatorContextService()
+    worker._coordination = FakeCoordinationService()
+
+    async def fake_performance(runtime: dict[str, Any]) -> dict[str, Any]:
+        del runtime
+        return {"pnl_total": 0.0, "pnl_realized": 0.0, "pnl_unrealized": 0.0}
+
+    worker._calculate_runtime_performance = fake_performance  # type: ignore[method-assign]
+
+    asyncio.run(worker._process_runtime(None, supabase.tables["bot_runtimes"][0]))
+    asyncio.run(worker._process_runtime(None, supabase.tables["bot_runtimes"][0]))
+
+    skipped_events = [
+        event
+        for event in supabase.tables["bot_execution_events"]
+        if event.get("event_type") == "action.skipped" and event.get("status") == "skipped"
+    ]
+
+    assert len(skipped_events) == 1
 
 
 def test_two_bots_can_manage_separate_btc_slices_on_the_same_wallet(monkeypatch: Any) -> None:

@@ -129,11 +129,14 @@ class BotRiskService:
             symbol_orders = open_orders.get(symbol) or []
             take_profit_client_order_id = str(managed_position.get("take_profit_client_order_id") or "").strip()
             stop_loss_client_order_id = str(managed_position.get("stop_loss_client_order_id") or "").strip()
-            if any(
-                str(item.get("client_order_id") or "").strip() in {take_profit_client_order_id, stop_loss_client_order_id}
-                for item in symbol_orders
-            ):
-                issues.append(f"existing protective order on {symbol} already covers this position")
+            if take_profit_client_order_id and stop_loss_client_order_id:
+                open_client_order_ids = {
+                    str(item.get("client_order_id") or "").strip()
+                    for item in symbol_orders
+                    if str(item.get("client_order_id") or "").strip()
+                }
+                if {take_profit_client_order_id, stop_loss_client_order_id}.issubset(open_client_order_ids):
+                    issues.append(f"existing protective order on {symbol} already covers this position")
 
         if action_type == "close_position" and abs(self._to_float(managed_position.get("amount"), 0.0)) <= 0:
             issues.append(f"bot does not manage an open position on {symbol}")

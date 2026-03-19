@@ -232,27 +232,34 @@ class BotRuntimeWorker:
                     runtime_state=runtime_state,
                     position_lookup=position_lookup,
                 )
-                event = self._engine.append_execution_event(
-                    None,
-                    runtime=runtime,
-                    event_type="action.skipped",
+                skip_result = {"issues": issues}
+                if self._should_record_skip_event(
+                    runtime_id=runtime["id"],
                     decision_summary=skipped_key,
                     request_payload=action,
-                    result_payload={"issues": issues},
-                    status="skipped",
-                )
-                await broadcaster.publish(
-                    channel=f"user:{runtime['user_id']}",
-                    event="bot.execution.skipped",
-                    payload=self._serialize_event_payload(event),
-                )
-                logger.warning(
-                    "Runtime %s skipped action %s for %s: %s",
-                    runtime["id"],
-                    action.get("type"),
-                    action.get("symbol"),
-                    "; ".join(issues),
-                )
+                    result_payload=skip_result,
+                ):
+                    event = self._engine.append_execution_event(
+                        None,
+                        runtime=runtime,
+                        event_type="action.skipped",
+                        decision_summary=skipped_key,
+                        request_payload=action,
+                        result_payload=skip_result,
+                        status="skipped",
+                    )
+                    await broadcaster.publish(
+                        channel=f"user:{runtime['user_id']}",
+                        event="bot.execution.skipped",
+                        payload=self._serialize_event_payload(event),
+                    )
+                    logger.warning(
+                        "Runtime %s skipped action %s for %s: %s",
+                        runtime["id"],
+                        action.get("type"),
+                        action.get("symbol"),
+                        "; ".join(issues),
+                    )
                 continue
 
             idempotency_key = self._build_idempotency_key(
@@ -732,6 +739,31 @@ class BotRuntimeWorker:
     def _update_runtime(self, runtime: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
         serialized_updates = {key: value.isoformat() if isinstance(value, datetime) else value for key, value in updates.items()}
         return self._supabase.update("bot_runtimes", serialized_updates, filters={"id": runtime["id"]})[0]
+
+    def _should_record_skip_event(
+        self,
+        *,
+        runtime_id: str,
+        decision_summary: str,
+        request_payload: dict[str, Any],
+        result_payload: dict[str, Any],
+    ) -> bool:
+        latest_events = self._supabase.select(
+            "bot_execution_events",
+            filters={"runtime_id": runtime_id},
+            order="created_at.desc",
+            limit=1,
+        )
+        if not latest_events:
+            return True
+        latest_event = latest_events[0]
+        return not (
+            latest_event.get("event_type") == "action.skipped"
+            and latest_event.get("status") == "skipped"
+            and latest_event.get("decision_summary") == decision_summary
+            and latest_event.get("request_payload") == request_payload
+            and latest_event.get("result_payload") == result_payload
+        )
 
     @staticmethod
     def _normalize_symbol(value: Any) -> str:
