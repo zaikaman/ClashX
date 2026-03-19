@@ -31,7 +31,10 @@ class PacificaClient:
         self._lock = asyncio.Lock()
         self._connected = False
         self._rate_limit_interval = 0.05
-        self._http = httpx.AsyncClient(timeout=20.0)
+        default_headers: dict[str, str] = {}
+        if self.settings.pacifica_api_key:
+            default_headers["PF-API-KEY"] = self.settings.pacifica_api_key
+        self._http = httpx.AsyncClient(timeout=20.0, headers=default_headers)
 
     async def connect_ws(self) -> None:
         self._connected = True
