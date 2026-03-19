@@ -429,13 +429,15 @@ class BotRuntimeWorker:
                     "client_order_id": client_order_id,
                 }
             )
+            response_payload = response.get("payload") if isinstance(response.get("payload"), dict) else {}
+            normalized_client_order_id = str(response_payload.get("client_order_id") or client_order_id or "").strip()
             response["execution_meta"] = {
                 "symbol": symbol,
                 "side": self._to_pacifica_side(side),
                 "amount": amount,
                 "reduce_only": reduce_only,
                 "reference_price": reference_price,
-                "client_order_id": client_order_id,
+                "client_order_id": normalized_client_order_id,
             }
             return response
 
@@ -473,13 +475,15 @@ class BotRuntimeWorker:
                     "client_order_id": client_order_id,
                 }
             )
+            response_payload = response.get("payload") if isinstance(response.get("payload"), dict) else {}
+            normalized_client_order_id = str(response_payload.get("client_order_id") or client_order_id or "").strip()
             response["execution_meta"] = {
                 "symbol": symbol,
                 "side": self._to_pacifica_side(side),
                 "amount": amount,
                 "reduce_only": reduce_only,
                 "reference_price": price,
-                "client_order_id": client_order_id,
+                "client_order_id": normalized_client_order_id,
             }
             return response
 
@@ -516,13 +520,15 @@ class BotRuntimeWorker:
                     "client_order_id": client_order_id,
                 }
             )
+            response_payload = response.get("payload") if isinstance(response.get("payload"), dict) else {}
+            normalized_client_order_id = str(response_payload.get("client_order_id") or client_order_id or "").strip()
             response["execution_meta"] = {
                 "symbol": symbol,
                 "side": self._to_pacifica_side(side),
                 "amount": amount,
                 "reduce_only": reduce_only,
                 "reference_price": reference_price,
-                "client_order_id": client_order_id,
+                "client_order_id": normalized_client_order_id,
             }
             return response
 
@@ -610,12 +616,19 @@ class BotRuntimeWorker:
                     },
                 }
             )
+            response_payload = response.get("payload") if isinstance(response.get("payload"), dict) else {}
+            take_profit_payload = response_payload.get("take_profit") if isinstance(response_payload.get("take_profit"), dict) else {}
+            stop_loss_payload = response_payload.get("stop_loss") if isinstance(response_payload.get("stop_loss"), dict) else {}
             response["execution_meta"] = {
                 "symbol": symbol,
                 "side": close_side,
                 "amount": amount,
-                "take_profit_client_order_id": take_profit_client_order_id,
-                "stop_loss_client_order_id": stop_loss_client_order_id,
+                "take_profit_client_order_id": str(
+                    take_profit_payload.get("client_order_id") or take_profit_client_order_id
+                ).strip(),
+                "stop_loss_client_order_id": str(
+                    stop_loss_payload.get("client_order_id") or stop_loss_client_order_id
+                ).strip(),
             }
             return response
 

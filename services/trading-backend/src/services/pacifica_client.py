@@ -16,6 +16,9 @@ from src.core.settings import get_settings
 from src.services.pacifica_signing import prepare_message
 
 
+CLIENT_ORDER_ID_NAMESPACE = uuid.UUID("d98f4ee8-e7ed-4d37-8f62-d3f87d22dcff")
+
+
 class PacificaClientError(RuntimeError):
     def __init__(self, message: str, *, status_code: int | None = None) -> None:
         super().__init__(message)
@@ -90,7 +93,30 @@ class PacificaClient:
             return "create_order"
         return "create_market_order"
 
-    def _normalize_payload(self, request_type: str, order_payload: dict[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def canonicalize_client_order_id(
+        value: Any,
+        *,
+        account: str | None = None,
+        symbol: str | None = None,
+        scope: str = "client_order_id",
+    ) -> str | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            return str(uuid.UUID(text))
+        except (TypeError, ValueError, AttributeError):
+            seed = "|".join((scope, account or "", symbol or "", text))
+            return str(uuid.uuid5(CLIENT_ORDER_ID_NAMESPACE, seed))
+
+    def _normalize_payload(
+        self,
+        request_type: str,
+        order_payload: dict[str, Any],
+        *,
+        account: str | None = None,
+    ) -> dict[str, Any]:
         ignored_keys = {
             "account",
             "agent_wallet",
@@ -116,17 +142,51 @@ class PacificaClient:
             if key in payload:
                 payload[key] = str(payload[key])
 
+        symbol = str(payload.get("symbol") or "").strip() or None
+        if "client_order_id" in payload:
+            normalized_client_order_id = self.canonicalize_client_order_id(
+                payload.get("client_order_id"),
+                account=account,
+                symbol=symbol,
+            )
+            if normalized_client_order_id is None:
+                payload.pop("client_order_id", None)
+            else:
+                payload["client_order_id"] = normalized_client_order_id
+
         take_profit = payload.get("take_profit")
         if isinstance(take_profit, dict):
             payload["take_profit"] = {
-                nested_key: str(nested_value) if nested_key in {"stop_price", "limit_price", "amount"} else nested_value
+                nested_key: (
+                    str(nested_value)
+                    if nested_key in {"stop_price", "limit_price", "amount"}
+                    else self.canonicalize_client_order_id(
+                        nested_value,
+                        account=account,
+                        symbol=symbol,
+                        scope="take_profit.client_order_id",
+                    )
+                    if nested_key == "client_order_id"
+                    else nested_value
+                )
                 for nested_key, nested_value in take_profit.items()
                 if nested_value is not None
             }
         stop_loss = payload.get("stop_loss")
         if isinstance(stop_loss, dict):
             payload["stop_loss"] = {
-                nested_key: str(nested_value) if nested_key in {"stop_price", "limit_price", "amount"} else nested_value
+                nested_key: (
+                    str(nested_value)
+                    if nested_key in {"stop_price", "limit_price", "amount"}
+                    else self.canonicalize_client_order_id(
+                        nested_value,
+                        account=account,
+                        symbol=symbol,
+                        scope="stop_loss.client_order_id",
+                    )
+                    if nested_key == "client_order_id"
+                    else nested_value
+                )
                 for nested_key, nested_value in stop_loss.items()
                 if nested_value is not None
             }
@@ -257,13 +317,18 @@ class PacificaClient:
     async def place_order(self, order_payload: dict[str, Any]) -> dict[str, Any]:
         await self._throttle()
         request_type = self._infer_request_type(order_payload)
-        normalized_payload = self._normalize_payload(request_type, order_payload)
+        requested_account = str(order_payload.get("account", "")).strip() or None
+        normalized_payload = self._normalize_payload(
+            request_type,
+            order_payload,
+            account=requested_account,
+        )
         signer_private_key_override = str(order_payload.get("__agent_private_key", "")).strip() or None
         agent_wallet_override = str(order_payload.get("agent_wallet", "")).strip() or None
         request_header, signed_message = self._sign_request(
             request_type,
             normalized_payload,
-            str(order_payload.get("account", "")).strip() or None,
+            requested_account,
             signer_private_key_override=signer_private_key_override,
             agent_wallet_override=agent_wallet_override,
         )
