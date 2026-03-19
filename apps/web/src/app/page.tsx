@@ -90,9 +90,19 @@ const LandingHeader = () => {
           </nav>
 
           <div className="hidden md:flex items-center gap-2">
-            <button className="h-10 px-4 rounded-full bg-[#16181a] border border-white/[0.06] text-sm text-white hover:bg-white/5 transition-colors">
-              Connect Wallet
-            </button>
+            <Link href="/build" className="group isolate inline-flex cursor-pointer overflow-hidden transition-all duration-300 hover:scale-105 rounded-full relative h-10">
+              <div className="absolute inset-0">
+                <div className="absolute inset-[-200%] w-[400%] h-[400%] animate-[rotate-gradient_4s_linear_infinite]">
+                  <div className="absolute inset-0" style={{ background: 'conic-gradient(from 225deg, transparent 0, rgba(255,255,255,0.6) 90deg, transparent 90deg)' }}></div>
+                </div>
+              </div>
+              <div className="absolute rounded-full backdrop-blur" style={{ inset: '1px', background: 'rgba(220, 232, 93, 0.1)' }}></div>
+              <div className="z-10 flex gap-2 overflow-hidden text-sm font-medium text-white w-full px-4 relative items-center rounded-full">
+                <div className="absolute inset-[1px] bg-[rgba(10,11,20,0.8)] rounded-full backdrop-blur-[8px]"></div>
+                <span className="whitespace-nowrap relative z-10 font-sans">Start Building</span>
+                <span className="inline-flex items-center justify-center z-10 bg-white/10 w-5 h-5 rounded-full relative"><ArrowRight className="w-3 h-3" /></span>
+              </div>
+            </Link>
           </div>
 
           <button
@@ -172,10 +182,20 @@ const LandingHeader = () => {
                   transition={{ delay: 0.3 }}
                   className="space-y-4"
                 >
-                  <div className="text-xs font-semibold text-white/40 uppercase tracking-wider px-2">Connect</div>
-                  <button className="w-full h-12 rounded-xl bg-[#dce85d] text-[#090a0a] font-medium hover:bg-[#e8f06d] transition-colors">
-                    Connect Wallet
-                  </button>
+                  <div className="text-xs font-semibold text-white/40 uppercase tracking-wider px-2">Build</div>
+                  <Link href="/build" className="w-full group isolate inline-flex justify-center cursor-pointer overflow-hidden transition-all duration-300 hover:scale-[1.02] hover:shadow-[0_0_40px_8px_rgba(220,232,93,0.35)] rounded-full relative shadow-[0_8px_40px_rgba(220,232,93,0.25)] h-12">
+                    <div className="absolute inset-0">
+                      <div className="absolute inset-[-200%] w-[400%] h-[400%] animate-[rotate-gradient_4s_linear_infinite]">
+                        <div className="absolute inset-0" style={{ background: 'conic-gradient(from 225deg, transparent 0, rgba(255,255,255,0.6) 90deg, transparent 90deg)' }}></div>
+                      </div>
+                    </div>
+                    <div className="absolute rounded-full backdrop-blur" style={{ inset: '1px', background: 'rgba(220, 232, 93, 0.1)' }}></div>
+                    <div className="z-10 flex gap-2 overflow-hidden text-base font-medium text-white w-full px-5 relative items-center justify-center rounded-full">
+                      <div className="absolute inset-[1px] bg-[rgba(10,11,20,0.8)] rounded-full backdrop-blur-[8px]"></div>
+                      <span className="whitespace-nowrap relative z-10 font-sans">Start Building</span>
+                      <span className="inline-flex items-center justify-center z-10 bg-white/10 w-6 h-6 rounded-full relative"><ArrowRight className="w-4 h-4" /></span>
+                    </div>
+                  </Link>
                 </motion.div>
               </div>
             </motion.div>
