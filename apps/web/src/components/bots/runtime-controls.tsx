@@ -2,6 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import {
+  PacificaOnboardingChecklist,
+  type PacificaOnboardingStatus,
+} from "@/components/pacifica/onboarding-checklist";
 import { useClashxAuth } from "@/lib/clashx-auth";
 
 type RuntimeResponse = {
@@ -43,6 +47,14 @@ export function RuntimeControls({
   const [error, setError] = useState<string | null>(null);
   const [readiness, setReadiness] = useState<PacificaReadinessPayload | null>(null);
   const [readinessStatus, setReadinessStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [setupStatus, setSetupStatus] = useState<PacificaOnboardingStatus>({
+    ready: false,
+    blocker: "Sign in with your trading wallet before you deploy.",
+    fundingVerified: false,
+    appAccessVerified: false,
+    agentAuthorized: false,
+  });
 
   const riskPolicy = useMemo(
     () => ({
@@ -121,8 +133,8 @@ export function RuntimeControls({
   }, [authenticated, readiness?.blockers, readinessStatus, walletAddress]);
 
   async function invoke(action: "deploy" | "pause" | "resume" | "stop") {
-    if (action === "deploy" && readinessBlocker) {
-      setError(readinessBlocker);
+    if (action === "deploy" && !setupStatus.ready) {
+      setSetupOpen(true);
       return;
     }
     setStatus(action);
@@ -153,6 +165,12 @@ export function RuntimeControls({
 
   return (
     <section className="grid gap-5 border-l-2 border-[#74b97f] bg-[#16181a] p-6">
+      <PacificaOnboardingChecklist
+        open={setupOpen}
+        onClose={() => setSetupOpen(false)}
+        mode="builder"
+        onStatusChange={setSetupStatus}
+      />
       <div className="flex items-center justify-between">
         <span className="label text-[#74b97f]">runtime controls</span>
         <span className="text-xs text-neutral-500">wallet-bound live deployment</span>
@@ -263,7 +281,7 @@ export function RuntimeControls({
         <button
           type="button"
           onClick={() => void invoke("deploy")}
-          disabled={status !== "idle" || Boolean(readinessBlocker)}
+          disabled={status !== "idle"}
           className="bg-[#dce85d] px-4 py-2.5 font-mono text-[0.62rem] font-semibold uppercase tracking-wider text-[#090a0a] transition hover:bg-[#e8f06d] disabled:opacity-60"
         >
           {status === "deploy" ? "deploying…" : "deploy"}

@@ -14,6 +14,10 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
+import {
+  PacificaOnboardingChecklist,
+  type PacificaOnboardingStatus,
+} from "@/components/pacifica/onboarding-checklist";
 import { useClashxAuth } from "@/lib/clashx-auth";
 import type { BotPerformance } from "@/lib/bot-performance";
 
@@ -281,6 +285,14 @@ export function BotsFleetPage() {
   const [policyEditorOpen, setPolicyEditorOpen] = useState(false);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const [actionState, setActionState] = useState<{ label: string; completed: number; total: number } | null>(null);
+  const [deployGuideOpen, setDeployGuideOpen] = useState(false);
+  const [deployGuideStatus, setDeployGuideStatus] = useState<PacificaOnboardingStatus>({
+    ready: false,
+    blocker: "Sign in with your trading wallet before you deploy.",
+    fundingVerified: false,
+    appAccessVerified: false,
+    agentAuthorized: false,
+  });
 
   const dateFormatter = useMemo(
     () =>
@@ -465,6 +477,11 @@ export function BotsFleetPage() {
   }
 
   async function runSingleAction(bot: BotFleetItem, action: Exclude<BotAction, "delete">) {
+    if (action === "deploy" && !deployGuideStatus.ready) {
+      setDeployGuideOpen(true);
+      return;
+    }
+
     const label = `${action === "deploy" ? "Deploying" : action === "resume" ? "Resuming" : "Stopping"} ${bot.name}`;
     setFeedback(null);
     setActionState({ label, completed: 0, total: 1 });
@@ -506,6 +523,11 @@ export function BotsFleetPage() {
               ? "Pick at least one live or paused bot to stop."
               : "You can only delete drafts or bots that have already been stopped.",
       });
+      return;
+    }
+
+    if (action === "deploy" && !deployGuideStatus.ready) {
+      setDeployGuideOpen(true);
       return;
     }
 
@@ -595,6 +617,12 @@ export function BotsFleetPage() {
 
   return (
     <main className="shell grid gap-6 pb-10 md:gap-8 md:pb-12">
+      <PacificaOnboardingChecklist
+        open={deployGuideOpen}
+        onClose={() => setDeployGuideOpen(false)}
+        mode="builder"
+        onStatusChange={setDeployGuideStatus}
+      />
       <section className="flex flex-wrap items-center gap-2">
         {!authenticated ? (
           <button
