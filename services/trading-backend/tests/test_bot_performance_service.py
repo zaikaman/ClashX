@@ -260,8 +260,10 @@ def test_runtime_performance_is_scoped_to_each_runtime() -> None:
 
     assert performance_a["positions"][0]["symbol"] == "BTC"
     assert performance_a["pnl_total"] == 10.0
+    assert performance_a["pnl_total_pct"] == 5.0
     assert performance_b["positions"][0]["symbol"] == "ETH"
     assert performance_b["pnl_total"] == -20.0
+    assert performance_b["pnl_total_pct"] == -10.0
 
 
 def test_runtime_performance_falls_back_when_order_history_fill_amounts_are_zero() -> None:
@@ -322,6 +324,7 @@ def test_runtime_performance_falls_back_when_order_history_fill_amounts_are_zero
     assert performance["positions"][0]["amount"] == 1.0
     assert performance["positions"][0]["entry_price"] == 100.0
     assert performance["pnl_total"] == 10.0
+    assert performance["pnl_total_pct"] == 5.0
 
 
 def test_public_bot_leaderboard_ranks_runtime_specific_results(monkeypatch: Any) -> None:
@@ -407,6 +410,7 @@ def test_runtime_performance_uses_live_positions_to_drop_manually_closed_exposur
     assert performance_a["positions"] == []
     assert performance_a["pnl_unrealized"] == 0.0
     assert performance_a["pnl_total"] == 0.0
+    assert performance_a["pnl_total_pct"] == 0.0
 
 
 def test_runtime_performance_attributes_manual_close_realized_pnl_to_bot() -> None:
@@ -444,6 +448,7 @@ def test_runtime_performance_attributes_manual_close_realized_pnl_to_bot() -> No
     assert performance_a["pnl_unrealized"] == 0.0
     assert performance_a["pnl_realized"] == 20.0
     assert performance_a["pnl_total"] == 20.0
+    assert performance_a["pnl_total_pct"] == 10.0
     assert performance_a["win_streak"] == 1
     assert len(fake_supabase.tables["bot_trade_lots"]) == 1
     assert fake_supabase.tables["bot_trade_lots"][0]["quantity_remaining"] == 0.0

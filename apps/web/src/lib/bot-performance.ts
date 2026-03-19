@@ -9,6 +9,7 @@ export type BotPosition = {
 
 export type BotPerformance = {
   pnl_total: number;
+  pnl_total_pct: number;
   pnl_realized: number;
   pnl_unrealized: number;
   win_streak: number;

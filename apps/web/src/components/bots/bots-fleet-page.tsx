@@ -112,7 +112,15 @@ function authoringLabel() {
 }
 
 function formatSignedAmount(value: number) {
-  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
+  const absolute = Math.abs(value);
+  const precision = absolute >= 1 ? 2 : absolute >= 0.1 ? 3 : absolute > 0 ? 4 : 2;
+  return `${value >= 0 ? "+" : "-"}${absolute.toFixed(precision)}%`;
+}
+
+function formatSignedUsd(value: number) {
+  const absolute = Math.abs(value);
+  const precision = absolute > 0 && absolute < 0.01 ? 4 : 2;
+  return `${value >= 0 ? "+" : "-"}$${absolute.toFixed(precision)}`;
 }
 
 function performanceTone(value: number) {
@@ -988,11 +996,11 @@ export function BotsFleetPage() {
 
                         <div className="grid gap-2">
                           <span className="text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Performance</span>
-                          <div className={joinClasses("font-mono text-[1.1rem] font-bold uppercase tracking-tight", bot.performance ? performanceTone(bot.performance.pnl_total) : "text-neutral-100")}>
-                            {bot.performance ? formatSignedAmount(bot.performance.pnl_total) : "—"}
+                          <div className={joinClasses("font-mono text-[1.1rem] font-bold uppercase tracking-tight", bot.performance ? performanceTone(bot.performance.pnl_total_pct) : "text-neutral-100")}>
+                            {bot.performance ? formatSignedAmount(bot.performance.pnl_total_pct) : "—"}
                           </div>
                           <div className="text-[0.6rem] uppercase tracking-[0.08em] text-neutral-400">
-                            {bot.performance ? `${bot.performance.positions.length} Live Pos` : "Awaiting data"}
+                            {bot.performance ? `${bot.performance.positions.length} Live Pos | ${formatSignedUsd(bot.performance.pnl_total)} Net` : "Awaiting data"}
                           </div>
                         </div>
 

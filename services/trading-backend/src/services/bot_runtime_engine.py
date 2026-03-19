@@ -5,6 +5,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+import anyio
+
 from src.services.bot_risk_service import BotRiskService
 from src.services.event_broadcaster import broadcaster
 from src.services.pacifica_auth_service import PacificaAuthService
@@ -31,7 +33,7 @@ class BotRuntimeEngine:
         del db
         bot = self._resolve_bot(bot_id=bot_id, wallet_address=wallet_address, user_id=user_id)
         runtime = self._resolve_runtime(bot_definition_id=bot["id"], wallet_address=wallet_address)
-        asyncio.run(self._readiness.require_ready(None, wallet_address))
+        self._require_runtime_readiness(wallet_address)
 
         now = datetime.now(tz=UTC).isoformat()
         normalized_policy = self._risk.normalize_policy(risk_policy_json)
@@ -233,6 +235,13 @@ class BotRuntimeEngine:
                 "created_at": datetime.now(tz=UTC).isoformat(),
             },
         )
+
+    def _require_runtime_readiness(self, wallet_address: str) -> dict[str, Any]:
+        try:
+            return anyio.from_thread.run(self._readiness.require_ready, None, wallet_address)
+        except RuntimeError:
+            # Fall back for direct synchronous calls outside FastAPI's worker thread bridge.
+            return asyncio.run(self._readiness.require_ready(None, wallet_address))
 
     @staticmethod
     def _publish_event(*, user_id: str, event: str, payload: dict[str, Any]) -> None:

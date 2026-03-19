@@ -164,6 +164,7 @@ class RuntimePositionResponse(BaseModel):
 
 class RuntimePerformanceResponse(BaseModel):
     pnl_total: float
+    pnl_total_pct: float
     pnl_realized: float
     pnl_unrealized: float
     win_streak: int

@@ -63,7 +63,7 @@ class PacificaReadinessService:
     async def require_ready(self, db: Any, wallet_address: str) -> dict[str, Any]:
         readiness = await self.get_readiness(db, wallet_address)
         if not readiness["ready"]:
-            raise ValueError(readiness["blockers"][0])
+            raise ValueError("; ".join(readiness["blockers"]))
         return readiness
 
     async def _get_sol_balance(self, wallet_address: str) -> float:

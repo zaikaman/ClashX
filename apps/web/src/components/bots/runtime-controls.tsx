@@ -1,6 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+import { useClashxAuth } from "@/lib/clashx-auth";
 
 type RuntimeResponse = {
   id: string;
@@ -13,6 +15,11 @@ type RuntimeResponse = {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
+type PacificaReadinessPayload = {
+  ready: boolean;
+  blockers: string[];
+};
+
 export function RuntimeControls({
   botId,
   walletAddress,
@@ -24,6 +31,7 @@ export function RuntimeControls({
   getAuthHeaders: (headersInit?: HeadersInit) => Promise<Headers>;
   onRuntimeUpdate?: (runtime: RuntimeResponse) => void;
 }) {
+  const { authenticated } = useClashxAuth();
   const [maxLeverage, setMaxLeverage] = useState(5);
   const [maxOrderSizeUsd, setMaxOrderSizeUsd] = useState(200);
   const [allocatedCapitalUsd, setAllocatedCapitalUsd] = useState(200);
@@ -33,6 +41,8 @@ export function RuntimeControls({
   const [showRawPolicy, setShowRawPolicy] = useState(false);
   const [status, setStatus] = useState<"idle" | "deploy" | "pause" | "resume" | "stop">("idle");
   const [error, setError] = useState<string | null>(null);
+  const [readiness, setReadiness] = useState<PacificaReadinessPayload | null>(null);
+  const [readinessStatus, setReadinessStatus] = useState<"idle" | "loading" | "error">("idle");
 
   const riskPolicy = useMemo(
     () => ({
@@ -53,7 +63,68 @@ export function RuntimeControls({
     ],
   );
 
+  useEffect(() => {
+    if (!authenticated || !walletAddress) {
+      setReadiness(null);
+      setReadinessStatus("idle");
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadReadiness() {
+      setReadinessStatus("loading");
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/api/pacifica/readiness?wallet_address=${encodeURIComponent(walletAddress.trim())}`,
+          {
+            cache: "no-store",
+            headers: await getAuthHeaders(),
+          },
+        );
+        const payload = (await response.json()) as PacificaReadinessPayload | { detail?: string };
+        if (!response.ok) {
+          throw new Error("detail" in payload ? payload.detail ?? "Pacifica readiness check failed." : "Pacifica readiness check failed.");
+        }
+        if (!cancelled) {
+          setReadiness(payload as PacificaReadinessPayload);
+          setReadinessStatus("idle");
+        }
+      } catch {
+        if (!cancelled) {
+          setReadiness(null);
+          setReadinessStatus("error");
+        }
+      }
+    }
+
+    void loadReadiness();
+    return () => {
+      cancelled = true;
+    };
+  }, [authenticated, getAuthHeaders, walletAddress]);
+
+  const readinessBlocker = useMemo(() => {
+    if (!authenticated) {
+      return "Sign in with your trading wallet before you deploy.";
+    }
+    if (!walletAddress) {
+      return "Connect the wallet you want ClashX to trade with.";
+    }
+    if (readinessStatus === "loading") {
+      return "Checking Pacifica readiness.";
+    }
+    if (readinessStatus === "error") {
+      return "Unable to verify Pacifica readiness right now.";
+    }
+    return readiness?.blockers[0] ?? null;
+  }, [authenticated, readiness?.blockers, readinessStatus, walletAddress]);
+
   async function invoke(action: "deploy" | "pause" | "resume" | "stop") {
+    if (action === "deploy" && readinessBlocker) {
+      setError(readinessBlocker);
+      return;
+    }
     setStatus(action);
     setError(null);
     try {
@@ -179,13 +250,20 @@ export function RuntimeControls({
         ) : null}
       </div>
 
+      {readinessBlocker && status !== "deploy" ? (
+        <div className="rounded-xl border border-[rgba(220,232,93,0.18)] bg-[rgba(220,232,93,0.08)] px-4 py-3 text-sm leading-6 text-neutral-200">
+          <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#dce85d]">Deploy blocked</div>
+          <div className="mt-1">{readinessBlocker}</div>
+        </div>
+      ) : null}
+
       {error ? <p className="text-sm text-[#dce85d]">{error}</p> : null}
 
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
           onClick={() => void invoke("deploy")}
-          disabled={status !== "idle"}
+          disabled={status !== "idle" || Boolean(readinessBlocker)}
           className="bg-[#dce85d] px-4 py-2.5 font-mono text-[0.62rem] font-semibold uppercase tracking-wider text-[#090a0a] transition hover:bg-[#e8f06d] disabled:opacity-60"
         >
           {status === "deploy" ? "deploying…" : "deploy"}

@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from src.services.bot_risk_service import BotRiskService
 from src.services.pacifica_client import PacificaClient, PacificaClientError
 from src.services.supabase_rest import SupabaseRestClient
 
@@ -12,6 +13,7 @@ class BotPerformanceService:
     def __init__(self, pacifica_client: PacificaClient | None = None, supabase: SupabaseRestClient | None = None) -> None:
         self._pacifica = pacifica_client or PacificaClient()
         self._supabase = supabase or SupabaseRestClient()
+        self._risk = BotRiskService()
 
     async def calculate_runtime_performance(self, runtime: dict[str, Any]) -> dict[str, Any]:
         events = self._supabase.select(
@@ -97,8 +99,13 @@ class BotPerformanceService:
                 }
             )
 
+        total_pnl = realized_pnl + unrealized_pnl
+        runtime_policy = runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {}
+        allocated_capital = float(self._risk.normalize_policy(runtime_policy).get("allocated_capital_usd") or 0.0)
+
         return {
-            "pnl_total": round(realized_pnl + unrealized_pnl, 2),
+            "pnl_total": round(total_pnl, 2),
+            "pnl_total_pct": round((total_pnl / allocated_capital * 100.0) if allocated_capital > 0 else 0.0, 4),
             "pnl_realized": round(realized_pnl, 2),
             "pnl_unrealized": round(unrealized_pnl, 2),
             "win_streak": self._compute_win_streak(close_events),
