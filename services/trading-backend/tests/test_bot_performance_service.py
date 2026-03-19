@@ -7,6 +7,7 @@ from typing import Any
 from src.services.bot_copy_engine import BotCopyEngine
 from src.services.bot_leaderboard_engine import BotLeaderboardEngine
 from src.services.bot_performance_service import BotPerformanceService
+from src.services.supabase_rest import SupabaseRestError
 
 
 class FakeSupabaseRestClient:
@@ -50,10 +51,37 @@ class FakeSupabaseRestClient:
         upsert: bool = False,
         on_conflict: str | None = None,
     ) -> list[dict[str, Any]]:
-        del upsert, on_conflict
         items = payload if isinstance(payload, list) else [payload]
+        conflict_columns = self._conflict_columns(table, items, on_conflict)
+        table_rows = self.tables.setdefault(table, [])
         stored = [deepcopy(item) for item in items]
-        self.tables.setdefault(table, []).extend(stored)
+
+        if upsert and conflict_columns:
+            for item in stored:
+                key = self._conflict_key(item, conflict_columns)
+                matched_index = next(
+                    (index for index, row in enumerate(table_rows) if self._conflict_key(row, conflict_columns) == key),
+                    None,
+                )
+                if matched_index is None:
+                    table_rows.append(item)
+                    continue
+                table_rows[matched_index] = item
+            return [deepcopy(item) for item in stored]
+
+        if conflict_columns:
+            existing_keys = {self._conflict_key(row, conflict_columns) for row in table_rows}
+            payload_keys: set[tuple[Any, ...]] = set()
+            for item in stored:
+                key = self._conflict_key(item, conflict_columns)
+                if key in existing_keys or key in payload_keys:
+                    raise SupabaseRestError(
+                        f'duplicate key value violates unique constraint "{table}_pkey"',
+                        status_code=409,
+                    )
+                payload_keys.add(key)
+
+        table_rows.extend(stored)
         return [deepcopy(item) for item in stored]
 
     def delete(self, table: str, *, filters: dict[str, Any]) -> None:
@@ -85,6 +113,29 @@ class FakeSupabaseRestClient:
             if value != expected:
                 return False
         return True
+
+    @staticmethod
+    def _conflict_columns(
+        table: str,
+        items: list[dict[str, Any]],
+        on_conflict: str | None,
+    ) -> tuple[str, ...] | None:
+        if on_conflict:
+            return tuple(part.strip() for part in on_conflict.split(",") if part.strip())
+        if table == "bot_trade_sync_state":
+            return ("runtime_id",)
+        if any("id" in item for item in items):
+            return ("id",)
+        return None
+
+    @staticmethod
+    def _conflict_key(item: dict[str, Any], columns: tuple[str, ...]) -> tuple[Any, ...]:
+        return tuple(item.get(column) for column in columns)
+
+
+class NoDeleteSupabaseRestClient(FakeSupabaseRestClient):
+    def delete(self, table: str, *, filters: dict[str, Any]) -> None:
+        del table, filters
 
 
 class FakePacificaClient:
@@ -455,3 +506,30 @@ def test_runtime_performance_attributes_manual_close_realized_pnl_to_bot() -> No
     assert len(fake_supabase.tables["bot_trade_closures"]) == 1
     assert fake_supabase.tables["bot_trade_closures"][0]["source"] == "manual"
     assert fake_supabase.tables["bot_trade_sync_state"][0]["runtime_id"] == "runtime-a"
+
+
+def test_runtime_performance_persists_ledger_idempotently_when_same_rows_already_exist() -> None:
+    seeded_supabase = FakeSupabaseRestClient(_tables())
+    fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = [
+        {
+            "symbol": "BTC",
+            "side": "bid",
+            "amount": 1.0,
+            "entry_price": 100.0,
+            "mark_price": 110.0,
+        }
+    ]
+    seeded_service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=seeded_supabase)
+    runtime_a = seeded_supabase.maybe_one("bot_runtimes", filters={"id": "runtime-a"})
+
+    asyncio.run(seeded_service.calculate_runtime_performance(runtime_a))
+
+    racey_supabase = NoDeleteSupabaseRestClient(seeded_supabase.tables)
+    racey_service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=racey_supabase)
+
+    performance = asyncio.run(racey_service.calculate_runtime_performance(runtime_a))
+
+    assert performance["pnl_total"] == 10.0
+    assert len(racey_supabase.tables["bot_trade_lots"]) == 1
+    assert len(racey_supabase.tables["bot_trade_sync_state"]) == 1

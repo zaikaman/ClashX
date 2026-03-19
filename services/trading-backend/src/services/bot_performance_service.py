@@ -176,9 +176,14 @@ class BotPerformanceService:
         self._supabase.delete("bot_trade_lots", filters={"runtime_id": runtime_id})
         self._supabase.delete("bot_trade_sync_state", filters={"runtime_id": runtime_id})
         if lots:
-            self._supabase.insert("bot_trade_lots", lots)
+            self._supabase.insert("bot_trade_lots", self._dedupe_rows(lots, key="id"), upsert=True, on_conflict="id")
         if closures:
-            self._supabase.insert("bot_trade_closures", closures)
+            self._supabase.insert(
+                "bot_trade_closures",
+                self._dedupe_rows(closures, key="id"),
+                upsert=True,
+                on_conflict="id",
+            )
         last_execution_at = events[-1].get("created_at") if events else None
         last_history_at = max((item.get("closed_at") for item in closures), default=None)
         self._supabase.insert(
@@ -192,6 +197,8 @@ class BotPerformanceService:
                 "last_history_at": last_history_at,
                 "last_error": None,
             },
+            upsert=True,
+            on_conflict="runtime_id",
         )
 
     def _summarize_open_lots(self, lots: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
@@ -494,6 +501,16 @@ class BotPerformanceService:
         if position_side == "short":
             return (entry_price - exit_price) * quantity
         return 0.0
+
+    @staticmethod
+    def _dedupe_rows(rows: list[dict[str, Any]], *, key: str) -> list[dict[str, Any]]:
+        deduped: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            identifier = str(row.get(key) or "").strip()
+            if not identifier:
+                continue
+            deduped[identifier] = row
+        return list(deduped.values())
 
     @staticmethod
     def _coerce_iso(value: Any) -> str:
