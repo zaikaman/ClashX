@@ -18,8 +18,13 @@ class BotBuilderService:
 
     def list_bots(self, db: Any, *, wallet_address: str) -> list[dict]:
         del db
-        rows = self.supabase.select("bot_definitions", filters={"wallet_address": wallet_address}, order="updated_at.desc")
-        return [self.serialize(row) for row in rows]
+        rows = self.supabase.select(
+            "bot_definitions",
+            columns="id,wallet_address,name,description,visibility,market_scope,strategy_type,authoring_mode,updated_at",
+            filters={"wallet_address": wallet_address},
+            order="updated_at.desc",
+        )
+        return [self.serialize_summary(row) for row in rows]
 
     def get_bot(self, db: Any, *, bot_id: str, wallet_address: str) -> dict:
         del db
@@ -194,5 +199,19 @@ class BotBuilderService:
             "rules_version": bot["rules_version"],
             "rules_json": bot["rules_json"],
             "created_at": bot["created_at"],
+            "updated_at": bot["updated_at"],
+        }
+
+    @staticmethod
+    def serialize_summary(bot: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": bot["id"],
+            "wallet_address": bot["wallet_address"],
+            "name": bot["name"],
+            "description": bot["description"],
+            "visibility": bot["visibility"],
+            "market_scope": bot["market_scope"],
+            "strategy_type": bot["strategy_type"],
+            "authoring_mode": bot["authoring_mode"],
             "updated_at": bot["updated_at"],
         }

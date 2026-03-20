@@ -15,13 +15,42 @@ class BotPerformanceService:
         self._supabase = supabase or SupabaseRestClient()
         self._risk = BotRiskService()
 
-    async def calculate_runtime_performance(self, runtime: dict[str, Any]) -> dict[str, Any]:
+    async def calculate_runtime_performance(
+        self,
+        runtime: dict[str, Any],
+        *,
+        market_lookup: dict[str, dict[str, Any]] | None = None,
+        live_position_lookup: dict[str, dict[str, Any]] | None = None,
+        manual_close_history: list[dict[str, Any]] | None = None,
+        live_positions_loaded: bool | None = None,
+    ) -> dict[str, Any]:
         return await self.calculate_runtime_performance_with_context(
             runtime,
-            market_lookup=None,
-            live_position_lookup=None,
-            manual_close_history=None,
+            market_lookup=market_lookup,
+            live_position_lookup=live_position_lookup,
+            manual_close_history=manual_close_history,
+            live_positions_loaded=live_positions_loaded,
         )
+
+    async def load_market_lookup(self) -> dict[str, dict[str, Any]]:
+        return await self._load_market_lookup()
+
+    async def load_live_position_lookup_for_wallet(self, wallet_address: str) -> tuple[dict[str, dict[str, Any]], bool]:
+        return await self._load_live_position_lookup({"wallet_address": wallet_address})
+
+    async def load_position_history_for_wallet(
+        self,
+        wallet_address: str,
+        *,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        if not str(wallet_address or "").strip():
+            return []
+        try:
+            return await self._pacifica.get_position_history(wallet_address, limit=limit, offset=offset)
+        except PacificaClientError:
+            return []
 
     async def calculate_runtime_performance_with_context(
         self,
@@ -30,53 +59,68 @@ class BotPerformanceService:
         market_lookup: dict[str, dict[str, Any]] | None,
         live_position_lookup: dict[str, dict[str, Any]] | None,
         manual_close_history: list[dict[str, Any]] | None,
+        live_positions_loaded: bool | None = None,
     ) -> dict[str, Any]:
         events = self._supabase.select(
             "bot_execution_events",
+            columns="id,created_at,result_payload",
             filters={"runtime_id": runtime["id"], "event_type": "action.executed"},
             order="created_at.asc",
             limit=1000,
         )
 
-        order_history_cache: dict[int, list[dict[str, Any]]] = {}
-        bot_records: list[dict[str, Any]] = []
-        bot_positions: dict[str, dict[str, float]] = {}
-        realized_pnl = 0.0
-        close_events: list[dict[str, Any]] = []
+        resolved_live_positions_loaded = live_positions_loaded
+        if live_position_lookup is None:
+            resolved_live_position_lookup, resolved_live_positions_loaded = await self._load_live_position_lookup(runtime)
+        else:
+            resolved_live_position_lookup = live_position_lookup
+            if resolved_live_positions_loaded is None:
+                resolved_live_positions_loaded = True
 
-        for event in events:
-            event_realized = 0.0
-            event_closed = False
-            fills = await self._resolve_event_fills(event, order_history_cache)
-            for fill in fills:
-                applied = self._apply_fill(bot_positions, fill)
-                bot_records.extend(self._build_bot_records(event, fill, applied, event.get("created_at")))
-                event_realized += applied["realized_pnl"]
-                event_closed = event_closed or applied["closed"]
-            if event_closed:
-                close_events.append(
-                    {
-                        "created_at": event.get("created_at"),
-                        "pnl": round(event_realized, 8),
-                    }
-                )
-            realized_pnl += event_realized
-
-        manual_close_records = await self._load_manual_close_records(
+        cached_ledger = self._load_cached_runtime_ledger(
             runtime,
-            bot_records,
-            history_rows=manual_close_history,
+            events=events,
+            live_position_lookup=resolved_live_position_lookup,
+            live_positions_loaded=bool(resolved_live_positions_loaded),
+            manual_close_history=manual_close_history,
         )
-        lots, closures, close_events = self._build_runtime_ledger(runtime, bot_records, manual_close_records, close_events)
-        self._persist_runtime_ledger(runtime, events, lots, closures)
+        if cached_ledger is None:
+            order_history_cache: dict[int, list[dict[str, Any]]] = {}
+            bot_records: list[dict[str, Any]] = []
+            bot_positions: dict[str, dict[str, float]] = {}
+            close_events: list[dict[str, Any]] = []
+
+            for event in events:
+                event_realized = 0.0
+                event_closed = False
+                fills = await self._resolve_event_fills(event, order_history_cache)
+                for fill in fills:
+                    applied = self._apply_fill(bot_positions, fill)
+                    bot_records.extend(self._build_bot_records(event, fill, applied, event.get("created_at")))
+                    event_realized += applied["realized_pnl"]
+                    event_closed = event_closed or applied["closed"]
+                if event_closed:
+                    close_events.append(
+                        {
+                            "created_at": event.get("created_at"),
+                            "pnl": round(event_realized, 8),
+                        }
+                    )
+
+            manual_close_records = await self._load_manual_close_records(
+                runtime,
+                bot_records,
+                history_rows=manual_close_history,
+            )
+            lots, closures, close_events = self._build_runtime_ledger(runtime, bot_records, manual_close_records, close_events)
+            self._persist_runtime_ledger(runtime, events, lots, closures)
+        else:
+            lots, closures = cached_ledger
+            close_events = self._build_close_events_from_closures(closures)
+
         realized_pnl = round(sum(float(item.get("realized_pnl") or 0.0) for item in closures), 8)
 
         resolved_market_lookup = market_lookup or await self._load_market_lookup()
-        if live_position_lookup is None:
-            resolved_live_position_lookup, live_positions_loaded = await self._load_live_position_lookup(runtime)
-        else:
-            resolved_live_position_lookup = live_position_lookup
-            live_positions_loaded = True
         open_positions: list[dict[str, Any]] = []
         unrealized_pnl = 0.0
         open_lots = [item for item in lots if self._to_float(item.get("quantity_remaining")) > 1e-12]
@@ -101,7 +145,7 @@ class BotPerformanceService:
                 if live_entry_price > 0:
                     entry_price = live_entry_price
                 mark_price = live_mark_price if live_mark_price > 0 else live_entry_price
-            elif live_positions_loaded:
+            elif resolved_live_positions_loaded:
                 continue
             else:
                 size = abs(quantity)
@@ -134,6 +178,105 @@ class BotPerformanceService:
             "win_streak": self._compute_win_streak(close_events),
             "positions": open_positions,
         }
+
+    def _load_cached_runtime_ledger(
+        self,
+        runtime: dict[str, Any],
+        *,
+        events: list[dict[str, Any]],
+        live_position_lookup: dict[str, dict[str, Any]],
+        live_positions_loaded: bool,
+        manual_close_history: list[dict[str, Any]] | None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
+        runtime_id = str(runtime.get("id") or "").strip()
+        if not runtime_id:
+            return None
+        sync_state = self._supabase.maybe_one("bot_trade_sync_state", filters={"runtime_id": runtime_id})
+        if sync_state is None:
+            return None
+        if int(sync_state.get("execution_events_count") or 0) != len(events):
+            return None
+        latest_event_at = events[-1].get("created_at") if events else None
+        if not self._timestamps_match(sync_state.get("last_execution_at"), latest_event_at):
+            return None
+        lots = self._supabase.select("bot_trade_lots", filters={"runtime_id": runtime_id})
+        closures = self._supabase.select("bot_trade_closures", filters={"runtime_id": runtime_id})
+        if self._has_live_position_drift(lots, live_position_lookup, live_positions_loaded):
+            return None
+        if self._has_manual_history_drift(runtime, sync_state, lots, manual_close_history):
+            return None
+        return lots, closures
+
+    def _has_live_position_drift(
+        self,
+        lots: list[dict[str, Any]],
+        live_position_lookup: dict[str, dict[str, Any]],
+        live_positions_loaded: bool,
+    ) -> bool:
+        if not live_positions_loaded:
+            return False
+        position_states = self._summarize_open_lots([item for item in lots if self._to_float(item.get("quantity_remaining")) > 1e-12])
+        for symbol, state in position_states.items():
+            quantity = float(state.get("quantity") or 0.0)
+            if abs(quantity) <= 1e-12:
+                continue
+            live_position = live_position_lookup.get(symbol)
+            runtime_side = "long" if quantity > 0 else "short"
+            if live_position is None:
+                return True
+            live_side = self._normalize_position_side(live_position.get("side"))
+            live_amount = abs(float(live_position.get("amount") or 0.0))
+            if live_side != runtime_side or live_amount <= 1e-12:
+                return True
+        return False
+
+    def _has_manual_history_drift(
+        self,
+        runtime: dict[str, Any],
+        sync_state: dict[str, Any],
+        lots: list[dict[str, Any]],
+        manual_close_history: list[dict[str, Any]] | None,
+    ) -> bool:
+        if manual_close_history is None:
+            return False
+        symbols = {
+            self._normalize_symbol(item.get("symbol"))
+            for item in lots
+            if self._normalize_symbol(item.get("symbol"))
+        }
+        if not symbols:
+            return False
+        deployed_at = self._timestamp_value(runtime.get("deployed_at"))
+        latest_relevant_close_at = max(
+            (
+                self._timestamp_value(row.get("created_at"))
+                for row in manual_close_history
+                if self._normalize_symbol(row.get("symbol")) in symbols
+                and self._position_history_event_kind(row)[0] == "close"
+                and self._timestamp_value(row.get("created_at")) >= deployed_at
+            ),
+            default=0.0,
+        )
+        if latest_relevant_close_at <= 0:
+            return False
+        return latest_relevant_close_at > self._timestamp_value(sync_state.get("last_history_at"))
+
+    @classmethod
+    def _build_close_events_from_closures(cls, closures: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        totals_by_closed_at: dict[str, float] = {}
+        for closure in closures:
+            closed_at = str(closure.get("closed_at") or "").strip()
+            if not closed_at:
+                continue
+            totals_by_closed_at[closed_at] = totals_by_closed_at.get(closed_at, 0.0) + float(closure.get("realized_pnl") or 0.0)
+        return [
+            {"created_at": closed_at, "pnl": round(pnl, 8)}
+            for closed_at, pnl in totals_by_closed_at.items()
+        ]
+
+    @classmethod
+    def _timestamps_match(cls, left: Any, right: Any) -> bool:
+        return abs(cls._timestamp_value(left) - cls._timestamp_value(right)) <= 1e-6
 
     def _build_runtime_ledger(
         self,

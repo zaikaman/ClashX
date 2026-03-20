@@ -225,20 +225,45 @@ async def _build_runtime_performance(runtime: dict[str, Any] | None) -> RuntimeP
 @router.get("", response_model=list[BotFleetItemResponse])
 async def list_bots(
     wallet_address: str | None = Query(default=None, min_length=8),
+    include_performance: bool = Query(default=True),
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> list[BotFleetItemResponse]:
     resolved_wallet = _resolve_wallet(user, wallet_address)
     definitions = bot_builder_service.list_bots(db, wallet_address=resolved_wallet)
-    runtimes = {
-        runtime["bot_definition_id"]: runtime
-        for runtime in bot_runtime_engine.list_runtimes_for_wallet(
-            db,
-            wallet_address=resolved_wallet,
-            user_id=user.user_id,
+    runtimes_for_wallet = bot_runtime_engine.list_runtimes_for_wallet(
+        db,
+        wallet_address=resolved_wallet,
+        user_id=user.user_id,
+    )
+    runtimes = {runtime["bot_definition_id"]: runtime for runtime in runtimes_for_wallet}
+    performances: list[RuntimePerformanceResponse | None]
+    if include_performance and runtimes_for_wallet:
+        market_lookup = await bot_performance_service.load_market_lookup()
+        live_position_lookup, live_positions_loaded = await bot_performance_service.load_live_position_lookup_for_wallet(
+            resolved_wallet
         )
-    }
-    performances = await asyncio.gather(*[_build_runtime_performance(runtimes.get(row["id"])) for row in definitions])
+        manual_close_history = await bot_performance_service.load_position_history_for_wallet(resolved_wallet)
+        performance_payloads = await asyncio.gather(
+            *[
+                bot_performance_service.calculate_runtime_performance(
+                    runtime,
+                    market_lookup=market_lookup,
+                    live_position_lookup=live_position_lookup,
+                    manual_close_history=manual_close_history,
+                    live_positions_loaded=live_positions_loaded,
+                )
+                if runtime is not None
+                else asyncio.sleep(0, result=None)
+                for runtime in (runtimes.get(row["id"]) for row in definitions)
+            ]
+        )
+        performances = [
+            RuntimePerformanceResponse.model_validate(payload) if payload is not None else None
+            for payload in performance_payloads
+        ]
+    else:
+        performances = [None] * len(definitions)
     return [
         BotFleetItemResponse.model_validate(
             {

@@ -140,6 +140,7 @@ class NoDeleteSupabaseRestClient(FakeSupabaseRestClient):
 
 class FakePacificaClient:
     def __init__(self) -> None:
+        self.order_history_requests: list[int] = []
         self.order_history: dict[int, list[dict[str, Any]]] = {
             11: [
                 {
@@ -172,6 +173,7 @@ class FakePacificaClient:
         self.position_history: dict[str, list[dict[str, Any]]] = {}
 
     async def get_order_history_by_id(self, order_id: int) -> list[dict[str, Any]]:
+        self.order_history_requests.append(order_id)
         return deepcopy(self.order_history.get(order_id, []))
 
     async def get_markets(self) -> list[dict[str, Any]]:
@@ -534,3 +536,32 @@ def test_runtime_performance_persists_ledger_idempotently_when_same_rows_already
     assert performance["pnl_total"] == 10.0
     assert len(racey_supabase.tables["bot_trade_lots"]) == 1
     assert len(racey_supabase.tables["bot_trade_sync_state"]) == 1
+
+
+def test_runtime_performance_reuses_persisted_ledger_without_reloading_order_history() -> None:
+    fake_supabase = FakeSupabaseRestClient(_tables())
+    fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = [
+        {
+            "symbol": "BTC",
+            "side": "bid",
+            "amount": 1.0,
+            "entry_price": 100.0,
+            "mark_price": 110.0,
+        }
+    ]
+    service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=fake_supabase)
+    runtime_a = fake_supabase.maybe_one("bot_runtimes", filters={"id": "runtime-a"})
+
+    initial = asyncio.run(service.calculate_runtime_performance(runtime_a))
+
+    assert initial["pnl_total"] == 10.0
+    assert fake_pacifica.order_history_requests == [11]
+
+    fake_pacifica.order_history_requests.clear()
+
+    cached = asyncio.run(service.calculate_runtime_performance(runtime_a))
+
+    assert cached["pnl_total"] == 10.0
+    assert cached["positions"][0]["symbol"] == "BTC"
+    assert fake_pacifica.order_history_requests == []

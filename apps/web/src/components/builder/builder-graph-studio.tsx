@@ -638,7 +638,7 @@ export function BuilderGraphStudio({
       setSavedBotsLoading(true);
       try {
         const response = await fetch(
-          `${API_BASE_URL}/api/bots?wallet_address=${encodeURIComponent(walletAddress)}`,
+          `${API_BASE_URL}/api/bots?wallet_address=${encodeURIComponent(walletAddress)}&include_performance=false`,
           { cache: "no-store", headers: await getAuthHeaders() },
         );
         const payload = (await response.json()) as SavedBuilderBot[] | { detail?: string };
