@@ -209,8 +209,8 @@ class FakePacificaClient:
             }
         ]
 
-    async def get_positions(self, wallet_address: str) -> list[dict[str, Any]]:
-        del wallet_address
+    async def get_positions(self, wallet_address: str, *, price_lookup: dict[str, float] | None = None) -> list[dict[str, Any]]:
+        del wallet_address, price_lookup
         return deepcopy(self.positions)
 
     async def get_open_orders(self, wallet_address: str) -> list[dict[str, Any]]:

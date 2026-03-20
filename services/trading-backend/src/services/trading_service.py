@@ -9,7 +9,9 @@ from typing import Any
 from src.services.event_broadcaster import broadcaster
 from src.services.pacifica_auth_service import PacificaAuthService
 from src.services.pacifica_client import PacificaClient, PacificaClientError
+from src.services.pacifica_market_data_service import get_pacifica_market_data_service
 from src.services.supabase_rest import SupabaseRestClient
+from src.services.trading_snapshot_cache_service import get_trading_snapshot_cache_service
 
 
 class TradingService:
@@ -17,17 +19,27 @@ class TradingService:
         self.pacifica = PacificaClient()
         self.auth_service = PacificaAuthService()
         self.supabase = SupabaseRestClient()
+        self.market_data = get_pacifica_market_data_service()
+        self.snapshot_cache = get_trading_snapshot_cache_service()
 
     async def get_account_snapshot(self, db: Any, wallet_address: str) -> dict[str, Any]:
+        return await self.snapshot_cache.get_or_load(wallet_address, lambda: self._load_account_snapshot(db, wallet_address))
+
+    async def _load_account_snapshot(self, db: Any, wallet_address: str) -> dict[str, Any]:
         user = self._upsert_user(db, wallet_address)
         authorization = self.auth_service.get_authorization_by_wallet(None, wallet_address)
-        account_info, positions, orders, fills, portfolio, markets = await asyncio.gather(
+        markets = await self._load_markets()
+        price_lookup = {
+            str(item.get("symbol") or ""): float(item.get("mark_price") or 0.0)
+            for item in markets
+            if str(item.get("symbol") or "")
+        }
+        account_info, positions, orders, fills, portfolio = await asyncio.gather(
             self._safe_read(lambda: self.pacifica.get_account_info(wallet_address), {"balance": 0.0, "equity": 0.0, "fee_level": 0}),
-            self._safe_read(lambda: self.pacifica.get_positions(wallet_address), []),
+            self._safe_read(lambda: self.pacifica.get_positions(wallet_address, price_lookup=price_lookup), []),
             self._safe_read(lambda: self.pacifica.get_open_orders(wallet_address), []),
             self._safe_read(lambda: self.pacifica.get_position_history(wallet_address, limit=60, offset=0), []),
             self._safe_read(lambda: self.pacifica.get_portfolio_history(wallet_address, limit=90, offset=0), []),
-            self._safe_read(self.pacifica.get_markets, []),
         )
         market_lookup = {item["symbol"]: item for item in markets}
         normalized_positions = [self._serialize_position(item) for item in positions]
@@ -119,6 +131,7 @@ class TradingService:
         response = await self.pacifica.place_order(payload)
         user = self._upsert_user(db, wallet_address)
         self._record_audit_event(db, user_id=user["id"], action="trading.order.submitted", payload={"symbol": normalized_symbol, "side": side, "order_type": order_type, "quantity": quantity, "size_usd": size_usd, "limit_price": limit_price, "reduce_only": reduce_only, "leverage": leverage, "request_id": response["request_id"]})
+        self.snapshot_cache.invalidate(wallet_address)
         snapshot = await self.get_account_snapshot(db, wallet_address)
         await self._publish_snapshot(user_id=user["id"], event="trading.order.submitted", payload={"request_id": response["request_id"], "symbol": normalized_symbol, "side": side, "order_type": order_type}, snapshot=snapshot)
         return {"status": response["status"], "request_id": response["request_id"], "network": response["network"], "snapshot": snapshot}
@@ -136,6 +149,7 @@ class TradingService:
         response = await self.pacifica.place_order(payload)
         user = self._upsert_user(db, wallet_address)
         self._record_audit_event(db, user_id=user["id"], action="trading.order.cancelled", payload={"symbol": normalized_symbol, "order_id": order_id, "request_id": response["request_id"]})
+        self.snapshot_cache.invalidate(wallet_address)
         snapshot = await self.get_account_snapshot(db, wallet_address)
         await self._publish_snapshot(user_id=user["id"], event="trading.order.cancelled", payload={"order_id": order_id, "symbol": normalized_symbol, "request_id": response["request_id"]}, snapshot=snapshot)
         return {"status": response["status"], "request_id": response["request_id"], "network": response["network"], "snapshot": snapshot}
@@ -207,12 +221,17 @@ class TradingService:
         raise ValueError("Order side must be either 'long' or 'short'.")
 
     async def _get_market(self, symbol: str) -> dict[str, Any]:
-        markets = await self.pacifica.get_markets()
+        markets = await self._load_markets()
         normalized_symbol = self._normalize_symbol(symbol)
         market = next((item for item in markets if self._normalize_symbol(item.get("symbol")) == normalized_symbol or self._normalize_symbol(item.get("display_symbol")) == normalized_symbol), None)
         if market is None:
             raise PacificaClientError(f"Unsupported Pacifica market: {normalized_symbol}")
         return market
+
+    async def _load_markets(self) -> list[dict[str, Any]]:
+        if isinstance(self.pacifica, PacificaClient):
+            return await self.market_data.get_markets()
+        return await self.pacifica.get_markets()
 
     def _normalize_order_quantity(self, quantity: float, *, lot_size: float, symbol: str) -> float:
         normalized = Decimal(str(quantity))

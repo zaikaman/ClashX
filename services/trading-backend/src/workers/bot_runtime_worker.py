@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import inspect
 import json
 import logging
 import uuid
@@ -10,13 +11,15 @@ from datetime import UTC, datetime, timedelta
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from typing import Any
 
+from src.core.settings import get_settings
 from src.services.bot_risk_service import BotRiskService
 from src.services.bot_runtime_engine import BotRuntimeEngine
 from src.services.bot_performance_service import BotPerformanceService
 from src.services.event_broadcaster import broadcaster
-from src.services.indicator_context_service import IndicatorContextService
+from src.services.indicator_context_service import IndicatorContextService, TIMEFRAME_TO_MS, extract_candle_requests
 from src.services.pacifica_auth_service import PacificaAuthService
 from src.services.pacifica_client import PacificaClient, PacificaClientError
+from src.services.pacifica_market_data_service import get_pacifica_market_data_service
 from src.services.rules_engine import RulesEngine
 from src.services.supabase_rest import SupabaseRestClient
 from src.services.worker_coordination_service import WorkerCoordinationService
@@ -37,6 +40,7 @@ ENTRY_ACTION_TYPES = {
 
 class BotRuntimeWorker:
     def __init__(self, poll_interval_seconds: float = 4.0) -> None:
+        self._settings = get_settings()
         self.poll_interval_seconds = poll_interval_seconds
         self._task: asyncio.Task | None = None
         self._running = False
@@ -46,6 +50,7 @@ class BotRuntimeWorker:
         self._auth = PacificaAuthService()
         self._pacifica = PacificaClient()
         self._indicator_context = IndicatorContextService(self._pacifica)
+        self._market_data = get_pacifica_market_data_service()
         self._supabase = SupabaseRestClient()
         self._coordination = WorkerCoordinationService(self._supabase)
         self.last_iteration_at: str | None = None
@@ -71,14 +76,62 @@ class BotRuntimeWorker:
         while self._running:
             try:
                 runtimes = list(self._engine.get_active_runtimes(None))
+                runtime_specs: list[dict[str, Any]] = []
+                shared_candle_requests: list[dict[str, Any]] = []
+                need_shared_markets = False
                 for runtime in runtimes:
+                    bot = self._supabase.maybe_one("bot_definitions", filters={"id": runtime["bot_definition_id"]})
+                    runtime_policy = self._risk.normalize_policy(
+                        runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {}
+                    )
+                    runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
+                    rules_json = bot["rules_json"] if isinstance(bot, dict) and isinstance(bot.get("rules_json"), dict) else {}
+                    evaluation_due = self._should_evaluate_rules(rules_json=rules_json, runtime_state=runtime_state)
+                    wallet_due = evaluation_due or self._should_refresh_wallet(runtime_state=runtime_state)
+                    if evaluation_due:
+                        shared_candle_requests.extend(extract_candle_requests(rules_json))
+                        need_shared_markets = True
+                    if wallet_due:
+                        need_shared_markets = True
+                    runtime_specs.append(
+                        {
+                            "runtime": runtime,
+                            "bot": bot,
+                            "evaluation_due": evaluation_due,
+                            "wallet_due": wallet_due,
+                        }
+                    )
+                market_lookup: dict[str, dict[str, Any]] = {}
+                price_lookup: dict[str, float] = {}
+                candle_lookup: dict[str, dict[str, list[dict[str, Any]]]] = {}
+                if need_shared_markets:
+                    markets = await self._market_data.get_markets()
+                    market_lookup = self._build_market_lookup(markets)
+                    price_lookup = {
+                        str(item.get("symbol") or ""): float(item.get("mark_price") or 0.0)
+                        for item in markets
+                        if str(item.get("symbol") or "")
+                    }
+                if shared_candle_requests:
+                    candle_lookup = await self._market_data.load_candle_lookup(shared_candle_requests)
+                for runtime_spec in runtime_specs:
+                    runtime = runtime_spec["runtime"]
                     lease_key = f"bot-runtime:{runtime['id']}"
                     if not self._coordination.try_claim_lease(
                         lease_key, ttl_seconds=max(15, int(self.poll_interval_seconds * 3))
                     ):
                         continue
                     try:
-                        await self._process_runtime(None, runtime)
+                        await self._process_runtime(
+                            None,
+                            runtime,
+                            bot=runtime_spec.get("bot"),
+                            market_lookup=market_lookup,
+                            candle_lookup=candle_lookup,
+                            price_lookup=price_lookup,
+                            wallet_due=bool(runtime_spec.get("wallet_due")),
+                            evaluation_due=bool(runtime_spec.get("evaluation_due")),
+                        )
                     finally:
                         self._coordination.release_lease(lease_key)
                 self.last_iteration_at = datetime.now(tz=UTC).isoformat()
@@ -88,10 +141,21 @@ class BotRuntimeWorker:
                 logger.exception("Bot runtime worker iteration failed")
             await asyncio.sleep(self.poll_interval_seconds)
 
-    async def _process_runtime(self, db: Any, runtime: dict[str, Any]) -> None:
+    async def _process_runtime(
+        self,
+        db: Any,
+        runtime: dict[str, Any],
+        *,
+        bot: dict[str, Any] | None = None,
+        market_lookup: dict[str, dict[str, Any]] | None = None,
+        candle_lookup: dict[str, dict[str, list[dict[str, Any]]]] | None = None,
+        price_lookup: dict[str, float] | None = None,
+        wallet_due: bool = True,
+        evaluation_due: bool = True,
+    ) -> None:
         del db
         now = datetime.now(tz=UTC)
-        bot = self._supabase.maybe_one("bot_definitions", filters={"id": runtime["bot_definition_id"]})
+        bot = bot or self._supabase.maybe_one("bot_definitions", filters={"id": runtime["bot_definition_id"]})
         if bot is None:
             logger.error(
                 "Runtime %s failed because bot definition %s was not found",
@@ -111,23 +175,59 @@ class BotRuntimeWorker:
             )
             return
 
-        positions, open_orders = await asyncio.gather(
-            self._safe_load(lambda: self._pacifica.get_positions(runtime["wallet_address"]), []),
-            self._safe_load(lambda: self._pacifica.get_open_orders(runtime["wallet_address"]), []),
-        )
+        rules_json = bot["rules_json"] if isinstance(bot.get("rules_json"), dict) else {}
+        runtime_policy = self._risk.normalize_policy(runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {})
+        runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
+        if not wallet_due and not evaluation_due:
+            return
+
+        resolved_price_lookup = dict(price_lookup or {})
+        positions: list[dict[str, Any]] = []
+        open_orders: list[dict[str, Any]] = []
+        if wallet_due:
+            positions, open_orders = await asyncio.gather(
+                self._safe_load(
+                    lambda: self._pacifica.get_positions(runtime["wallet_address"], price_lookup=resolved_price_lookup),
+                    [],
+                ),
+                self._safe_load(lambda: self._pacifica.get_open_orders(runtime["wallet_address"]), []),
+            )
         position_lookup = self._build_position_lookup(positions)
         open_order_lookup = self._build_open_order_lookup(open_orders)
-        rules_json = bot["rules_json"] if isinstance(bot.get("rules_json"), dict) else {}
-
-        runtime_policy = self._risk.normalize_policy(runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {})
-        performance = await self._calculate_runtime_performance(runtime)
-        runtime_policy = self._risk.sync_performance(
-            policy=runtime_policy,
-            pnl_total=float(performance.get("pnl_total") or 0.0),
-            pnl_realized=float(performance.get("pnl_realized") or 0.0),
-            pnl_unrealized=float(performance.get("pnl_unrealized") or 0.0),
-        )
-        runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
+        runtime_state = {
+            **runtime_state,
+            "wallet_synced_at": now.isoformat(),
+            "observed_open_orders": sum(len(items) for items in open_order_lookup.values()),
+            "observed_positions": sum(
+                1
+                for item in position_lookup.values()
+                if abs(float(item.get("amount") or 0.0)) > 0
+            ),
+        }
+        if self._should_refresh_performance(runtime_state=runtime_state):
+            history_loader = getattr(self._pacifica, "get_position_history", None)
+            manual_close_history = (
+                await self._safe_load(
+                    lambda: history_loader(runtime["wallet_address"], limit=200, offset=0),
+                    [],
+                )
+                if callable(history_loader)
+                else []
+            )
+            performance = await self._load_runtime_performance(
+                runtime,
+                market_lookup=market_lookup or {},
+                position_lookup=position_lookup,
+                manual_close_history=manual_close_history,
+            )
+            runtime_policy = self._risk.sync_performance(
+                policy=runtime_policy,
+                pnl_total=float(performance.get("pnl_total") or 0.0),
+                pnl_realized=float(performance.get("pnl_realized") or 0.0),
+                pnl_unrealized=float(performance.get("pnl_unrealized") or 0.0),
+            )
+            runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
+            runtime_state["performance_synced_at"] = now.isoformat()
         runtime_state = self._reconcile_runtime_state(
             runtime_state=runtime_state,
             position_lookup=position_lookup,
@@ -171,6 +271,9 @@ class BotRuntimeWorker:
             )
             return
 
+        if not evaluation_due:
+            return
+
         credentials = self._auth.get_trading_credentials(None, runtime["wallet_address"])
         if credentials is None:
             logger.warning(
@@ -207,15 +310,21 @@ class BotRuntimeWorker:
             )
             return
 
-        markets = await self._safe_load(self._pacifica.get_markets, [])
-        market_lookup = self._build_market_lookup(markets)
-        candle_lookup = await self._indicator_context.load_candle_lookup(rules_json)
+        resolved_market_lookup = market_lookup or self._build_market_lookup(await self._load_markets())
+        resolved_candle_lookup = candle_lookup or await self._indicator_context.load_candle_lookup(rules_json)
+        cycle_runtime_state = self._mark_rule_evaluation(
+            runtime_state=dict(runtime_state),
+            rules_json=rules_json,
+            now=now,
+        )
+        runtime_policy["_runtime_state"] = cycle_runtime_state
+        runtime = self._persist_runtime_policy(runtime, runtime_policy, now=now)
         evaluation = self._rules.evaluate(
             rules_json=rules_json,
             context={
-                "runtime": {"id": runtime["id"], "state": runtime_state},
-                "market_lookup": market_lookup,
-                "candle_lookup": candle_lookup,
+                "runtime": {"id": runtime["id"], "state": cycle_runtime_state},
+                "market_lookup": resolved_market_lookup,
+                "candle_lookup": resolved_candle_lookup,
                 "position_lookup": position_lookup,
             },
         )
@@ -232,8 +341,24 @@ class BotRuntimeWorker:
         )
 
         runtime_touched = False
-        cycle_runtime_state = dict(runtime_state)
         coordination = self._coordination if getattr(self._coordination, "_supabase", None) is self._supabase else WorkerCoordinationService(self._supabase)
+        batch_result = await self._maybe_execute_batch_actions(
+            runtime=runtime,
+            runtime_policy=runtime_policy,
+            cycle_runtime_state=cycle_runtime_state,
+            actions=actions,
+            credentials=credentials,
+            market_lookup=resolved_market_lookup,
+            position_lookup=position_lookup,
+            open_order_lookup=open_order_lookup,
+            coordination=coordination,
+            price_lookup=resolved_price_lookup,
+        )
+        if batch_result is not None:
+            runtime_touched = batch_result
+            if not runtime_touched:
+                return
+            return
         for action in actions:
             issues = self._risk.assess_action(
                 policy=runtime_policy,
@@ -294,7 +419,7 @@ class BotRuntimeWorker:
                     runtime_state=cycle_runtime_state,
                     action=action,
                     credentials=credentials,
-                    market_lookup=market_lookup,
+                    market_lookup=resolved_market_lookup,
                     position_lookup=position_lookup,
                 )
                 execution_meta = response.get("execution_meta") if isinstance(response.get("execution_meta"), dict) else {}
@@ -316,7 +441,10 @@ class BotRuntimeWorker:
                 )
                 runtime_policy["_runtime_state"] = {**persisted_runtime_state, **cycle_runtime_state}
                 runtime = self._persist_runtime_policy(runtime, runtime_policy)
-                position_lookup = await self._refresh_position_lookup(credentials["account_address"])
+                position_lookup = await self._refresh_position_lookup(
+                    credentials["account_address"],
+                    price_lookup=resolved_price_lookup,
+                )
                 open_order_lookup = await self._refresh_open_order_lookup(credentials["account_address"])
                 cycle_runtime_state = self._reconcile_runtime_state(
                     runtime_state=cycle_runtime_state,
@@ -377,6 +505,147 @@ class BotRuntimeWorker:
                 )
         if not runtime_touched:
             return
+
+    async def _maybe_execute_batch_actions(
+        self,
+        *,
+        runtime: dict[str, Any],
+        runtime_policy: dict[str, Any],
+        cycle_runtime_state: dict[str, Any],
+        actions: list[dict[str, Any]],
+        credentials: dict[str, str],
+        market_lookup: dict[str, dict[str, Any]],
+        position_lookup: dict[str, dict[str, Any]],
+        open_order_lookup: dict[str, list[dict[str, Any]]],
+        coordination: WorkerCoordinationService,
+        price_lookup: dict[str, float],
+    ) -> bool | None:
+        batchable_types = {"place_limit_order", "cancel_order"}
+        if len(actions) < 2 or any(str(action.get("type") or "") not in batchable_types for action in actions):
+            return None
+
+        for action in actions:
+            issues = self._risk.assess_action(
+                policy=runtime_policy,
+                action=action,
+                runtime_state=cycle_runtime_state,
+                position_lookup=position_lookup,
+                open_order_lookup=open_order_lookup,
+            )
+            if issues:
+                return None
+
+        batch_items: list[dict[str, Any]] = []
+        for action in actions:
+            idempotency_key = self._build_idempotency_key(
+                runtime_id=runtime["id"],
+                action=action,
+                runtime_state=cycle_runtime_state,
+                position_lookup=position_lookup,
+            )
+            if not coordination.try_claim_action(runtime_id=runtime["id"], idempotency_key=idempotency_key):
+                continue
+            payload, execution_meta = await self._build_batch_order_request(
+                runtime=runtime,
+                action=action,
+                credentials=credentials,
+                market_lookup=market_lookup,
+            )
+            batch_items.append(
+                {
+                    "action": action,
+                    "idempotency_key": idempotency_key,
+                    "payload": payload,
+                    "execution_meta": execution_meta,
+                }
+            )
+
+        if not batch_items:
+            return False
+
+        try:
+            if len(batch_items) == 1:
+                responses = [await self._pacifica.place_order(batch_items[0]["payload"])]
+            else:
+                responses = await self._pacifica.place_batch_orders([item["payload"] for item in batch_items])
+        except (PacificaClientError, ValueError) as exc:
+            for item in batch_items:
+                runtime_policy = self._risk.mark_execution(policy=runtime_policy, success=False)
+                runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
+                runtime_policy["_runtime_state"] = {**runtime_state, **cycle_runtime_state}
+                runtime = self._persist_runtime_policy(runtime, runtime_policy)
+                event = self._engine.append_execution_event(
+                    None,
+                    runtime=runtime,
+                    event_type="action.failed",
+                    decision_summary=item["idempotency_key"],
+                    request_payload=item["action"],
+                    result_payload={},
+                    status="error",
+                    error_reason=str(exc),
+                )
+                await broadcaster.publish(
+                    channel=f"user:{runtime['user_id']}",
+                    event="bot.execution.failed",
+                    payload=self._serialize_event_payload(event),
+                )
+            return True
+
+        for item, response in zip(batch_items, responses, strict=False):
+            action = item["action"]
+            action_type = str(action.get("type") or "")
+            execution_meta = dict(item["execution_meta"])
+            if action_type == "place_limit_order":
+                response_payload = response.get("payload") if isinstance(response.get("payload"), dict) else {}
+                execution_meta["client_order_id"] = str(
+                    response_payload.get("client_order_id") or execution_meta.get("client_order_id") or ""
+                ).strip()
+            response["execution_meta"] = execution_meta
+            action_for_state = {**action, "_execution_meta": execution_meta}
+            runtime_policy = self._risk.mark_execution(policy=runtime_policy, success=True)
+            persisted_runtime_state = (
+                runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
+            )
+            cycle_runtime_state = self._update_runtime_state_for_action(
+                runtime_state=cycle_runtime_state,
+                action=action_for_state,
+                position_lookup=position_lookup,
+                open_order_lookup=open_order_lookup,
+                success=True,
+            )
+            runtime_policy["_runtime_state"] = {**persisted_runtime_state, **cycle_runtime_state}
+            runtime = self._persist_runtime_policy(runtime, runtime_policy)
+            event = self._engine.append_execution_event(
+                None,
+                runtime=runtime,
+                event_type="action.executed",
+                decision_summary=item["idempotency_key"],
+                request_payload=action,
+                result_payload=response,
+                status="success",
+            )
+            await broadcaster.publish(
+                channel=f"user:{runtime['user_id']}",
+                event="bot.execution.success",
+                payload=self._serialize_event_payload(event),
+            )
+
+        position_lookup = await self._refresh_position_lookup(
+            credentials["account_address"],
+            price_lookup=price_lookup,
+        )
+        open_order_lookup = await self._refresh_open_order_lookup(credentials["account_address"])
+        persisted_runtime_state = (
+            runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
+        )
+        cycle_runtime_state = self._reconcile_runtime_state(
+            runtime_state=cycle_runtime_state,
+            position_lookup=position_lookup,
+            open_order_lookup=open_order_lookup,
+        )
+        runtime_policy["_runtime_state"] = {**persisted_runtime_state, **cycle_runtime_state}
+        self._persist_runtime_policy(runtime, runtime_policy)
+        return True
 
     async def _execute_action(
         self,
@@ -668,8 +937,92 @@ class BotRuntimeWorker:
         except PacificaClientError:
             return fallback
 
-    async def _refresh_position_lookup(self, wallet_address: str) -> dict[str, dict[str, Any]]:
-        positions = await self._safe_load(lambda: self._pacifica.get_positions(wallet_address), [])
+    async def _build_batch_order_request(
+        self,
+        *,
+        runtime: dict[str, Any],
+        action: dict[str, Any],
+        credentials: dict[str, str],
+        market_lookup: dict[str, dict[str, Any]],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        action_type = str(action.get("type") or "")
+        symbol = self._normalize_symbol(action.get("symbol"))
+        payload: dict[str, Any] = {
+            "account": credentials["account_address"],
+            "agent_wallet": credentials["agent_wallet_address"],
+            "__agent_private_key": credentials["agent_private_key"],
+        }
+        if symbol:
+            payload["symbol"] = symbol
+
+        if action_type == "place_limit_order":
+            if not symbol:
+                raise ValueError("Limit orders require a symbol")
+            side = str(action.get("side") or "").lower().strip()
+            if side not in {"long", "short"}:
+                raise ValueError("Limit orders require side to be long or short")
+            price = float(action.get("price") or 0)
+            if price <= 0:
+                raise ValueError("Limit orders require a positive price")
+            leverage = max(1, int(float(action.get("leverage") or 1)))
+            reduce_only = self._to_bool(action.get("reduce_only"), False)
+            amount = self._resolve_order_quantity(
+                action=action,
+                market_lookup=market_lookup,
+                symbol=symbol,
+                reference_price=price,
+            )
+            client_order_id = str(action.get("client_order_id") or "").strip() or (
+                None if reduce_only else self._build_entry_client_order_id(runtime_id=str(runtime.get("id") or "runtime"), symbol=symbol)
+            )
+            if not reduce_only:
+                await self._ensure_leverage(
+                    wallet_address=credentials["account_address"],
+                    credentials=credentials,
+                    symbol=symbol,
+                    leverage=leverage,
+                )
+            return (
+                {
+                    "type": "create_order",
+                    **payload,
+                    "side": self._to_pacifica_side(side),
+                    "amount": amount,
+                    "price": price,
+                    "tif": str(action.get("tif") or "GTC"),
+                    "reduce_only": reduce_only,
+                    "client_order_id": client_order_id,
+                },
+                {
+                    "symbol": symbol,
+                    "side": self._to_pacifica_side(side),
+                    "amount": amount,
+                    "reduce_only": reduce_only,
+                    "reference_price": price,
+                    "client_order_id": client_order_id,
+                },
+            )
+
+        if action_type == "cancel_order":
+            if not symbol:
+                raise ValueError("Cancel order requires a symbol")
+            return (
+                {"type": "cancel_order", **payload, **self._extract_order_identifier(action)},
+                {},
+            )
+
+        raise ValueError(f"Unsupported batch action type: {action_type}")
+
+    async def _refresh_position_lookup(
+        self,
+        wallet_address: str,
+        *,
+        price_lookup: dict[str, float] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        positions = await self._safe_load(
+            lambda: self._pacifica.get_positions(wallet_address, price_lookup=price_lookup),
+            [],
+        )
         return self._build_position_lookup(positions)
 
     async def _refresh_open_order_lookup(self, wallet_address: str) -> dict[str, list[dict[str, Any]]]:
@@ -706,9 +1059,39 @@ class BotRuntimeWorker:
             }
         )
 
-    async def _calculate_runtime_performance(self, runtime: dict[str, Any]) -> dict[str, Any]:
+    async def _calculate_runtime_performance(
+        self,
+        runtime: dict[str, Any],
+        *,
+        market_lookup: dict[str, dict[str, Any]],
+        position_lookup: dict[str, dict[str, Any]],
+        manual_close_history: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         service = BotPerformanceService(pacifica_client=self._pacifica, supabase=self._supabase)
-        return await service.calculate_runtime_performance(runtime)
+        return await service.calculate_runtime_performance_with_context(
+            runtime,
+            market_lookup=market_lookup,
+            live_position_lookup=position_lookup,
+            manual_close_history=manual_close_history,
+        )
+
+    async def _load_runtime_performance(
+        self,
+        runtime: dict[str, Any],
+        *,
+        market_lookup: dict[str, dict[str, Any]],
+        position_lookup: dict[str, dict[str, Any]],
+        manual_close_history: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        parameters = inspect.signature(self._calculate_runtime_performance).parameters
+        if "market_lookup" in parameters:
+            return await self._calculate_runtime_performance(
+                runtime,
+                market_lookup=market_lookup,
+                position_lookup=position_lookup,
+                manual_close_history=manual_close_history,
+            )
+        return await self._calculate_runtime_performance(runtime)  # type: ignore[misc]
 
     @staticmethod
     def _build_idempotency_key(
@@ -773,6 +1156,82 @@ class BotRuntimeWorker:
     def _update_runtime(self, runtime: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
         serialized_updates = {key: value.isoformat() if isinstance(value, datetime) else value for key, value in updates.items()}
         return self._supabase.update("bot_runtimes", serialized_updates, filters={"id": runtime["id"]})[0]
+
+    def _should_refresh_wallet(self, *, runtime_state: dict[str, Any]) -> bool:
+        last_sync_at = self._parse_runtime_state_timestamp(str(runtime_state.get("wallet_synced_at") or ""))
+        if last_sync_at is None:
+            return True
+        elapsed = (datetime.now(tz=UTC) - last_sync_at).total_seconds()
+        return elapsed >= self._wallet_poll_interval_seconds(runtime_state=runtime_state)
+
+    def _wallet_poll_interval_seconds(self, *, runtime_state: dict[str, Any]) -> int:
+        pending_entries = runtime_state.get("pending_entry_symbols")
+        pending_count = len(pending_entries) if isinstance(pending_entries, dict) else 0
+        observed_open_orders = int(runtime_state.get("observed_open_orders") or 0)
+        recent_activity = self._recent_runtime_activity(runtime_state=runtime_state)
+        observed_positions = int(runtime_state.get("observed_positions") or 0)
+        if pending_count > 0 or observed_open_orders > 0 or recent_activity:
+            return self._settings.pacifica_active_wallet_poll_seconds
+        if observed_positions > 0:
+            return self._settings.pacifica_warm_wallet_poll_seconds
+        return self._settings.pacifica_idle_wallet_poll_seconds
+
+    def _should_refresh_performance(self, *, runtime_state: dict[str, Any]) -> bool:
+        last_sync_at = self._parse_runtime_state_timestamp(str(runtime_state.get("performance_synced_at") or ""))
+        if last_sync_at is None:
+            return True
+        elapsed = (datetime.now(tz=UTC) - last_sync_at).total_seconds()
+        if elapsed >= self._settings.pacifica_performance_refresh_seconds:
+            return True
+        return self._recent_runtime_activity(runtime_state=runtime_state)
+
+    def _should_evaluate_rules(self, *, rules_json: dict[str, Any], runtime_state: dict[str, Any]) -> bool:
+        current_slots = self._evaluation_slots(rules_json=rules_json)
+        previous_slots = runtime_state.get("evaluation_slots")
+        if not isinstance(previous_slots, dict):
+            return True
+        return any(previous_slots.get(key) != value for key, value in current_slots.items())
+
+    def _mark_rule_evaluation(
+        self,
+        *,
+        runtime_state: dict[str, Any],
+        rules_json: dict[str, Any],
+        now: datetime,
+    ) -> dict[str, Any]:
+        next_state = dict(runtime_state)
+        next_state["evaluation_slots"] = self._evaluation_slots(rules_json=rules_json)
+        next_state["last_rule_evaluated_at"] = now.isoformat()
+        return next_state
+
+    def _evaluation_slots(self, *, rules_json: dict[str, Any]) -> dict[str, int]:
+        requests = extract_candle_requests(rules_json)
+        if not requests:
+            return {
+                "fast": int(
+                    datetime.now(tz=UTC).timestamp() // self._settings.pacifica_fast_evaluation_seconds
+                )
+            }
+        now_ms = int(datetime.now(tz=UTC).timestamp() * 1_000)
+        slots: dict[str, int] = {}
+        for timeframe in sorted({str(item.get("timeframe") or "") for item in requests}):
+            timeframe_ms = TIMEFRAME_TO_MS.get(timeframe)
+            if timeframe_ms is None:
+                continue
+            slots[timeframe] = now_ms // timeframe_ms
+        return slots or {
+            "fast": int(
+                datetime.now(tz=UTC).timestamp() // self._settings.pacifica_fast_evaluation_seconds
+            )
+        }
+
+    def _recent_runtime_activity(self, *, runtime_state: dict[str, Any]) -> bool:
+        last_executed_at = self._parse_runtime_state_timestamp(str(runtime_state.get("last_executed_at") or ""))
+        if last_executed_at is None:
+            return False
+        return (
+            datetime.now(tz=UTC) - last_executed_at
+        ).total_seconds() < self._settings.pacifica_recent_activity_window_seconds
 
     def _persist_runtime_policy(
         self,
@@ -900,6 +1359,11 @@ class BotRuntimeWorker:
             if symbol:
                 lookup[symbol] = item
         return lookup
+
+    async def _load_markets(self) -> list[dict[str, Any]]:
+        if isinstance(self._pacifica, PacificaClient):
+            return await self._market_data.get_markets()
+        return await self._pacifica.get_markets()
 
     def _build_position_lookup(self, positions: list[Any]) -> dict[str, dict[str, Any]]:
         lookup: dict[str, dict[str, Any]] = {}

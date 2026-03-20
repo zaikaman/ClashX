@@ -15,6 +15,7 @@ from src.api.stream import websocket_fallback
 from src.api.trading import router as trading_router
 from src.core.settings import get_settings
 from src.middleware.auth import AuthMiddleware
+from src.services.pacifica_market_data_service import get_pacifica_market_data_service
 from src.workers.bot_copy_worker import BotCopyWorker
 from src.workers.bot_runtime_worker import BotRuntimeWorker
 
@@ -38,6 +39,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name)
     bot_copy_worker = BotCopyWorker()
     bot_runtime_worker = BotRuntimeWorker()
+    market_data_service = get_pacifica_market_data_service()
 
     app.add_middleware(AuthMiddleware)
     app.add_middleware(
@@ -59,6 +61,7 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def startup() -> None:
+        await market_data_service.start()
         if not settings.background_workers_enabled:
             return
         app.state.bot_runtime_worker = bot_runtime_worker
@@ -76,6 +79,7 @@ def create_app() -> FastAPI:
         if running_bot_runtime_worker is not None:
             with contextlib.suppress(asyncio.CancelledError):
                 await running_bot_runtime_worker.stop()
+        await market_data_service.stop()
 
     @app.get("/healthz", tags=["ops"])
     async def healthz() -> dict[str, object]:

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from time import time
 from typing import Any
 
-from src.services.pacifica_client import PacificaClient, PacificaClientError
+from src.services.pacifica_client import PacificaClient
+from src.services.pacifica_market_data_service import get_pacifica_market_data_service
 
 TIMEFRAME_TO_MS: dict[str, int] = {
     "1m": 60_000,
@@ -144,29 +144,10 @@ def extract_candle_requests(rules_json: dict[str, Any]) -> list[dict[str, Any]]:
 class IndicatorContextService:
     def __init__(self, pacifica_client: PacificaClient | None = None) -> None:
         self.pacifica_client = pacifica_client or PacificaClient()
+        self.market_data = get_pacifica_market_data_service()
 
     async def load_candle_lookup(self, rules_json: dict[str, Any]) -> dict[str, dict[str, list[dict[str, Any]]]]:
         requests = extract_candle_requests(rules_json)
         if not requests:
             return {}
-
-        resolved_end_time = int(time() * 1_000)
-        lookup: dict[str, dict[str, list[dict[str, Any]]]] = {}
-
-        for request in requests:
-            timeframe = request["timeframe"]
-            start_time = resolved_end_time - TIMEFRAME_TO_MS[timeframe] * request["lookback"]
-            try:
-                candles = await self.pacifica_client.get_kline(
-                    request["symbol"],
-                    interval=timeframe,
-                    start_time=start_time,
-                    end_time=resolved_end_time,
-                )
-            except PacificaClientError:
-                candles = []
-
-            symbol_lookup = lookup.setdefault(request["symbol"], {})
-            symbol_lookup[timeframe] = candles
-
-        return lookup
+        return await self.market_data.load_candle_lookup(requests)

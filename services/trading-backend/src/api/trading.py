@@ -187,7 +187,7 @@ async def get_trading_account(wallet_address: str | None = Query(default=None, m
 @router.get("/markets", response_model=list[MarketInfoResponse])
 async def get_trading_markets() -> list[MarketInfoResponse]:
     try:
-        markets = await trading_service.pacifica.get_markets()
+        markets = await trading_service.market_data.get_markets()
     except PacificaClientError as exc:
         raise HTTPException(status_code=_upstream_status(exc), detail=str(exc)) from exc
     return [MarketInfoResponse.model_validate(item) for item in markets]

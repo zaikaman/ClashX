@@ -180,7 +180,8 @@ class FakePacificaClient:
             {"symbol": "ETH", "mark_price": 40.0},
         ]
 
-    async def get_positions(self, wallet_address: str) -> list[dict[str, Any]]:
+    async def get_positions(self, wallet_address: str, *, price_lookup: dict[str, float] | None = None) -> list[dict[str, Any]]:
+        del price_lookup
         return deepcopy(self.live_positions.get(wallet_address, []))
 
     async def get_position_history(self, wallet_address: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:

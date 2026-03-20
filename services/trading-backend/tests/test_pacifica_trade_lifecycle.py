@@ -105,6 +105,7 @@ class FakeAuthService:
 class FakePacificaClient:
     def __init__(self) -> None:
         self.order_calls: list[dict[str, Any]] = []
+        self.batch_order_calls: list[list[dict[str, Any]]] = []
         self._position: dict[str, Any] | None = None
         self._fills: list[dict[str, Any]] = []
         self._margin_settings: list[dict[str, Any]] = []
@@ -130,8 +131,8 @@ class FakePacificaClient:
             }
         ]
 
-    async def get_positions(self, wallet_address: str) -> list[dict[str, Any]]:
-        del wallet_address
+    async def get_positions(self, wallet_address: str, *, price_lookup: dict[str, float] | None = None) -> list[dict[str, Any]]:
+        del wallet_address, price_lookup
         if self._position is None or not self._positions_visible:
             return []
         return [deepcopy(self._position)]
@@ -238,6 +239,13 @@ class FakePacificaClient:
             "request_id": f"req-{len(self.order_calls)}",
             "network": "testnet",
         }
+
+    async def place_batch_orders(self, payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        self.batch_order_calls.append([deepcopy(item) for item in payloads])
+        responses: list[dict[str, Any]] = []
+        for payload in payloads:
+            responses.append(await self.place_order(payload))
+        return responses
 
 
 class FakeIndicatorContextService:
@@ -1001,3 +1009,67 @@ def test_two_bots_can_manage_separate_btc_slices_on_the_same_wallet(monkeypatch:
     assert pacifica.order_calls[3]["take_profit"]["amount"] == 0.003
     assert pacifica._position is not None
     assert pacifica._position["amount"] == 0.006
+
+
+def test_runtime_process_batches_multiple_cancel_actions(monkeypatch: Any) -> None:
+    monkeypatch.setattr("src.workers.bot_runtime_worker.broadcaster.publish", _noop_publish)
+
+    supabase = FakeSupabaseRestClient()
+    bot_id = "bot-1"
+    runtime_id = "runtime-1"
+    wallet_address = "wallet-1"
+    user_id = "user-1"
+    supabase.tables["bot_definitions"] = [
+        {
+            "id": bot_id,
+            "user_id": user_id,
+            "wallet_address": wallet_address,
+            "rules_json": {
+                "conditions": [{"type": "price_below", "symbol": "BTC", "value": 200000}],
+                "actions": [
+                    {"type": "cancel_order", "symbol": "BTC", "order_id": 101},
+                    {"type": "cancel_order", "symbol": "BTC", "order_id": 102},
+                ],
+            },
+        }
+    ]
+    supabase.tables["bot_runtimes"] = [
+        {
+            "id": runtime_id,
+            "bot_definition_id": bot_id,
+            "user_id": user_id,
+            "wallet_address": wallet_address,
+            "status": "active",
+            "mode": "live",
+            "risk_policy_json": {"max_open_positions": 1, "cooldown_seconds": 0},
+            "updated_at": "2026-03-18T07:00:00+00:00",
+        }
+    ]
+    supabase.tables["bot_execution_events"] = []
+
+    pacifica = FakePacificaClient()
+
+    worker = BotRuntimeWorker()
+    worker._supabase = supabase
+    worker._engine._supabase = supabase
+    worker._auth = FakeAuthService()
+    worker._pacifica = pacifica
+    worker._indicator_context = FakeIndicatorContextService()
+    worker._coordination = FakeCoordinationService()
+
+    async def fake_performance(runtime: dict[str, Any]) -> dict[str, Any]:
+        del runtime
+        return {"pnl_total": 0.0, "pnl_realized": 0.0, "pnl_unrealized": 0.0}
+
+    worker._calculate_runtime_performance = fake_performance  # type: ignore[method-assign]
+
+    asyncio.run(worker._process_runtime(None, supabase.tables["bot_runtimes"][0]))
+
+    assert len(pacifica.batch_order_calls) == 1
+    assert [item["type"] for item in pacifica.batch_order_calls[0]] == ["cancel_order", "cancel_order"]
+    executed_events = [
+        event
+        for event in supabase.tables["bot_execution_events"]
+        if event.get("event_type") == "action.executed"
+    ]
+    assert len(executed_events) == 2

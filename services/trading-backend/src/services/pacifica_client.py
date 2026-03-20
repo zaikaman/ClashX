@@ -13,6 +13,7 @@ except ImportError:  # pragma: no cover - surfaced as runtime config error
     Keypair = None
 
 from src.core.settings import get_settings
+from src.services.pacifica_rate_limiter import get_pacifica_rate_limiter
 from src.services.pacifica_signing import prepare_message
 
 
@@ -31,6 +32,7 @@ class PacificaClient:
         self._lock = asyncio.Lock()
         self._connected = False
         self._rate_limit_interval = 0.05
+        self._rate_limiter = get_pacifica_rate_limiter()
         default_headers: dict[str, str] = {}
         if self.settings.pacifica_api_key:
             default_headers["PF-API-KEY"] = self.settings.pacifica_api_key
@@ -43,7 +45,8 @@ class PacificaClient:
         self._connected = False
         await self._http.aclose()
 
-    async def _throttle(self) -> None:
+    async def _throttle(self, *, bucket: str = "public", units: int = 1) -> None:
+        await self._rate_limiter.acquire(bucket=bucket, units=units)
         async with self._lock:
             await asyncio.sleep(self._rate_limit_interval)
 
@@ -318,7 +321,7 @@ class PacificaClient:
         return bool(value)
 
     async def place_order(self, order_payload: dict[str, Any]) -> dict[str, Any]:
-        await self._throttle()
+        await self._throttle(bucket="write")
         request_type = self._infer_request_type(order_payload)
         requested_account = str(order_payload.get("account", "")).strip() or None
         normalized_payload = self._normalize_payload(
@@ -373,8 +376,85 @@ class PacificaClient:
             "signed_message": signed_message,
         }
 
+    async def place_batch_orders(self, order_payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not order_payloads:
+            return []
+        actions: list[dict[str, Any]] = []
+        normalized_payloads: list[dict[str, Any]] = []
+        for order_payload in order_payloads:
+            request_type = self._infer_request_type(order_payload)
+            if request_type not in {"create_order", "cancel_order"}:
+                raise PacificaClientError(f"Pacifica batch order request does not support {request_type}")
+            requested_account = str(order_payload.get("account", "")).strip() or None
+            normalized_payload = self._normalize_payload(
+                request_type,
+                order_payload,
+                account=requested_account,
+            )
+            signer_private_key_override = str(order_payload.get("__agent_private_key", "")).strip() or None
+            agent_wallet_override = str(order_payload.get("agent_wallet", "")).strip() or None
+            request_header, signed_message = self._sign_request(
+                request_type,
+                normalized_payload,
+                requested_account,
+                signer_private_key_override=signer_private_key_override,
+                agent_wallet_override=agent_wallet_override,
+            )
+            request = {**request_header, **normalized_payload}
+            actions.append(
+                {
+                    "type": "Create" if request_type == "create_order" else "Cancel",
+                    "data": request,
+                }
+            )
+            normalized_payloads.append({**normalized_payload, "_signed_message": signed_message})
+
+        await self._throttle(bucket="write")
+        response = await self._http.post(
+            f"{self.settings.pacifica_rest_url}/orders/batch",
+            json={"actions": actions},
+            headers={"Content-Type": "application/json"},
+        )
+        response_json: dict[str, Any]
+        try:
+            response_json = response.json()
+        except ValueError:
+            response_json = {"success": False, "raw": response.text}
+        if response.is_error or response_json.get("success") is False:
+            detail = response_json.get("message") or response_json.get("error") or response.text
+            raise PacificaClientError(
+                f"Pacifica batch order request failed ({response.status_code}): {detail}",
+                status_code=response.status_code,
+            )
+        payload = self._extract_response_payload(response_json)
+        results = payload.get("results") if isinstance(payload, dict) else payload
+        if not isinstance(results, list):
+            results = []
+
+        responses: list[dict[str, Any]] = []
+        for index, normalized_payload in enumerate(normalized_payloads):
+            result = results[index] if index < len(results) and isinstance(results[index], dict) else {}
+            request_id = (
+                result.get("request_id")
+                or result.get("order_id")
+                or result.get("client_order_id")
+                or normalized_payload.get("client_order_id")
+                or str(uuid.uuid4())
+            )
+            responses.append(
+                {
+                    "status": "submitted",
+                    "request_id": str(request_id),
+                    "network": self.settings.pacifica_network,
+                    "payload": {key: value for key, value in normalized_payload.items() if key != "_signed_message"},
+                    "response": result,
+                    "signed_message": normalized_payload.get("_signed_message"),
+                }
+            )
+        return responses
+
     async def get_account_info(self, wallet_address: str) -> dict[str, Any]:
-        await self._throttle()
+        await self._throttle(bucket="private")
         response = await self._http.get(
             f"{self.settings.pacifica_rest_url}/account",
             params={"account": wallet_address},
@@ -401,7 +481,7 @@ class PacificaClient:
         }
 
     async def get_account_settings(self, wallet_address: str) -> list[dict[str, Any]]:
-        await self._throttle()
+        await self._throttle(bucket="private")
         response = await self._http.get(
             f"{self.settings.pacifica_rest_url}/account/settings",
             params={"account": wallet_address},
@@ -440,41 +520,44 @@ class PacificaClient:
             )
         return normalized_settings
 
-    async def get_markets(self) -> list[dict[str, Any]]:
-        await self._throttle()
-        info_response, price_response = await asyncio.gather(
-            self._http.get(
-                f"{self.settings.pacifica_rest_url}/info",
-                headers={"Accept": "*/*"},
-            ),
-            self._http.get(
-                f"{self.settings.pacifica_rest_url}/info/prices",
-                headers={"Accept": "*/*"},
-            ),
+    async def get_market_info(self) -> list[dict[str, Any]]:
+        await self._throttle(bucket="public")
+        info_response = await self._http.get(
+            f"{self.settings.pacifica_rest_url}/info",
+            headers={"Accept": "*/*"},
         )
         try:
             info_response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             self._raise_http_error("market-info", exc)
+        info_payload = self._extract_response_payload(info_response.json())
+        if not isinstance(info_payload, list):
+            raise PacificaClientError("Pacifica market-info API returned an unexpected payload shape")
+        return [row for row in info_payload if isinstance(row, dict)]
+
+    async def get_prices(self) -> list[dict[str, Any]]:
+        await self._throttle(bucket="public")
+        price_response = await self._http.get(
+            f"{self.settings.pacifica_rest_url}/info/prices",
+            headers={"Accept": "*/*"},
+        )
         try:
             price_response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             self._raise_http_error("price-info", exc)
-        info_payload = self._extract_response_payload(info_response.json())
         price_payload = self._extract_response_payload(price_response.json())
-        if not isinstance(info_payload, list):
-            raise PacificaClientError("Pacifica market-info API returned an unexpected payload shape")
-
-        price_lookup: dict[str, dict[str, Any]] = {}
-        if isinstance(price_payload, list):
-            for row in price_payload:
-                if not isinstance(row, dict):
-                    continue
-                symbol = row.get("symbol")
-                if symbol is None:
-                    continue
-                symbol_key = str(symbol)
-                price_lookup[symbol_key] = {
+        if not isinstance(price_payload, list):
+            raise PacificaClientError("Pacifica price-info API returned an unexpected payload shape")
+        prices: list[dict[str, Any]] = []
+        for row in price_payload:
+            if not isinstance(row, dict):
+                continue
+            symbol = row.get("symbol")
+            if symbol is None:
+                continue
+            prices.append(
+                {
+                    "symbol": str(symbol),
                     "mark_price": self._coerce_float(row.get("mark", row.get("mid", row.get("oracle"))), 0.0),
                     "mid_price": self._coerce_float(row.get("mid"), 0.0),
                     "oracle_price": self._coerce_float(row.get("oracle"), 0.0),
@@ -485,11 +568,24 @@ class PacificaClient:
                     "yesterday_price": self._coerce_float(row.get("yesterday_price", row.get("yesterdayPrice")), 0.0),
                     "updated_at": row.get("timestamp") or row.get("updated_at") or row.get("updatedAt"),
                 }
+            )
+        return prices
+
+    async def get_markets(self) -> list[dict[str, Any]]:
+        info_payload, price_payload = await asyncio.gather(
+            self.get_market_info(),
+            self.get_prices(),
+        )
+
+        price_lookup: dict[str, dict[str, Any]] = {}
+        for row in price_payload:
+            symbol_key = str(row.get("symbol") or "")
+            if not symbol_key:
+                continue
+            price_lookup[symbol_key] = row
 
         markets: list[dict[str, Any]] = []
         for row in info_payload:
-            if not isinstance(row, dict):
-                continue
             symbol = row.get("symbol")
             if symbol is None:
                 continue
@@ -527,7 +623,7 @@ class PacificaClient:
         start_time: int,
         end_time: int | None = None,
     ) -> list[dict[str, Any]]:
-        await self._throttle()
+        await self._throttle(bucket="public")
         response = await self._http.get(
             f"{self.settings.pacifica_rest_url}/kline",
             params={
@@ -581,7 +677,7 @@ class PacificaClient:
         limit: int = 90,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        await self._throttle()
+        await self._throttle(bucket="private")
         response = await self._http.get(
             f"{self.settings.pacifica_rest_url}/portfolio",
             params={"account": wallet_address, "limit": limit, "offset": offset},
@@ -609,8 +705,13 @@ class PacificaClient:
         points.sort(key=lambda item: str(item["timestamp"]))
         return points
 
-    async def get_positions(self, wallet_address: str) -> list[dict[str, Any]]:
-        await self._throttle()
+    async def get_positions(
+        self,
+        wallet_address: str,
+        *,
+        price_lookup: dict[str, float] | None = None,
+    ) -> list[dict[str, Any]]:
+        await self._throttle(bucket="private")
         positions_url = self.settings.pacifica_positions_api_url or f"{self.settings.pacifica_rest_url}/positions"
 
         response = await self._http.get(
@@ -629,30 +730,16 @@ class PacificaClient:
         if not isinstance(payload, list):
             raise PacificaClientError("Pacifica positions API returned an unexpected payload shape")
 
-        price_response = await self._http.get(
-            f"{self.settings.pacifica_rest_url}/info/prices",
-            headers={"Accept": "*/*"},
-        )
-        try:
-            price_response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            self._raise_http_error("price-info", exc)
-        price_payload = self._extract_response_payload(price_response.json())
-        price_lookup: dict[str, float] = {}
-        if isinstance(price_payload, list):
-            for row in price_payload:
-                if not isinstance(row, dict):
-                    continue
+        resolved_price_lookup = dict(price_lookup or {})
+        if not resolved_price_lookup:
+            prices = await self.get_prices()
+            for row in prices:
                 symbol = row.get("symbol")
-                mid = row.get("mark") or row.get("mid")
-                oracle = row.get("oracle")
-                if symbol is None:
-                    continue
-                reference_price = mid if mid is not None else oracle
-                if reference_price is None:
+                reference_price = row.get("mark_price") or row.get("mid_price") or row.get("oracle_price")
+                if symbol in (None, "") or reference_price in (None, ""):
                     continue
                 try:
-                    price_lookup[str(symbol)] = float(reference_price)
+                    resolved_price_lookup[str(symbol)] = float(reference_price)
                 except (TypeError, ValueError):
                     continue
 
@@ -663,7 +750,7 @@ class PacificaClient:
             amount = raw_position.get("amount") or raw_position.get("size") or raw_position.get("position_size")
             symbol = raw_position.get("symbol")
             side = raw_position.get("side")
-            mark_price = raw_position.get("mark_price") or raw_position.get("markPrice") or price_lookup.get(str(symbol))
+            mark_price = raw_position.get("mark_price") or raw_position.get("markPrice") or resolved_price_lookup.get(str(symbol))
             entry_price = raw_position.get("entry_price") or raw_position.get("entryPrice")
             if amount is None or symbol is None or side is None or mark_price is None or entry_price is None:
                 continue
@@ -685,7 +772,7 @@ class PacificaClient:
         return positions
 
     async def get_open_orders(self, wallet_address: str) -> list[dict[str, Any]]:
-        await self._throttle()
+        await self._throttle(bucket="private")
         response = await self._http.get(
             f"{self.settings.pacifica_rest_url}/orders",
             params={"account": wallet_address},
@@ -734,7 +821,7 @@ class PacificaClient:
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        await self._throttle()
+        await self._throttle(bucket="private")
         response = await self._http.get(
             f"{self.settings.pacifica_rest_url}/positions/history",
             params={"account": wallet_address, "limit": limit, "offset": offset},
@@ -771,7 +858,7 @@ class PacificaClient:
         return history
 
     async def get_order_history_by_id(self, order_id: int) -> list[dict[str, Any]]:
-        await self._throttle()
+        await self._throttle(bucket="private")
         response = await self._http.get(
             f"{self.settings.pacifica_rest_url}/orders/history_by_id",
             params={"order_id": order_id},

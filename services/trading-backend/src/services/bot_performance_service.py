@@ -16,6 +16,21 @@ class BotPerformanceService:
         self._risk = BotRiskService()
 
     async def calculate_runtime_performance(self, runtime: dict[str, Any]) -> dict[str, Any]:
+        return await self.calculate_runtime_performance_with_context(
+            runtime,
+            market_lookup=None,
+            live_position_lookup=None,
+            manual_close_history=None,
+        )
+
+    async def calculate_runtime_performance_with_context(
+        self,
+        runtime: dict[str, Any],
+        *,
+        market_lookup: dict[str, dict[str, Any]] | None,
+        live_position_lookup: dict[str, dict[str, Any]] | None,
+        manual_close_history: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
         events = self._supabase.select(
             "bot_execution_events",
             filters={"runtime_id": runtime["id"], "event_type": "action.executed"},
@@ -47,13 +62,21 @@ class BotPerformanceService:
                 )
             realized_pnl += event_realized
 
-        manual_close_records = await self._load_manual_close_records(runtime, bot_records)
+        manual_close_records = await self._load_manual_close_records(
+            runtime,
+            bot_records,
+            history_rows=manual_close_history,
+        )
         lots, closures, close_events = self._build_runtime_ledger(runtime, bot_records, manual_close_records, close_events)
         self._persist_runtime_ledger(runtime, events, lots, closures)
         realized_pnl = round(sum(float(item.get("realized_pnl") or 0.0) for item in closures), 8)
 
-        market_lookup = await self._load_market_lookup()
-        live_position_lookup, live_positions_loaded = await self._load_live_position_lookup(runtime)
+        resolved_market_lookup = market_lookup or await self._load_market_lookup()
+        if live_position_lookup is None:
+            resolved_live_position_lookup, live_positions_loaded = await self._load_live_position_lookup(runtime)
+        else:
+            resolved_live_position_lookup = live_position_lookup
+            live_positions_loaded = True
         open_positions: list[dict[str, Any]] = []
         unrealized_pnl = 0.0
         open_lots = [item for item in lots if self._to_float(item.get("quantity_remaining")) > 1e-12]
@@ -63,7 +86,7 @@ class BotPerformanceService:
             entry_price = float(state.get("entry_price") or 0.0)
             if abs(quantity) <= 1e-12 or entry_price <= 0:
                 continue
-            live_position = live_position_lookup.get(symbol)
+            live_position = resolved_live_position_lookup.get(symbol)
             if live_position is not None:
                 live_amount = abs(float(live_position.get("amount") or 0.0))
                 live_side = self._normalize_position_side(live_position.get("side"))
@@ -82,7 +105,7 @@ class BotPerformanceService:
                 continue
             else:
                 size = abs(quantity)
-                mark_price = float((market_lookup.get(symbol) or {}).get("mark_price") or 0.0)
+                mark_price = float((resolved_market_lookup.get(symbol) or {}).get("mark_price") or 0.0)
                 if mark_price <= 0:
                     mark_price = entry_price
             side = "long" if quantity > 0 else "short"
@@ -271,18 +294,26 @@ class BotPerformanceService:
             True,
         )
 
-    async def _load_manual_close_records(self, runtime: dict[str, Any], bot_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    async def _load_manual_close_records(
+        self,
+        runtime: dict[str, Any],
+        bot_records: list[dict[str, Any]],
+        *,
+        history_rows: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
         wallet_address = str(runtime.get("wallet_address") or "").strip()
         if not wallet_address or not bot_records:
             return []
-        try:
-            history_rows = await self._pacifica.get_position_history(wallet_address, limit=200, offset=0)
-        except PacificaClientError:
-            return []
+        resolved_history_rows = history_rows
+        if resolved_history_rows is None:
+            try:
+                resolved_history_rows = await self._pacifica.get_position_history(wallet_address, limit=200, offset=0)
+            except PacificaClientError:
+                return []
 
         deployed_at = runtime.get("deployed_at")
         normalized_history: list[dict[str, Any]] = []
-        for row in history_rows:
+        for row in resolved_history_rows:
             event_kind, position_side = self._position_history_event_kind(row)
             amount = self._to_float(row.get("amount"))
             price = self._to_float(row.get("price"))

@@ -57,6 +57,19 @@ class Settings:
     pacifica_api_key: str
     pacifica_api_secret: str
     pacifica_builder_code: str
+    pacifica_global_requests_per_second: int
+    pacifica_public_requests_per_second: int
+    pacifica_private_requests_per_second: int
+    pacifica_write_requests_per_second: int
+    pacifica_market_cache_ttl_seconds: int
+    pacifica_price_cache_ttl_seconds: int
+    pacifica_snapshot_cache_ttl_seconds: int
+    pacifica_fast_evaluation_seconds: int
+    pacifica_active_wallet_poll_seconds: int
+    pacifica_warm_wallet_poll_seconds: int
+    pacifica_idle_wallet_poll_seconds: int
+    pacifica_recent_activity_window_seconds: int
+    pacifica_performance_refresh_seconds: int
     privy_app_id: str
     privy_verification_key: str
     openai_api_key: str
@@ -97,6 +110,19 @@ def get_settings() -> Settings:
         pacifica_api_key=os.getenv("PACIFICA_API_KEY", ""),
         pacifica_api_secret=os.getenv("PACIFICA_API_SECRET", ""),
         pacifica_builder_code=os.getenv("PACIFICA_BUILDER_CODE", ""),
+        pacifica_global_requests_per_second=max(int(os.getenv("PACIFICA_GLOBAL_REQUESTS_PER_SECOND", "12")), 1),
+        pacifica_public_requests_per_second=max(int(os.getenv("PACIFICA_PUBLIC_REQUESTS_PER_SECOND", "8")), 1),
+        pacifica_private_requests_per_second=max(int(os.getenv("PACIFICA_PRIVATE_REQUESTS_PER_SECOND", "8")), 1),
+        pacifica_write_requests_per_second=max(int(os.getenv("PACIFICA_WRITE_REQUESTS_PER_SECOND", "4")), 1),
+        pacifica_market_cache_ttl_seconds=max(int(os.getenv("PACIFICA_MARKET_CACHE_TTL_SECONDS", "15")), 1),
+        pacifica_price_cache_ttl_seconds=max(int(os.getenv("PACIFICA_PRICE_CACHE_TTL_SECONDS", "5")), 1),
+        pacifica_snapshot_cache_ttl_seconds=max(int(os.getenv("PACIFICA_SNAPSHOT_CACHE_TTL_SECONDS", "8")), 1),
+        pacifica_fast_evaluation_seconds=max(int(os.getenv("PACIFICA_FAST_EVALUATION_SECONDS", "5")), 1),
+        pacifica_active_wallet_poll_seconds=max(int(os.getenv("PACIFICA_ACTIVE_WALLET_POLL_SECONDS", "4")), 1),
+        pacifica_warm_wallet_poll_seconds=max(int(os.getenv("PACIFICA_WARM_WALLET_POLL_SECONDS", "15")), 1),
+        pacifica_idle_wallet_poll_seconds=max(int(os.getenv("PACIFICA_IDLE_WALLET_POLL_SECONDS", "45")), 1),
+        pacifica_recent_activity_window_seconds=max(int(os.getenv("PACIFICA_RECENT_ACTIVITY_WINDOW_SECONDS", "90")), 1),
+        pacifica_performance_refresh_seconds=max(int(os.getenv("PACIFICA_PERFORMANCE_REFRESH_SECONDS", "60")), 5),
         privy_app_id=os.getenv("PRIVY_APP_ID", ""),
         privy_verification_key=os.getenv("PRIVY_VERIFICATION_KEY", ""),
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
