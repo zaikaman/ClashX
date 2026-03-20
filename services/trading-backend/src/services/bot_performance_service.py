@@ -47,10 +47,7 @@ class BotPerformanceService:
     ) -> list[dict[str, Any]]:
         if not str(wallet_address or "").strip():
             return []
-        try:
-            return await self._pacifica.get_position_history(wallet_address, limit=limit, offset=offset)
-        except PacificaClientError:
-            return []
+        return await self._load_position_history_pages(wallet_address, limit=limit, offset=offset)
 
     async def calculate_runtime_performance_with_context(
         self,
@@ -90,7 +87,7 @@ class BotPerformanceService:
     ) -> dict[str, Any]:
         events = self._supabase.select(
             "bot_execution_events",
-            columns="id,created_at,result_payload",
+            columns="id,created_at,request_payload,result_payload",
             filters={"runtime_id": runtime["id"], "event_type": "action.executed"},
             order="created_at.asc",
             limit=1000,
@@ -116,16 +113,22 @@ class BotPerformanceService:
             bot_records: list[dict[str, Any]] = []
             bot_positions: dict[str, dict[str, float]] = {}
             close_events: list[dict[str, Any]] = []
+            unresolved_events: list[dict[str, Any]] = []
 
             for event in events:
                 event_realized = 0.0
                 event_closed = False
+                event_records: list[dict[str, Any]] = []
                 fills = await self._resolve_event_fills(event, order_history_cache)
                 for fill in fills:
                     applied = self._apply_fill(bot_positions, fill)
-                    bot_records.extend(self._build_bot_records(event, fill, applied, event.get("created_at")))
+                    records = self._build_bot_records(event, fill, applied, event.get("created_at"))
+                    bot_records.extend(records)
+                    event_records.extend(records)
                     event_realized += applied["realized_pnl"]
                     event_closed = event_closed or applied["closed"]
+                if not event_records:
+                    unresolved_events.append(event)
                 if event_closed:
                     close_events.append(
                         {
@@ -137,6 +140,7 @@ class BotPerformanceService:
             manual_close_records = await self._load_manual_close_records(
                 runtime,
                 bot_records,
+                unresolved_events=unresolved_events,
                 history_rows=manual_close_history,
             )
             lots, closures, close_events = self._build_runtime_ledger(runtime, bot_records, manual_close_records, close_events)
@@ -192,28 +196,47 @@ class BotPerformanceService:
                 continue
             events = self._supabase.select(
                 "bot_execution_events",
-                columns="id,created_at,result_payload",
+                columns="id,created_at,request_payload,result_payload",
                 filters={"runtime_id": runtime_id, "event_type": "action.executed"},
                 order="created_at.asc",
                 limit=1000,
             )
             bot_records: list[dict[str, Any]] = []
             bot_positions: dict[str, dict[str, float]] = {}
+            unresolved_events: list[dict[str, Any]] = []
             for event in events:
+                event_records: list[dict[str, Any]] = []
                 fills = await self._resolve_event_fills(event, order_history_cache)
                 for fill in fills:
                     applied = self._apply_fill(bot_positions, fill)
-                    bot_records.extend(self._build_bot_records(event, fill, applied, event.get("created_at")))
-            lots, closures, _ = self._build_runtime_ledger(runtime, bot_records, [], [])
+                    records = self._build_bot_records(event, fill, applied, event.get("created_at"))
+                    bot_records.extend(records)
+                    event_records.extend(records)
+                if not event_records:
+                    unresolved_events.append(event)
             runtime_ledgers[runtime_id] = {
                 "runtime": runtime,
+                "unresolved_events": unresolved_events,
+                "bot_records": bot_records,
+            }
+
+        history_rows = self._normalize_position_history_rows(runtimes, resolved_history or [])
+        for runtime_id, ledger in runtime_ledgers.items():
+            bot_records = list(ledger.get("bot_records") or [])
+            bot_records.extend(
+                self._materialize_bot_history_records(
+                    ledger.get("unresolved_events") or [],
+                    history_rows,
+                )
+            )
+            lots, closures, _ = self._build_runtime_ledger(ledger["runtime"], bot_records, [], [])
+            runtime_ledgers[runtime_id] = {
+                "runtime": ledger["runtime"],
                 "lots": lots,
                 "closures": closures,
             }
             for record in bot_records:
                 global_bot_records.append({**record, "runtime_id": runtime_id})
-
-        history_rows = self._normalize_position_history_rows(runtimes, resolved_history or [])
         self._consume_bot_history_matches(global_bot_records, history_rows)
         manual_closures = self._apply_history_closures_to_lots(history_rows, runtime_ledgers)
         self._cap_open_lots_to_live_positions(
@@ -765,16 +788,16 @@ class BotPerformanceService:
         runtime: dict[str, Any],
         bot_records: list[dict[str, Any]],
         *,
+        unresolved_events: list[dict[str, Any]] | None = None,
         history_rows: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         wallet_address = str(runtime.get("wallet_address") or "").strip()
-        if not wallet_address or not bot_records:
+        if not wallet_address:
             return []
         resolved_history_rows = history_rows
         if resolved_history_rows is None:
-            try:
-                resolved_history_rows = await self._pacifica.get_position_history(wallet_address, limit=200, offset=0)
-            except PacificaClientError:
+            resolved_history_rows = await self._load_position_history_pages(wallet_address, limit=200, offset=0)
+            if not resolved_history_rows:
                 return []
 
         deployed_at = runtime.get("deployed_at")
@@ -802,6 +825,9 @@ class BotPerformanceService:
                 }
             )
 
+        bot_records.extend(self._materialize_bot_history_records(unresolved_events or [], normalized_history))
+        if not bot_records:
+            return []
         self._consume_bot_history_matches(bot_records, normalized_history)
 
         manual_close_records: list[dict[str, Any]] = []
@@ -831,6 +857,98 @@ class BotPerformanceService:
                 }
             )
         return manual_close_records
+
+    def _materialize_bot_history_records(
+        self,
+        unresolved_events: list[dict[str, Any]],
+        history_rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        for event in unresolved_events:
+            hint = self._infer_request_history_hint(event)
+            if hint is None:
+                continue
+            row = self._match_history_row_for_hint(hint, history_rows)
+            if row is None:
+                continue
+            amount = self._to_float(row.get("amount"))
+            price = self._to_float(row.get("price"))
+            if amount <= 1e-12 or price <= 0:
+                continue
+            position_side = str(hint.get("position_side") or "")
+            event_kind = str(hint.get("event_kind") or "")
+            fill_side = position_side if event_kind == "open" else ("short" if position_side == "long" else "long")
+            records.append(
+                {
+                    "source": "bot",
+                    "created_at": row.get("created_at") or event.get("created_at"),
+                    "symbol": row.get("symbol"),
+                    "event_kind": event_kind,
+                    "position_side": position_side,
+                    "amount": amount,
+                    "source_event_id": event.get("id"),
+                    "source_order_id": str(self._extract_order_id(event)) if self._extract_order_id(event) is not None else None,
+                    "source_history_id": row.get("history_id"),
+                    "fill": {
+                        "symbol": row.get("symbol"),
+                        "side": fill_side,
+                        "amount": amount,
+                        "price": price,
+                        "reduce_only": event_kind == "close",
+                        "event_type": "history_match",
+                        "created_at": row.get("created_at") or event.get("created_at"),
+                    },
+                }
+            )
+        return records
+
+    def _infer_request_history_hint(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        request_payload = event.get("request_payload") if isinstance(event.get("request_payload"), dict) else {}
+        symbol = self._normalize_symbol(request_payload.get("symbol"))
+        if not symbol:
+            return None
+        action_type = str(request_payload.get("type") or "").strip().lower()
+        if action_type == "open_long":
+            return {"symbol": symbol, "event_kind": "open", "position_side": "long", "created_at": event.get("created_at")}
+        if action_type == "open_short":
+            return {"symbol": symbol, "event_kind": "open", "position_side": "short", "created_at": event.get("created_at")}
+        if action_type == "close_position":
+            side = self._normalize_position_side(request_payload.get("side"))
+            position_side = "short" if side == "long" else "long" if side == "short" else ""
+            if not position_side:
+                return None
+            return {"symbol": symbol, "event_kind": "close", "position_side": position_side, "created_at": event.get("created_at")}
+        if action_type in {"place_market_order", "place_limit_order", "place_twap_order"}:
+            order_side = self._normalize_position_side(request_payload.get("side"))
+            if order_side not in {"long", "short"}:
+                return None
+            reduce_only = self._to_bool(request_payload.get("reduce_only"), False)
+            position_side = "short" if reduce_only and order_side == "long" else "long" if reduce_only and order_side == "short" else order_side
+            event_kind = "close" if reduce_only else "open"
+            return {"symbol": symbol, "event_kind": event_kind, "position_side": position_side, "created_at": event.get("created_at")}
+        return None
+
+    def _match_history_row_for_hint(
+        self,
+        hint: dict[str, Any],
+        history_rows: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        candidates = [
+            row
+            for row in history_rows
+            if row.get("symbol") == hint.get("symbol")
+            and row.get("event_kind") == hint.get("event_kind")
+            and row.get("position_side") == hint.get("position_side")
+            and self._to_float(row.get("remaining_amount")) > 1e-12
+        ]
+        if not candidates:
+            return None
+        candidates.sort(
+            key=lambda row: abs(self._timestamp_value(row.get("created_at")) - self._timestamp_value(hint.get("created_at")))
+        )
+        row = candidates[0]
+        row["remaining_amount"] = 0.0
+        return row
 
     def _consume_bot_history_matches(self, bot_records: list[dict[str, Any]], history_rows: list[dict[str, Any]]) -> None:
         for record in sorted(bot_records, key=self._timeline_sort_key):
@@ -1013,6 +1131,54 @@ class BotPerformanceService:
     def _coerce_iso(value: Any) -> str:
         text = str(value or "").strip()
         return text if text else datetime.now(tz=UTC).isoformat()
+
+    async def _load_position_history_pages(
+        self,
+        wallet_address: str,
+        *,
+        limit: int,
+        offset: int,
+        max_pages: int = 10,
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        page_size = max(1, int(limit or 200))
+        page_offset = max(0, int(offset or 0))
+        try:
+            for _ in range(max_pages):
+                batch = await self._pacifica.get_position_history(wallet_address, limit=page_size, offset=page_offset)
+                if not batch:
+                    break
+                for row in batch:
+                    if not isinstance(row, dict):
+                        continue
+                    dedupe_key = self._position_history_dedupe_key(row)
+                    if dedupe_key in seen_keys:
+                        continue
+                    seen_keys.add(dedupe_key)
+                    rows.append(row)
+                if len(batch) < page_size:
+                    break
+                page_offset += page_size
+        except PacificaClientError:
+            return []
+        rows.sort(key=lambda row: self._timestamp_value(row.get("created_at") or row.get("createdAt")))
+        return rows
+
+    @classmethod
+    def _position_history_dedupe_key(cls, row: dict[str, Any]) -> str:
+        history_id = row.get("history_id") or row.get("historyId")
+        if history_id not in (None, ""):
+            return f"history:{history_id}"
+        return "|".join(
+            (
+                cls._normalize_symbol(row.get("symbol")),
+                str(row.get("event_type") or row.get("eventType") or "").strip().lower(),
+                str(row.get("created_at") or row.get("createdAt") or "").strip(),
+                str(row.get("amount") or "").strip(),
+                str(row.get("price") or "").strip(),
+            )
+        )
 
     def _apply_fill(self, positions: dict[str, dict[str, float]], fill: dict[str, Any]) -> dict[str, Any]:
         symbol = self._normalize_symbol(fill.get("symbol"))
@@ -1201,3 +1367,17 @@ class BotPerformanceService:
             return float(value)
         except (TypeError, ValueError):
             return 0.0
+
+    @staticmethod
+    def _to_bool(value: Any, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "y"}:
+                return True
+            if normalized in {"0", "false", "no", "n"}:
+                return False
+        return bool(value)

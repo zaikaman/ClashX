@@ -141,6 +141,7 @@ class NoDeleteSupabaseRestClient(FakeSupabaseRestClient):
 class FakePacificaClient:
     def __init__(self) -> None:
         self.order_history_requests: list[int] = []
+        self.position_history_requests: list[tuple[str, int, int]] = []
         self.order_history: dict[int, list[dict[str, Any]]] = {
             11: [
                 {
@@ -187,8 +188,9 @@ class FakePacificaClient:
         return deepcopy(self.live_positions.get(wallet_address, []))
 
     async def get_position_history(self, wallet_address: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
-        del limit, offset
-        return deepcopy(self.position_history.get(wallet_address, []))
+        self.position_history_requests.append((wallet_address, limit, offset))
+        rows = self.position_history.get(wallet_address, [])
+        return deepcopy(rows[offset : offset + limit])
 
 
 def _tables() -> dict[str, list[dict[str, Any]]]:
@@ -616,6 +618,112 @@ def test_runtime_performance_keeps_same_symbol_wallet_closes_scoped_to_the_corre
     assert performance_b["positions"][0]["entry_price"] == 110.0
     assert performance_b["positions"][0]["mark_price"] == 120.0
     assert performance_b["positions"][0]["unrealized_pnl"] == 10.0
+
+
+def test_runtime_performance_loads_manual_close_from_later_position_history_pages() -> None:
+    fake_supabase = FakeSupabaseRestClient(_tables())
+    fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = []
+    fake_pacifica.position_history["shared-wallet"] = [
+        {
+            "history_id": index + 1,
+            "symbol": "SOL",
+            "amount": 1.0,
+            "price": 10.0,
+            "entry_price": 10.0,
+            "fee": 0.0,
+            "pnl": 0.0,
+            "event_type": "open_long",
+            "created_at": f"2026-03-16T{index // 60:02d}:{index % 60:02d}:00+00:00",
+        }
+        for index in range(200)
+    ] + [
+        {
+            "history_id": 1001,
+            "symbol": "BTC",
+            "amount": 1.0,
+            "price": 120.0,
+            "entry_price": 100.0,
+            "fee": 0.0,
+            "pnl": 20.0,
+            "event_type": "open_long",
+            "created_at": "2026-03-17T00:00:00+00:00",
+        },
+        {
+            "history_id": 1002,
+            "symbol": "BTC",
+            "amount": 1.0,
+            "price": 120.0,
+            "entry_price": 100.0,
+            "fee": 0.0,
+            "pnl": 20.0,
+            "event_type": "close_long",
+            "created_at": "2026-03-17T00:05:00+00:00",
+        },
+    ]
+    service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=fake_supabase)
+
+    runtime_a = fake_supabase.maybe_one("bot_runtimes", filters={"id": "runtime-a"})
+    performance_a = asyncio.run(service.calculate_runtime_performance(runtime_a))
+
+    assert performance_a["positions"] == []
+    assert performance_a["pnl_realized"] == 20.0
+    assert performance_a["win_streak"] == 1
+    assert fake_pacifica.position_history_requests[:2] == [
+        ("shared-wallet", 200, 0),
+        ("shared-wallet", 200, 200),
+    ]
+
+
+def test_runtime_performance_recovers_bot_open_from_request_history_when_fill_is_missing() -> None:
+    fake_supabase = FakeSupabaseRestClient(_tables())
+    fake_supabase.tables["bot_execution_events"] = [
+        {
+            "id": "event-a-open",
+            "runtime_id": "runtime-a",
+            "event_type": "action.executed",
+            "decision_summary": "btc open a",
+            "request_payload": {"type": "open_long", "symbol": "BTC", "size_usd": 100},
+            "result_payload": {},
+            "status": "success",
+            "error_reason": None,
+            "created_at": "2026-03-17T00:00:00+00:00",
+        }
+    ]
+    fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = []
+    fake_pacifica.position_history["shared-wallet"] = [
+        {
+            "history_id": 1001,
+            "symbol": "BTC",
+            "amount": 1.0,
+            "price": 100.0,
+            "entry_price": 100.0,
+            "fee": 0.0,
+            "pnl": 0.0,
+            "event_type": "open_long",
+            "created_at": "2026-03-17T00:00:01+00:00",
+        },
+        {
+            "history_id": 1002,
+            "symbol": "BTC",
+            "amount": 1.0,
+            "price": 120.0,
+            "entry_price": 100.0,
+            "fee": 0.0,
+            "pnl": 20.0,
+            "event_type": "close_long",
+            "created_at": "2026-03-17T00:05:00+00:00",
+        },
+    ]
+    service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=fake_supabase)
+
+    runtime_a = fake_supabase.maybe_one("bot_runtimes", filters={"id": "runtime-a"})
+    performance_a = asyncio.run(service.calculate_runtime_performance(runtime_a))
+
+    assert performance_a["positions"] == []
+    assert performance_a["pnl_realized"] == 20.0
+    assert performance_a["win_streak"] == 1
 
 
 def test_runtime_performance_persists_ledger_idempotently_when_same_rows_already_exist() -> None:
