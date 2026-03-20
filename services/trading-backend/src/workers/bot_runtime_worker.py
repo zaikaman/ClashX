@@ -366,6 +366,7 @@ class BotRuntimeWorker:
                 runtime_state=cycle_runtime_state,
                 position_lookup=position_lookup,
                 open_order_lookup=open_order_lookup,
+                market_lookup=resolved_market_lookup,
             )
             if issues:
                 skipped_key = self._build_idempotency_key(
@@ -421,6 +422,7 @@ class BotRuntimeWorker:
                     credentials=credentials,
                     market_lookup=resolved_market_lookup,
                     position_lookup=position_lookup,
+                    open_order_lookup=open_order_lookup,
                 )
                 execution_meta = response.get("execution_meta") if isinstance(response.get("execution_meta"), dict) else {}
                 action_for_state = {**action, "_execution_meta": execution_meta}
@@ -531,6 +533,7 @@ class BotRuntimeWorker:
                 runtime_state=cycle_runtime_state,
                 position_lookup=position_lookup,
                 open_order_lookup=open_order_lookup,
+                market_lookup=market_lookup,
             )
             if issues:
                 return None
@@ -550,6 +553,7 @@ class BotRuntimeWorker:
                 action=action,
                 credentials=credentials,
                 market_lookup=market_lookup,
+                open_order_lookup=open_order_lookup,
             )
             batch_items.append(
                 {
@@ -656,6 +660,7 @@ class BotRuntimeWorker:
         credentials: dict[str, str],
         market_lookup: dict[str, dict[str, Any]],
         position_lookup: dict[str, dict[str, Any]],
+        open_order_lookup: dict[str, list[dict[str, Any]]] | None = None,
     ) -> dict[str, Any]:
         action_type = str(action.get("type") or "")
         symbol = self._normalize_symbol(action.get("symbol"))
@@ -676,6 +681,7 @@ class BotRuntimeWorker:
             if side not in {"long", "short"}:
                 raise ValueError("Market orders require side to be long or short")
             leverage = max(1, int(float(action.get("leverage") or 1)))
+            self._validate_market_leverage(market_lookup=market_lookup, symbol=symbol, leverage=leverage)
             reduce_only = self._to_bool(action.get("reduce_only"), False)
             reference_price = float((market_lookup.get(symbol) or {}).get("mark_price") or 0)
             amount = self._resolve_order_quantity(action=action, market_lookup=market_lookup, symbol=symbol, reference_price=None)
@@ -720,11 +726,19 @@ class BotRuntimeWorker:
             if price <= 0:
                 raise ValueError("Limit orders require a positive price")
             leverage = max(1, int(float(action.get("leverage") or 1)))
+            self._validate_market_leverage(market_lookup=market_lookup, symbol=symbol, leverage=leverage)
             reduce_only = self._to_bool(action.get("reduce_only"), False)
             amount = self._resolve_order_quantity(action=action, market_lookup=market_lookup, symbol=symbol, reference_price=price)
             client_order_id = str(action.get("client_order_id") or "").strip() or (
                 None if reduce_only else self._build_entry_client_order_id(runtime_id=runtime_id, symbol=symbol)
             )
+            limit_order_fields = self._build_limit_order_price_fields(
+                symbol=symbol,
+                side=side,
+                price=price,
+                market_lookup=market_lookup,
+            )
+            normalized_price = float(limit_order_fields.get("price") or price)
             if not reduce_only:
                 await self._ensure_leverage(
                     wallet_address=credentials["account_address"],
@@ -738,10 +752,10 @@ class BotRuntimeWorker:
                     **payload,
                     "side": self._to_pacifica_side(side),
                     "amount": amount,
-                    "price": price,
                     "tif": str(action.get("tif") or "GTC"),
                     "reduce_only": reduce_only,
                     "client_order_id": client_order_id,
+                    **limit_order_fields,
                 }
             )
             response_payload = response.get("payload") if isinstance(response.get("payload"), dict) else {}
@@ -751,7 +765,7 @@ class BotRuntimeWorker:
                 "side": self._to_pacifica_side(side),
                 "amount": amount,
                 "reduce_only": reduce_only,
-                "reference_price": price,
+                "reference_price": normalized_price,
                 "client_order_id": normalized_client_order_id,
             }
             return response
@@ -764,6 +778,7 @@ class BotRuntimeWorker:
                 raise ValueError("TWAP orders require side to be long or short")
             duration_seconds = max(1, int(float(action.get("duration_seconds") or 0)))
             leverage = max(1, int(float(action.get("leverage") or 1)))
+            self._validate_market_leverage(market_lookup=market_lookup, symbol=symbol, leverage=leverage)
             reduce_only = self._to_bool(action.get("reduce_only"), False)
             reference_price = float((market_lookup.get(symbol) or {}).get("mark_price") or 0)
             amount = self._resolve_order_quantity(action=action, market_lookup=market_lookup, symbol=symbol, reference_price=None)
@@ -905,12 +920,23 @@ class BotRuntimeWorker:
             if not symbol:
                 raise ValueError("Leverage updates require a symbol")
             leverage = max(1, int(float(action.get("leverage") or 1)))
+            self._validate_market_leverage(market_lookup=market_lookup, symbol=symbol, leverage=leverage)
             return await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
 
         if action_type == "cancel_order":
             if not symbol:
                 raise ValueError("Cancel order requires a symbol")
-            return await self._pacifica.place_order({"type": "cancel_order", **payload, **self._extract_order_identifier(action)})
+            return await self._pacifica.place_order(
+                {
+                    "type": "cancel_order",
+                    **payload,
+                    **self._build_cancel_order_request_fields(
+                        action=action,
+                        market_lookup=market_lookup,
+                        open_order_lookup=open_order_lookup,
+                    ),
+                }
+            )
 
         if action_type == "cancel_twap_order":
             if not symbol:
@@ -944,6 +970,7 @@ class BotRuntimeWorker:
         action: dict[str, Any],
         credentials: dict[str, str],
         market_lookup: dict[str, dict[str, Any]],
+        open_order_lookup: dict[str, list[dict[str, Any]]] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         action_type = str(action.get("type") or "")
         symbol = self._normalize_symbol(action.get("symbol"))
@@ -965,6 +992,7 @@ class BotRuntimeWorker:
             if price <= 0:
                 raise ValueError("Limit orders require a positive price")
             leverage = max(1, int(float(action.get("leverage") or 1)))
+            self._validate_market_leverage(market_lookup=market_lookup, symbol=symbol, leverage=leverage)
             reduce_only = self._to_bool(action.get("reduce_only"), False)
             amount = self._resolve_order_quantity(
                 action=action,
@@ -975,6 +1003,13 @@ class BotRuntimeWorker:
             client_order_id = str(action.get("client_order_id") or "").strip() or (
                 None if reduce_only else self._build_entry_client_order_id(runtime_id=str(runtime.get("id") or "runtime"), symbol=symbol)
             )
+            limit_order_fields = self._build_limit_order_price_fields(
+                symbol=symbol,
+                side=side,
+                price=price,
+                market_lookup=market_lookup,
+            )
+            normalized_price = float(limit_order_fields.get("price") or price)
             if not reduce_only:
                 await self._ensure_leverage(
                     wallet_address=credentials["account_address"],
@@ -988,17 +1023,17 @@ class BotRuntimeWorker:
                     **payload,
                     "side": self._to_pacifica_side(side),
                     "amount": amount,
-                    "price": price,
                     "tif": str(action.get("tif") or "GTC"),
                     "reduce_only": reduce_only,
                     "client_order_id": client_order_id,
+                    **limit_order_fields,
                 },
                 {
                     "symbol": symbol,
                     "side": self._to_pacifica_side(side),
                     "amount": amount,
                     "reduce_only": reduce_only,
-                    "reference_price": price,
+                    "reference_price": normalized_price,
                     "client_order_id": client_order_id,
                 },
             )
@@ -1007,7 +1042,15 @@ class BotRuntimeWorker:
             if not symbol:
                 raise ValueError("Cancel order requires a symbol")
             return (
-                {"type": "cancel_order", **payload, **self._extract_order_identifier(action)},
+                {
+                    "type": "cancel_order",
+                    **payload,
+                    **self._build_cancel_order_request_fields(
+                        action=action,
+                        market_lookup=market_lookup,
+                        open_order_lookup=open_order_lookup,
+                    ),
+                },
                 {},
             )
 
@@ -1628,6 +1671,125 @@ class BotRuntimeWorker:
         if client_order_id:
             return {"client_order_id": client_order_id}
         raise ValueError("Action requires order_id or client_order_id")
+
+    def _build_limit_order_price_fields(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        price: float,
+        market_lookup: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        market = self._resolve_market(market_lookup, symbol)
+        tick_size = float(market.get("tick_size") or 0)
+        rounding = ROUND_DOWN if side == "long" else ROUND_UP
+        normalized_price = self._normalize_price_to_tick(
+            price,
+            tick_size=tick_size,
+            rounding=rounding,
+        )
+        fields: dict[str, Any] = {"price": normalized_price}
+        tick_level = self._price_to_tick_level(normalized_price, tick_size=tick_size)
+        if tick_level is not None:
+            fields["tick_level"] = tick_level
+        return fields
+
+    def _build_cancel_order_request_fields(
+        self,
+        *,
+        action: dict[str, Any],
+        market_lookup: dict[str, dict[str, Any]],
+        open_order_lookup: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> dict[str, Any]:
+        identifier = self._extract_order_identifier(action)
+        symbol = self._normalize_symbol(action.get("symbol"))
+        matched_order = self._find_open_order(
+            symbol=symbol,
+            identifier=identifier,
+            open_order_lookup=open_order_lookup,
+        )
+        if not isinstance(matched_order, dict):
+            return identifier
+        request_fields = dict(identifier)
+        side = str(matched_order.get("side") or "").strip()
+        if side:
+            request_fields["side"] = side
+        tick_level = matched_order.get("tick_level")
+        if tick_level in (None, ""):
+            market = market_lookup.get(symbol) if symbol else None
+            tick_level = self._price_to_tick_level(
+                matched_order.get("price"),
+                tick_size=float(market.get("tick_size") or 0) if isinstance(market, dict) else 0.0,
+            )
+        else:
+            tick_level = self._to_int(tick_level)
+        if tick_level is not None:
+            request_fields["tick_level"] = tick_level
+        return request_fields
+
+    def _validate_market_leverage(
+        self,
+        *,
+        market_lookup: dict[str, dict[str, Any]],
+        symbol: str,
+        leverage: int,
+    ) -> None:
+        market = market_lookup.get(symbol)
+        if not isinstance(market, dict):
+            return
+        market_max_leverage = self._to_int(market.get("max_leverage"))
+        if market_max_leverage is None or market_max_leverage <= 0:
+            return
+        if leverage > market_max_leverage:
+            raise ValueError(
+                f"Requested leverage {leverage} exceeds {symbol} market max leverage {market_max_leverage}."
+            )
+
+    def _find_open_order(
+        self,
+        *,
+        symbol: str,
+        identifier: dict[str, Any],
+        open_order_lookup: dict[str, list[dict[str, Any]]] | None,
+    ) -> dict[str, Any] | None:
+        if not symbol or not isinstance(open_order_lookup, dict):
+            return None
+        orders = open_order_lookup.get(symbol)
+        if not isinstance(orders, list):
+            return None
+        if "order_id" in identifier:
+            expected = str(identifier.get("order_id"))
+            for order in orders:
+                if str(order.get("order_id") or "").strip() == expected:
+                    return order
+        if "client_order_id" in identifier:
+            expected = str(identifier.get("client_order_id") or "").strip()
+            for order in orders:
+                if str(order.get("client_order_id") or "").strip() == expected:
+                    return order
+        return None
+
+    @staticmethod
+    def _price_to_tick_level(price: Any, *, tick_size: float) -> int | None:
+        if tick_size <= 0:
+            return None
+        try:
+            price_decimal = Decimal(str(price))
+            tick_decimal = Decimal(str(tick_size))
+            if tick_decimal <= 0:
+                return None
+            return int((price_decimal / tick_decimal).to_integral_value(rounding=ROUND_DOWN))
+        except (ArithmeticError, ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _to_int(value: Any) -> int | None:
+        try:
+            if value in (None, ""):
+                return None
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _normalize_order_quantity(quantity: float, *, lot_size: float, symbol: str) -> float:

@@ -128,6 +128,8 @@ class FakePacificaClient:
                 "mark_price": 105_000.0,
                 "lot_size": 0.001,
                 "min_order_size": 0.001,
+                "tick_size": 0.5,
+                "max_leverage": 5,
             }
         ]
 
@@ -487,6 +489,69 @@ def test_trading_service_skips_redundant_leverage_update_when_setting_already_ma
     assert [call.get("type", "create_market_order") for call in pacifica.order_calls] == [
         "create_market_order",
     ]
+
+
+def test_trading_service_limit_order_includes_tick_level() -> None:
+    pacifica = FakePacificaClient()
+
+    service = TradingService()
+    service.supabase = FakeSupabaseRestClient()
+    service.auth_service = FakeAuthService()
+    service.pacifica = pacifica
+
+    asyncio.run(
+        service.place_order(
+            None,
+            wallet_address="wallet-1",
+            symbol="BTC",
+            side="long",
+            order_type="limit",
+            leverage=2,
+            size_usd=200.0,
+            limit_price=100000.0,
+        )
+    )
+
+    assert pacifica.order_calls[0]["type"] == "update_leverage"
+    assert pacifica.order_calls[1]["type"] == "create_order"
+    assert pacifica.order_calls[1]["tick_level"] == 200000
+
+
+def test_trading_service_cancel_order_enriches_payload_with_open_order_metadata() -> None:
+    pacifica = FakePacificaClient()
+    pacifica._open_orders = [{"symbol": "BTC", "order_id": 101, "side": "bid", "price": 100000.0, "tick_level": 200000}]
+
+    service = TradingService()
+    service.supabase = FakeSupabaseRestClient()
+    service.auth_service = FakeAuthService()
+    service.pacifica = pacifica
+
+    asyncio.run(
+        service.cancel_order(
+            None,
+            wallet_address="wallet-1",
+            symbol="BTC",
+            order_id="101",
+        )
+    )
+
+    assert pacifica.order_calls[0]["type"] == "cancel_order"
+    assert pacifica.order_calls[0]["order_id"] == 101
+    assert pacifica.order_calls[0]["side"] == "bid"
+    assert pacifica.order_calls[0]["tick_level"] == 200000
+
+
+def test_bot_risk_service_blocks_leverage_above_market_cap() -> None:
+    risk = BotRiskService()
+
+    issues = risk.assess_action(
+        policy={"max_leverage": 10},
+        action={"type": "open_long", "symbol": "BTC", "size_usd": 100, "leverage": 6},
+        runtime_state={},
+        market_lookup={"BTC": {"max_leverage": 5}},
+    )
+
+    assert "requested leverage 6 exceeds BTC market max_leverage 5" in issues
 
 
 def test_bot_risk_service_blocks_new_entry_when_max_open_positions_is_reached() -> None:
@@ -1048,6 +1113,10 @@ def test_runtime_process_batches_multiple_cancel_actions(monkeypatch: Any) -> No
     supabase.tables["bot_execution_events"] = []
 
     pacifica = FakePacificaClient()
+    pacifica._open_orders = [
+        {"symbol": "BTC", "order_id": 101, "side": "bid", "price": 100000.0, "tick_level": 200000},
+        {"symbol": "BTC", "order_id": 102, "side": "ask", "price": 100500.0, "tick_level": 201000},
+    ]
 
     worker = BotRuntimeWorker()
     worker._supabase = supabase
@@ -1067,6 +1136,10 @@ def test_runtime_process_batches_multiple_cancel_actions(monkeypatch: Any) -> No
 
     assert len(pacifica.batch_order_calls) == 1
     assert [item["type"] for item in pacifica.batch_order_calls[0]] == ["cancel_order", "cancel_order"]
+    assert pacifica.batch_order_calls[0][0]["side"] == "bid"
+    assert pacifica.batch_order_calls[0][0]["tick_level"] == 200000
+    assert pacifica.batch_order_calls[0][1]["side"] == "ask"
+    assert pacifica.batch_order_calls[0][1]["tick_level"] == 201000
     executed_events = [
         event
         for event in supabase.tables["bot_execution_events"]

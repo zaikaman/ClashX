@@ -206,6 +206,8 @@ class FakePacificaClient:
                 "mark_price": 105000,
                 "lot_size": 0.001,
                 "min_order_size": 0.001,
+                "tick_size": 0.5,
+                "max_leverage": 5,
             }
         ]
 
@@ -627,7 +629,7 @@ def test_runtime_worker_executes_limit_order_action_directly() -> None:
                 "agent_wallet_address": "agent-1",
                 "agent_private_key": "secret",
             },
-            market_lookup={"BTC": {"mark_price": 105000, "lot_size": 0.001, "min_order_size": 0.001}},
+            market_lookup={"BTC": {"mark_price": 105000, "lot_size": 0.001, "min_order_size": 0.001, "tick_size": 0.5}},
             position_lookup={},
         )
     )
@@ -636,6 +638,59 @@ def test_runtime_worker_executes_limit_order_action_directly() -> None:
     assert [order["type"] for order in fake_pacifica.orders] == ["update_leverage", "create_order"]
     assert fake_pacifica.orders[1]["price"] == 100000
     assert fake_pacifica.orders[1]["side"] == "bid"
+    assert fake_pacifica.orders[1]["tick_level"] == 200000
+
+
+def test_runtime_worker_rejects_leverage_above_market_max() -> None:
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+    worker._pacifica = FakePacificaClient()
+
+    try:
+        asyncio.run(
+            worker._execute_action(
+                action={"type": "open_long", "symbol": "BTC", "size_usd": 105.0, "leverage": 6},
+                credentials={
+                    "account_address": "wallet-1",
+                    "agent_wallet_address": "agent-1",
+                    "agent_private_key": "secret",
+                },
+                market_lookup={"BTC": {"mark_price": 105000, "lot_size": 0.001, "max_leverage": 5}},
+                position_lookup={},
+            )
+        )
+    except ValueError as exc:
+        assert str(exc) == "Requested leverage 6 exceeds BTC market max leverage 5."
+    else:
+        raise AssertionError("Expected market leverage guard to reject the action")
+
+
+def test_runtime_worker_enriches_cancel_order_with_open_order_metadata() -> None:
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+    fake_pacifica = FakePacificaClient()
+    worker._pacifica = fake_pacifica
+
+    response = asyncio.run(
+        worker._execute_action(
+            action={"type": "cancel_order", "symbol": "BTC", "order_id": 101},
+            credentials={
+                "account_address": "wallet-1",
+                "agent_wallet_address": "agent-1",
+                "agent_private_key": "secret",
+            },
+            market_lookup={"BTC": {"mark_price": 105000, "lot_size": 0.001, "tick_size": 0.5}},
+            position_lookup={},
+            open_order_lookup={
+                "BTC": [
+                    {"symbol": "BTC", "order_id": 101, "side": "bid", "price": 100000, "tick_level": 200000}
+                ]
+            },
+        )
+    )
+
+    assert response["status"] == "submitted"
+    assert fake_pacifica.orders[0]["order_id"] == 101
+    assert fake_pacifica.orders[0]["side"] == "bid"
+    assert fake_pacifica.orders[0]["tick_level"] == 200000
 
 
 def test_runtime_worker_executes_twap_and_cancel_actions_directly() -> None:

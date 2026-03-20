@@ -144,9 +144,24 @@ class PacificaClient:
         if self.settings.pacifica_builder_code and self._uses_builder_code(request_type):
             payload["builder_code"] = self.settings.pacifica_builder_code
 
+        if account and request_type in {
+            "cancel_all_orders",
+            "cancel_order",
+            "cancel_twap_order",
+            "create_market_order",
+            "create_order",
+            "create_twap_order",
+            "set_position_tpsl",
+            "update_leverage",
+        }:
+            payload.setdefault("user", account)
+
         for key in ("amount", "price", "slippage_percent", "shares"):
             if key in payload:
                 payload[key] = str(payload[key])
+        for key in ("tick_level", "tickLevel", "stop_tick_level", "stopTickLevel", "leverage"):
+            if key in payload:
+                payload[key] = self._coerce_int(payload.get(key), 0)
 
         symbol = str(payload.get("symbol") or "").strip() or None
         if "client_order_id" in payload:
@@ -624,14 +639,16 @@ class PacificaClient:
         end_time: int | None = None,
     ) -> list[dict[str, Any]]:
         await self._throttle(bucket="public")
+        params: dict[str, Any] = {
+            "symbol": symbol,
+            "interval": interval,
+            "startTime": start_time,
+        }
+        if end_time is not None:
+            params["endTime"] = end_time
         response = await self._http.get(
             f"{self.settings.pacifica_rest_url}/kline",
-            params={
-                "symbol": symbol,
-                "interval": interval,
-                "start_time": start_time,
-                "end_time": end_time,
-            },
+            params=params,
             headers={"Accept": "*/*"},
         )
         try:
@@ -800,6 +817,7 @@ class PacificaClient:
                     "symbol": raw_order.get("symbol"),
                     "side": raw_order.get("side"),
                     "price": raw_order.get("price") or raw_order.get("tickLevel"),
+                    "tick_level": raw_order.get("tick_level") or raw_order.get("tickLevel"),
                     "initial_amount": raw_order.get("initial_amount") or raw_order.get("initialAmount"),
                     "filled_amount": raw_order.get("filled_amount") or raw_order.get("filledAmount"),
                     "cancelled_amount": raw_order.get("cancelled_amount") or raw_order.get("cancelledAmount"),

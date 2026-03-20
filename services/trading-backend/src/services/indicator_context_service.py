@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.services.pacifica_client import PacificaClient
-from src.services.pacifica_market_data_service import get_pacifica_market_data_service
+from src.services.pacifica_market_data_service import PacificaMarketDataService, get_pacifica_market_data_service
 
 TIMEFRAME_TO_MS: dict[str, int] = {
     "1m": 60_000,
@@ -144,7 +144,10 @@ def extract_candle_requests(rules_json: dict[str, Any]) -> list[dict[str, Any]]:
 class IndicatorContextService:
     def __init__(self, pacifica_client: PacificaClient | None = None) -> None:
         self.pacifica_client = pacifica_client or PacificaClient()
-        self.market_data = get_pacifica_market_data_service()
+        if pacifica_client is None:
+            self.market_data = get_pacifica_market_data_service()
+        else:
+            self.market_data = PacificaMarketDataService(self.pacifica_client)
 
     async def load_candle_lookup(self, rules_json: dict[str, Any]) -> dict[str, dict[str, list[dict[str, Any]]]]:
         requests = extract_candle_requests(rules_json)

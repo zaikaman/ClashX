@@ -60,6 +60,7 @@ class BotRiskService:
         runtime_state: dict[str, Any],
         position_lookup: dict[str, dict[str, Any]] | None = None,
         open_order_lookup: dict[str, list[dict[str, Any]]] | None = None,
+        market_lookup: dict[str, dict[str, Any]] | None = None,
     ) -> list[str]:
         issues: list[str] = []
         normalized = self.normalize_policy(policy)
@@ -67,6 +68,7 @@ class BotRiskService:
         symbol = str(action.get("symbol") or "").upper().replace("-PERP", "")
         positions = position_lookup if isinstance(position_lookup, dict) else {}
         open_orders = open_order_lookup if isinstance(open_order_lookup, dict) else {}
+        markets = market_lookup if isinstance(market_lookup, dict) else {}
         pending_entries = runtime_state.get("pending_entry_symbols")
         if not isinstance(pending_entries, dict):
             pending_entries = {}
@@ -91,6 +93,23 @@ class BotRiskService:
             "update_leverage",
         } and leverage > normalized["max_leverage"]:
             issues.append(f"requested leverage {leverage:g} exceeds max_leverage {normalized['max_leverage']}")
+        market = markets.get(symbol) if symbol else None
+        market_max_leverage = self._to_float(market.get("max_leverage"), 0.0) if isinstance(market, dict) else 0.0
+        if (
+            action_type in {
+                "open_long",
+                "open_short",
+                "place_market_order",
+                "place_limit_order",
+                "place_twap_order",
+                "update_leverage",
+            }
+            and market_max_leverage > 0
+            and leverage > market_max_leverage
+        ):
+            issues.append(
+                f"requested leverage {leverage:g} exceeds {symbol} market max_leverage {market_max_leverage:g}"
+            )
 
         size_usd = self._to_float(action.get("size_usd"), 0.0)
         if action_type in {"open_long", "open_short", "place_market_order", "place_limit_order", "place_twap_order"} and size_usd > normalized["max_order_size_usd"]:

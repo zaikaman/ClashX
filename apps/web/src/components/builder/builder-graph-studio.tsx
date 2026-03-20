@@ -69,7 +69,7 @@ type BuilderCatalogTemplate = {
   authoring_mode?: string;
   risk_profile?: string;
 };
-type BuilderMarket = { symbol: string; status: string; volume_24h?: number };
+type BuilderMarket = { symbol: string; status: string; volume_24h?: number; max_leverage?: number };
 export type BuilderNoticePayload = {
   eyebrow: string;
   title: string;
@@ -442,6 +442,22 @@ function summarizeMarketScope(selectedSymbols: string[], availableSymbols: strin
   return `${selectedSymbols.length} Pacifica markets`;
 }
 
+function findSelectedMarketLeverageCap(selectedSymbols: string[], markets: BuilderMarket[]) {
+  const selected = new Set(selectedSymbols.map((symbol) => normalizeMarketSymbol(symbol)).filter(Boolean));
+  if (selected.size === 0) return null;
+
+  let tightestMarket: { symbol: string; maxLeverage: number } | null = null;
+  for (const market of markets) {
+    const symbol = normalizeMarketSymbol(market.symbol);
+    const maxLeverage = Number(market.max_leverage ?? 0);
+    if (!selected.has(symbol) || maxLeverage <= 0) continue;
+    if (!tightestMarket || maxLeverage < tightestMarket.maxLeverage) {
+      tightestMarket = { symbol, maxLeverage };
+    }
+  }
+  return tightestMarket;
+}
+
 function buildRiskPolicyPayload(selectedSymbols: string[], runtimeControls: RuntimeControlsFormState) {
   return {
     max_leverage: runtimeControls.maxLeverage,
@@ -454,9 +470,18 @@ function buildRiskPolicyPayload(selectedSymbols: string[], runtimeControls: Runt
   };
 }
 
-function validateRuntimeControls(preset: RuntimeControlPreset | null, runtimeControls: RuntimeControlsFormState) {
+function validateRuntimeControls(
+  preset: RuntimeControlPreset | null,
+  runtimeControls: RuntimeControlsFormState,
+  selectedSymbols: string[],
+  markets: BuilderMarket[],
+) {
   if (!preset) return "Choose a runtime profile before deploying.";
   if (runtimeControls.maxLeverage < 1) return "Max leverage must be at least 1.";
+  const leverageCap = findSelectedMarketLeverageCap(selectedSymbols, markets);
+  if (leverageCap && runtimeControls.maxLeverage > leverageCap.maxLeverage) {
+    return `Max leverage must be ${leverageCap.maxLeverage} or lower for ${leverageCap.symbol}.`;
+  }
   if (runtimeControls.maxOrderSizeUsd < 1) return "Max order size must be greater than 0.";
   if (runtimeControls.allocatedCapitalUsd < 1) return "Allocated capital must be greater than 0.";
   if (runtimeControls.cooldownSeconds < 0) return "Cooldown cannot be negative.";
@@ -1425,7 +1450,12 @@ export function BuilderGraphStudio({
   }
 
   async function deployBot() {
-    const runtimeBlocker = validateRuntimeControls(runtimePreset, runtimeControls);
+    const runtimeBlocker = validateRuntimeControls(
+      runtimePreset,
+      runtimeControls,
+      selectedMarketSymbols,
+      activeMarkets,
+    );
     if (runtimeBlocker) {
       setRuntimeControlsError(runtimeBlocker);
       return;

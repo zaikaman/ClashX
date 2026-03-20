@@ -90,18 +90,12 @@ const LandingHeader = () => {
           </nav>
 
           <div className="hidden md:flex items-center gap-2">
-            <Link href="/build" className="group isolate inline-flex cursor-pointer overflow-hidden transition-all duration-300 hover:scale-105 rounded-full relative h-10">
-              <div className="absolute inset-0">
-                <div className="absolute inset-[-200%] w-[400%] h-[400%] animate-[rotate-gradient_4s_linear_infinite]">
-                  <div className="absolute inset-0" style={{ background: 'conic-gradient(from 225deg, transparent 0, rgba(255,255,255,0.6) 90deg, transparent 90deg)' }}></div>
-                </div>
-              </div>
-              <div className="absolute rounded-full backdrop-blur" style={{ inset: '1px', background: 'rgba(220, 232, 93, 0.1)' }}></div>
-              <div className="z-10 flex gap-2 overflow-hidden text-sm font-medium text-white w-full px-4 relative items-center rounded-full">
-                <div className="absolute inset-[1px] bg-[rgba(10,11,20,0.8)] rounded-full backdrop-blur-[8px]"></div>
-                <span className="whitespace-nowrap relative z-10 font-sans">Start Building</span>
-                <span className="inline-flex items-center justify-center z-10 bg-white/10 w-5 h-5 rounded-full relative"><ArrowRight className="w-3 h-3" /></span>
-              </div>
+            <Link href="/build" className="group relative inline-flex items-center justify-center h-[38px] px-5 gap-2 text-sm font-semibold text-[#090a0a] bg-[#dce85d] rounded-full overflow-hidden transition-all duration-300 ease-out hover:scale-105 hover:bg-[#e4ef6e] focus:outline-none focus:ring-2 focus:ring-[#dce85d] focus:ring-offset-2 focus:ring-offset-[#090a0a]">
+              <span className="relative z-10 flex items-center gap-1.5 whitespace-nowrap">
+                Start Building
+                <ArrowRight className="w-3.5 h-3.5 transition-transform duration-300 group-hover:translate-x-0.5" />
+              </span>
+              <div className="absolute inset-0 z-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-out rounded-full shadow-[inset_0_1px_1px_rgba(255,255,255,0.4)]"></div>
             </Link>
           </div>
 
@@ -636,7 +630,7 @@ const Home = () => {
         {/* Feature Showcase Grid */}
         <section className="py-24 relative bg-[#090a0a] overflow-hidden">
           <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent"></div>
-          
+
           <div className="max-w-7xl mx-auto px-4 sm:px-8 relative z-10">
             <div className="text-center mb-16 md:mb-24">
               <motion.div
@@ -657,9 +651,9 @@ const Home = () => {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-              
+
               {/* Left Column (Main Feature) */}
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true }}
@@ -668,7 +662,7 @@ const Home = () => {
               >
                 <div className="bg-[#121314] relative rounded-[2rem] border border-white/[0.04] p-8 md:p-12 overflow-hidden flex-grow group hover:border-[#dce85d]/30 transition-all duration-700">
                   <div className="absolute right-0 top-0 -mr-24 -mt-24 w-96 h-96 bg-[#dce85d]/10 rounded-full blur-[80px] group-hover:bg-[#dce85d]/20 transition-all duration-700"></div>
-                  
+
                   <div className="relative z-10 flex flex-col h-full">
                     <div className="mb-12">
                       <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-white/[0.04] border border-white/[0.08] mb-6 shadow-inner">
@@ -703,9 +697,9 @@ const Home = () => {
 
               {/* Right Column (Sub Features) */}
               <div className="lg:col-span-5 grid grid-rows-2 gap-6">
-                
+
                 {/* Top Right Card */}
-                <motion.div 
+                <motion.div
                   initial={{ opacity: 0, y: 20 }}
                   whileInView={{ opacity: 1, y: 0 }}
                   viewport={{ once: true }}
@@ -713,7 +707,7 @@ const Home = () => {
                 >
                   <div className="bg-[#121314] relative rounded-[2rem] border border-white/[0.04] p-8 overflow-hidden h-full group hover:border-[#a8c93a]/30 transition-all duration-700">
                     <div className="absolute left-0 bottom-0 -ml-24 -mb-24 w-64 h-64 bg-[#a8c93a]/10 rounded-full blur-[60px] group-hover:bg-[#a8c93a]/20 transition-all duration-700"></div>
-                    
+
                     <div className="relative z-10 flex gap-6">
                       <div className="flex-shrink-0">
                         <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-white/[0.04] border border-white/[0.08] shadow-inner">
@@ -726,7 +720,7 @@ const Home = () => {
                           Discover top-performing bots. Analyze their historical performance and transparent on-chain execution with verifiable metrics, then mirror them live.
                         </p>
                         <Link href="/leaderboard" className="inline-flex items-center gap-2 mt-4 text-sm font-medium text-[#a8c93a] hover:text-[#dce85d] transition-colors group/link">
-                          View Leaderboards 
+                          View Leaderboards
                           <ArrowRight className="w-3.5 h-3.5 group-hover/link:translate-x-1 transition-transform" />
                         </Link>
                       </div>
@@ -735,7 +729,7 @@ const Home = () => {
                 </motion.div>
 
                 {/* Bottom Right Card */}
-                <motion.div 
+                <motion.div
                   initial={{ opacity: 0, y: 20 }}
                   whileInView={{ opacity: 1, y: 0 }}
                   viewport={{ once: true }}
@@ -743,7 +737,7 @@ const Home = () => {
                 >
                   <div className="bg-[#121314] relative rounded-[2rem] border border-white/[0.04] p-8 overflow-hidden h-full group hover:border-[#74b97f]/30 transition-all duration-700">
                     <div className="absolute right-0 top-1/2 -mr-24 w-64 h-64 bg-[#74b97f]/10 rounded-full blur-[60px] group-hover:bg-[#74b97f]/20 transition-all duration-700"></div>
-                    
+
                     <div className="relative z-10 flex gap-6">
                       <div className="flex-shrink-0">
                         <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-white/[0.04] border border-white/[0.08] shadow-inner">
@@ -764,7 +758,7 @@ const Home = () => {
             </div>
 
             {/* Bottom Platform Features Row */}
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, y: 20 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}

@@ -122,6 +122,7 @@ class BuilderCatalogService:
                 "mark_price": market.get("mark_price", 0),
                 "funding_rate": market.get("funding_rate", 0),
                 "volume_24h": market.get("volume_24h", 0),
+                "max_leverage": market.get("max_leverage", 0),
             }
             for market in markets
         ]

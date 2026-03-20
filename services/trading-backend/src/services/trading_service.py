@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import UTC, datetime
-from decimal import ROUND_DOWN, Decimal
+from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from typing import Any
 
 from src.services.event_broadcaster import broadcaster
@@ -108,6 +108,7 @@ class TradingService:
             symbol=normalized_symbol,
         )
         if not reduce_only:
+            self._validate_market_leverage(market=market, symbol=normalized_symbol, leverage=leverage)
             await self._ensure_leverage(
                 wallet_address=wallet_address,
                 credentials=credentials,
@@ -126,7 +127,14 @@ class TradingService:
             "type": "create_order" if order_type == "limit" else "create_market_order",
         }
         if order_type == "limit":
-            payload["price"] = limit_price
+            payload.update(
+                self._build_limit_order_price_fields(
+                    symbol=normalized_symbol,
+                    side=side,
+                    price=float(limit_price or 0),
+                    market=market,
+                )
+            )
             payload["tif"] = tif
         response = await self.pacifica.place_order(payload)
         user = self._upsert_user(db, wallet_address)
@@ -141,11 +149,20 @@ class TradingService:
         if credentials is None:
             raise ValueError("Authorize a delegated Pacifica agent wallet before cancelling orders.")
         normalized_symbol = self._normalize_symbol(symbol)
-        payload: dict[str, Any] = {"type": "cancel_order", "account": credentials["account_address"], "agent_wallet": credentials["agent_wallet_address"], "__agent_private_key": credentials["agent_private_key"], "symbol": normalized_symbol}
-        if order_id.isdigit():
-            payload["order_id"] = int(order_id)
-        else:
-            payload["client_order_id"] = order_id
+        open_orders = await self._safe_read(lambda: self.pacifica.get_open_orders(wallet_address), [])
+        payload: dict[str, Any] = {
+            "type": "cancel_order",
+            "account": credentials["account_address"],
+            "agent_wallet": credentials["agent_wallet_address"],
+            "__agent_private_key": credentials["agent_private_key"],
+            "symbol": normalized_symbol,
+            **self._build_cancel_order_request_fields(
+                order_id=order_id,
+                symbol=normalized_symbol,
+                market=await self._get_market(normalized_symbol),
+                open_orders=open_orders,
+            ),
+        }
         response = await self.pacifica.place_order(payload)
         user = self._upsert_user(db, wallet_address)
         self._record_audit_event(db, user_id=user["id"], action="trading.order.cancelled", payload={"symbol": normalized_symbol, "order_id": order_id, "request_id": response["request_id"]})
@@ -183,6 +200,8 @@ class TradingService:
         )
         if isinstance(current, dict) and int(current.get("leverage") or 0) == leverage:
             return
+        market = await self._get_market(symbol)
+        self._validate_market_leverage(market=market, symbol=symbol, leverage=leverage)
         await self.pacifica.place_order(
             {
                 "type": "update_leverage",
@@ -242,6 +261,116 @@ class TradingService:
         if normalized_float <= 0:
             raise ValueError(f"Order size is below the minimum tradable increment for {symbol}.")
         return normalized_float
+
+    def _build_limit_order_price_fields(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        price: float,
+        market: dict[str, Any],
+    ) -> dict[str, Any]:
+        tick_size = float(market.get("tick_size", 0) or 0)
+        rounding = ROUND_DOWN if side.lower().strip() == "long" else ROUND_UP
+        normalized_price = self._normalize_price_to_tick(price, tick_size=tick_size, rounding=rounding)
+        fields: dict[str, Any] = {"price": normalized_price}
+        tick_level = self._price_to_tick_level(normalized_price, tick_size=tick_size)
+        if tick_level is not None:
+            fields["tick_level"] = tick_level
+        return fields
+
+    def _build_cancel_order_request_fields(
+        self,
+        *,
+        order_id: str,
+        symbol: str,
+        market: dict[str, Any],
+        open_orders: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        identifier = self._extract_order_identifier(order_id)
+        matched_order = self._find_open_order(
+            identifier=identifier,
+            symbol=symbol,
+            open_orders=open_orders,
+        )
+        if not isinstance(matched_order, dict):
+            return identifier
+        request_fields = dict(identifier)
+        side = str(matched_order.get("side") or "").strip()
+        if side:
+            request_fields["side"] = side
+        tick_level = matched_order.get("tick_level")
+        if tick_level in (None, ""):
+            tick_level = self._price_to_tick_level(
+                matched_order.get("price"),
+                tick_size=float(market.get("tick_size", 0) or 0),
+            )
+        else:
+            tick_level = self._to_int(tick_level)
+        if tick_level is not None:
+            request_fields["tick_level"] = tick_level
+        return request_fields
+
+    @staticmethod
+    def _extract_order_identifier(order_id: str) -> dict[str, Any]:
+        if order_id.isdigit():
+            return {"order_id": int(order_id)}
+        return {"client_order_id": order_id}
+
+    def _find_open_order(
+        self,
+        *,
+        identifier: dict[str, Any],
+        symbol: str,
+        open_orders: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        for order in open_orders:
+            if self._normalize_symbol(str(order.get("symbol") or "")) != symbol:
+                continue
+            if "order_id" in identifier and str(order.get("order_id") or "").strip() == str(identifier["order_id"]):
+                return order
+            if "client_order_id" in identifier and str(order.get("client_order_id") or "").strip() == str(identifier["client_order_id"]):
+                return order
+        return None
+
+    def _validate_market_leverage(self, *, market: dict[str, Any], symbol: str, leverage: int) -> None:
+        market_max_leverage = self._to_int(market.get("max_leverage"))
+        if market_max_leverage is None or market_max_leverage <= 0:
+            return
+        if leverage > market_max_leverage:
+            raise ValueError(
+                f"Requested leverage {leverage} exceeds {symbol} market max leverage {market_max_leverage}."
+            )
+
+    @staticmethod
+    def _normalize_price_to_tick(price: float, *, tick_size: float, rounding: str) -> float:
+        normalized = Decimal(str(price))
+        if tick_size > 0:
+            step = Decimal(str(tick_size))
+            normalized = (normalized / step).to_integral_value(rounding=rounding) * step
+        return float(normalized)
+
+    @staticmethod
+    def _price_to_tick_level(price: Any, *, tick_size: float) -> int | None:
+        if tick_size <= 0:
+            return None
+        try:
+            price_decimal = Decimal(str(price))
+            tick_decimal = Decimal(str(tick_size))
+            if tick_decimal <= 0:
+                return None
+            return int((price_decimal / tick_decimal).to_integral_value(rounding=ROUND_DOWN))
+        except (ArithmeticError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _to_int(value: Any) -> int | None:
+        try:
+            if value in (None, ""):
+                return None
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
 
     def _serialize_position(self, position: dict[str, Any]) -> dict[str, Any]:
         symbol = str(position["symbol"])

@@ -95,6 +95,93 @@ async def _noop_ensure_leverage(**_: Any) -> None:
     return None
 
 
+class _FakeHttpResponse:
+    def __init__(self, payload: list[dict[str, Any]]) -> None:
+        self._payload = payload
+        self.status_code = 200
+        self.text = "ok"
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> list[dict[str, Any]]:
+        return self._payload
+
+
+class _FakeHttpClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def get(self, url: str, *, params: dict[str, Any], headers: dict[str, str]) -> _FakeHttpResponse:
+        self.calls.append({"url": url, "params": params, "headers": headers})
+        return _FakeHttpResponse(
+            [
+                {
+                    "symbol": "BTC",
+                    "interval": "15m",
+                    "openTime": 1,
+                    "closeTime": 2,
+                    "open": "100000",
+                    "high": "101000",
+                    "low": "99000",
+                    "close": "100500",
+                    "volume": "42",
+                    "tradeCount": 7,
+                }
+            ]
+        )
+
+
+async def _noop_throttle(**_: Any) -> None:
+    return None
+
+
+def test_normalize_payload_adds_user_alias_and_preserves_tick_level() -> None:
+    client = object.__new__(PacificaClient)
+    client.settings = SimpleNamespace(pacifica_builder_code="")
+
+    normalized = client._normalize_payload(
+        "create_order",
+        {
+            "account": "wallet-1",
+            "symbol": "BTC",
+            "side": "bid",
+            "price": 100_000,
+            "amount": 0.1,
+            "tick_level": "200000",
+            "tif": "GTC",
+        },
+        account="wallet-1",
+    )
+
+    assert normalized["user"] == "wallet-1"
+    assert normalized["tick_level"] == 200000
+
+
+def test_get_kline_uses_camel_case_query_params() -> None:
+    client = object.__new__(PacificaClient)
+    client.settings = SimpleNamespace(pacifica_rest_url="https://pacifica.test")
+    client._http = _FakeHttpClient()
+    client._throttle = _noop_throttle
+
+    candles = asyncio.run(
+        client.get_kline(
+            "BTC",
+            interval="15m",
+            start_time=1_000,
+            end_time=2_000,
+        )
+    )
+
+    assert client._http.calls[0]["params"] == {
+        "symbol": "BTC",
+        "interval": "15m",
+        "startTime": 1_000,
+        "endTime": 2_000,
+    }
+    assert candles[0]["trade_count"] == 7
+
+
 def test_execute_action_uses_normalized_client_order_id_from_client_payload() -> None:
     normalized_id = str(uuid.uuid4())
     worker = object.__new__(BotRuntimeWorker)
