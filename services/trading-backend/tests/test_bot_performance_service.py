@@ -142,6 +142,7 @@ class FakePacificaClient:
     def __init__(self) -> None:
         self.order_history_requests: list[int] = []
         self.position_history_requests: list[tuple[str, int, int]] = []
+        self.wallet_order_history_requests: list[tuple[str, int, int]] = []
         self.order_history: dict[int, list[dict[str, Any]]] = {
             11: [
                 {
@@ -172,6 +173,7 @@ class FakePacificaClient:
         }
         self.live_positions: dict[str, list[dict[str, Any]]] = {}
         self.position_history: dict[str, list[dict[str, Any]]] = {}
+        self.wallet_order_history: dict[str, list[dict[str, Any]]] = {}
 
     async def get_order_history_by_id(self, order_id: int) -> list[dict[str, Any]]:
         self.order_history_requests.append(order_id)
@@ -190,6 +192,11 @@ class FakePacificaClient:
     async def get_position_history(self, wallet_address: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         self.position_history_requests.append((wallet_address, limit, offset))
         rows = self.position_history.get(wallet_address, [])
+        return deepcopy(rows[offset : offset + limit])
+
+    async def get_order_history(self, wallet_address: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        self.wallet_order_history_requests.append((wallet_address, limit, offset))
+        rows = self.wallet_order_history.get(wallet_address, [])
         return deepcopy(rows[offset : offset + limit])
 
 
@@ -724,6 +731,92 @@ def test_runtime_performance_recovers_bot_open_from_request_history_when_fill_is
     assert performance_a["positions"] == []
     assert performance_a["pnl_realized"] == 20.0
     assert performance_a["win_streak"] == 1
+
+
+def test_runtime_performance_realizes_manual_close_from_wallet_order_history() -> None:
+    fake_supabase = FakeSupabaseRestClient(_tables())
+    fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = []
+    fake_pacifica.position_history["shared-wallet"] = [
+        {
+            "history_id": 7001,
+            "symbol": "BTC",
+            "amount": 1.0,
+            "price": 120.0,
+            "entry_price": 100.0,
+            "fee": 0.0,
+            "pnl": 20.0,
+            "event_type": "fulfill_taker",
+            "created_at": 1773991707301,
+        }
+    ]
+    fake_pacifica.wallet_order_history["shared-wallet"] = [
+        {
+            "order_id": 9001,
+            "symbol": "BTC",
+            "side": "ask",
+            "price": 120.0,
+            "amount": 1.0,
+            "reduce_only": True,
+            "order_status": "filled",
+            "client_order_id": None,
+            "created_at": 1773991707301,
+        }
+    ]
+    service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=fake_supabase)
+
+    runtime_a = fake_supabase.maybe_one("bot_runtimes", filters={"id": "runtime-a"})
+    performance_a = asyncio.run(service.calculate_runtime_performance(runtime_a))
+
+    assert performance_a["positions"] == []
+    assert performance_a["pnl_realized"] == 20.0
+    assert performance_a["win_streak"] == 1
+    assert fake_pacifica.wallet_order_history_requests[0] == ("shared-wallet", 200, 0)
+
+
+def test_runtime_performance_invalidates_cached_ledger_when_manual_close_arrives_without_new_bot_event() -> None:
+    fake_supabase = FakeSupabaseRestClient(_tables())
+    fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = [
+        {
+            "symbol": "BTC",
+            "side": "bid",
+            "amount": 1.0,
+            "entry_price": 100.0,
+            "mark_price": 110.0,
+        }
+    ]
+    service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=fake_supabase)
+
+    runtime_a = fake_supabase.maybe_one("bot_runtimes", filters={"id": "runtime-a"})
+    initial = asyncio.run(service.calculate_runtime_performance(runtime_a))
+
+    assert initial["pnl_realized"] == 0.0
+    assert initial["pnl_unrealized"] == 10.0
+
+    fake_pacifica.live_positions["shared-wallet"] = []
+    fake_pacifica.wallet_order_history["shared-wallet"] = [
+        {
+            "order_id": 9002,
+            "symbol": "BTC",
+            "side": "ask",
+            "price": 120.0,
+            "amount": 1.0,
+            "reduce_only": True,
+            "order_status": "filled",
+            "client_order_id": None,
+            "created_at": 1773991707301,
+        }
+    ]
+    fake_pacifica.wallet_order_history_requests.clear()
+
+    refreshed = asyncio.run(service.calculate_runtime_performance(runtime_a))
+
+    assert refreshed["positions"] == []
+    assert refreshed["pnl_realized"] == 20.0
+    assert refreshed["pnl_unrealized"] == 0.0
+    assert refreshed["win_streak"] == 1
+    assert fake_pacifica.wallet_order_history_requests
 
 
 def test_runtime_performance_persists_ledger_idempotently_when_same_rows_already_exist() -> None:

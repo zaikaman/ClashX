@@ -47,7 +47,7 @@ class BotPerformanceService:
     ) -> list[dict[str, Any]]:
         if not str(wallet_address or "").strip():
             return []
-        return await self._load_position_history_pages(wallet_address, limit=limit, offset=offset)
+        return await self._load_manual_history_rows(wallet_address, limit=limit, offset=offset)
 
     async def calculate_runtime_performance_with_context(
         self,
@@ -101,12 +101,18 @@ class BotPerformanceService:
             if resolved_live_positions_loaded is None:
                 resolved_live_positions_loaded = True
 
+        resolved_manual_close_history = manual_close_history
+        if resolved_manual_close_history is None:
+            resolved_manual_close_history = await self.load_position_history_for_wallet(
+                str(runtime.get("wallet_address") or "").strip()
+            )
+
         cached_ledger = self._load_cached_runtime_ledger(
             runtime,
             events=events,
             live_position_lookup=resolved_live_position_lookup,
             live_positions_loaded=bool(resolved_live_positions_loaded),
-            manual_close_history=manual_close_history,
+            manual_close_history=resolved_manual_close_history,
         )
         if cached_ledger is None:
             order_history_cache: dict[int, list[dict[str, Any]]] = {}
@@ -141,7 +147,7 @@ class BotPerformanceService:
                 runtime,
                 bot_records,
                 unresolved_events=unresolved_events,
-                history_rows=manual_close_history,
+                history_rows=resolved_manual_close_history,
             )
             lots, closures, close_events = self._build_runtime_ledger(runtime, bot_records, manual_close_records, close_events)
             self._persist_runtime_ledger(runtime, events, lots, closures)
@@ -321,30 +327,7 @@ class BotPerformanceService:
             ),
             default=0.0,
         )
-        normalized_history: list[dict[str, Any]] = []
-        for row in history_rows:
-            event_kind, position_side = self._position_history_event_kind(row)
-            amount = self._to_float(row.get("amount"))
-            price = self._to_float(row.get("price"))
-            created_at = row.get("created_at")
-            if event_kind not in {"open", "close"} or not position_side or amount <= 0 or price <= 0:
-                continue
-            if deployed_after > 0 and self._timestamp_value(created_at) < deployed_after:
-                continue
-            normalized_history.append(
-                {
-                    "history_id": row.get("history_id") or row.get("historyId"),
-                    "symbol": self._normalize_symbol(row.get("symbol")),
-                    "event_kind": event_kind,
-                    "position_side": position_side,
-                    "amount": amount,
-                    "remaining_amount": amount,
-                    "price": price,
-                    "pnl": self._to_float(row.get("pnl")),
-                    "created_at": created_at,
-                }
-            )
-        return normalized_history
+        return self._normalize_manual_history_rows(history_rows, deployed_after=deployed_after)
 
     def _apply_history_closures_to_lots(
         self,
@@ -404,6 +387,7 @@ class BotPerformanceService:
                         {
                             "source": "manual",
                             "created_at": row.get("created_at"),
+                            "source_order_id": row.get("order_id"),
                             "source_history_id": row.get("history_id"),
                         },
                         {"price": row.get("price")},
@@ -598,7 +582,7 @@ class BotPerformanceService:
                 self._timestamp_value(row.get("created_at"))
                 for row in manual_close_history
                 if self._normalize_symbol(row.get("symbol")) in symbols
-                and self._position_history_event_kind(row)[0] == "close"
+                and ((str(row.get("event_kind") or "").strip().lower()) or self._position_history_event_kind(row)[0]) == "close"
                 and self._timestamp_value(row.get("created_at")) >= deployed_at
             ),
             default=0.0,
@@ -796,34 +780,14 @@ class BotPerformanceService:
             return []
         resolved_history_rows = history_rows
         if resolved_history_rows is None:
-            resolved_history_rows = await self._load_position_history_pages(wallet_address, limit=200, offset=0)
+            resolved_history_rows = await self._load_manual_history_rows(wallet_address, limit=200, offset=0)
             if not resolved_history_rows:
                 return []
 
-        deployed_at = runtime.get("deployed_at")
-        normalized_history: list[dict[str, Any]] = []
-        for row in resolved_history_rows:
-            event_kind, position_side = self._position_history_event_kind(row)
-            amount = self._to_float(row.get("amount"))
-            price = self._to_float(row.get("price"))
-            created_at = row.get("created_at")
-            if event_kind not in {"open", "close"} or not position_side or amount <= 0 or price <= 0:
-                continue
-            if deployed_at and self._timestamp_value(created_at) < self._timestamp_value(deployed_at):
-                continue
-            normalized_history.append(
-                {
-                    "symbol": self._normalize_symbol(row.get("symbol")),
-                    "event_kind": event_kind,
-                    "position_side": position_side,
-                    "amount": amount,
-                    "remaining_amount": amount,
-                    "price": price,
-                    "pnl": self._to_float(row.get("pnl")),
-                    "history_id": row.get("history_id"),
-                    "created_at": created_at,
-                }
-            )
+        normalized_history = self._normalize_manual_history_rows(
+            resolved_history_rows,
+            deployed_after=self._timestamp_value(runtime.get("deployed_at")),
+        )
 
         bot_records.extend(self._materialize_bot_history_records(unresolved_events or [], normalized_history))
         if not bot_records:
@@ -844,6 +808,7 @@ class BotPerformanceService:
                     "event_kind": "close",
                     "position_side": row.get("position_side"),
                     "pnl": float(row.get("pnl") or 0.0) * min(1.0, remaining_amount / max(self._to_float(row.get("amount")), 1e-12)),
+                    "source_order_id": row.get("order_id"),
                     "source_history_id": row.get("history_id"),
                     "fill": {
                         "symbol": row.get("symbol"),
@@ -1129,8 +1094,31 @@ class BotPerformanceService:
 
     @staticmethod
     def _coerce_iso(value: Any) -> str:
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(BotPerformanceService._timestamp_value(value), tz=UTC).isoformat()
         text = str(value or "").strip()
-        return text if text else datetime.now(tz=UTC).isoformat()
+        if not text:
+            return datetime.now(tz=UTC).isoformat()
+        try:
+            numeric = float(text)
+        except ValueError:
+            normalized = text.replace("Z", "+00:00")
+            try:
+                return datetime.fromisoformat(normalized).astimezone(UTC).isoformat()
+            except ValueError:
+                return datetime.now(tz=UTC).isoformat()
+        return datetime.fromtimestamp(BotPerformanceService._timestamp_value(numeric), tz=UTC).isoformat()
+
+    async def _load_manual_history_rows(
+        self,
+        wallet_address: str,
+        *,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        position_rows = await self._load_position_history_pages(wallet_address, limit=limit, offset=offset)
+        order_rows = await self._load_wallet_order_history_pages(wallet_address, limit=limit, offset=offset)
+        return self._normalize_manual_history_rows([*position_rows, *order_rows])
 
     async def _load_position_history_pages(
         self,
@@ -1165,11 +1153,47 @@ class BotPerformanceService:
         rows.sort(key=lambda row: self._timestamp_value(row.get("created_at") or row.get("createdAt")))
         return rows
 
+    async def _load_wallet_order_history_pages(
+        self,
+        wallet_address: str,
+        *,
+        limit: int,
+        offset: int,
+        max_pages: int = 10,
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        page_size = max(1, int(limit or 200))
+        page_offset = max(0, int(offset or 0))
+        try:
+            for _ in range(max_pages):
+                batch = await self._pacifica.get_order_history(wallet_address, limit=page_size, offset=page_offset)
+                if not batch:
+                    break
+                for row in batch:
+                    if not isinstance(row, dict):
+                        continue
+                    dedupe_key = self._position_history_dedupe_key(row)
+                    if dedupe_key in seen_keys:
+                        continue
+                    seen_keys.add(dedupe_key)
+                    rows.append(row)
+                if len(batch) < page_size:
+                    break
+                page_offset += page_size
+        except (AttributeError, PacificaClientError):
+            return []
+        rows.sort(key=lambda row: self._timestamp_value(row.get("created_at") or row.get("createdAt")))
+        return rows
+
     @classmethod
     def _position_history_dedupe_key(cls, row: dict[str, Any]) -> str:
         history_id = row.get("history_id") or row.get("historyId")
         if history_id not in (None, ""):
             return f"history:{history_id}"
+        order_id = row.get("order_id") or row.get("orderId")
+        if order_id not in (None, ""):
+            return f"order:{order_id}"
         return "|".join(
             (
                 cls._normalize_symbol(row.get("symbol")),
@@ -1303,13 +1327,87 @@ class BotPerformanceService:
         price = cls._to_float(row.get("price"))
         return side in {"bid", "ask", "long", "short"} and amount > 0 and price > 0
 
+    def _normalize_manual_history_rows(
+        self,
+        history_rows: list[dict[str, Any]],
+        *,
+        deployed_after: float = 0.0,
+    ) -> list[dict[str, Any]]:
+        normalized_history: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        for row in history_rows:
+            normalized_row = self._normalize_manual_history_row(row)
+            if normalized_row is None:
+                continue
+            if deployed_after > 0 and self._timestamp_value(normalized_row.get("created_at")) < deployed_after:
+                continue
+            dedupe_key = self._manual_history_row_key(normalized_row)
+            if dedupe_key in seen_keys:
+                continue
+            seen_keys.add(dedupe_key)
+            normalized_history.append(normalized_row)
+        normalized_history.sort(key=lambda item: self._timestamp_value(item.get("created_at")))
+        return normalized_history
+
+    def _normalize_manual_history_row(self, row: dict[str, Any]) -> dict[str, Any] | None:
+        event_kind = str(row.get("event_kind") or "").strip().lower()
+        position_side = str(row.get("position_side") or "").strip().lower()
+        if event_kind not in {"open", "close"} or position_side not in {"long", "short"}:
+            event_kind, position_side = self._position_history_event_kind(row)
+        amount = self._to_float(row.get("amount"))
+        price = self._to_float(row.get("price"))
+        symbol = self._normalize_symbol(row.get("symbol"))
+        if event_kind not in {"open", "close"} or position_side not in {"long", "short"} or amount <= 1e-12 or price <= 0 or not symbol:
+            return None
+        remaining_amount = self._to_float(row.get("remaining_amount"))
+        return {
+            "history_id": row.get("history_id") or row.get("historyId"),
+            "order_id": row.get("order_id") or row.get("orderId"),
+            "client_order_id": str(row.get("client_order_id") or row.get("clientOrderId") or "").strip() or None,
+            "symbol": symbol,
+            "event_kind": event_kind,
+            "position_side": position_side,
+            "amount": amount,
+            "remaining_amount": remaining_amount if remaining_amount > 1e-12 else amount,
+            "price": price,
+            "pnl": self._to_float(row.get("pnl")),
+            "created_at": row.get("created_at") or row.get("createdAt"),
+        }
+
+    @classmethod
+    def _manual_history_row_key(cls, row: dict[str, Any]) -> str:
+        return "|".join(
+            (
+                cls._normalize_symbol(row.get("symbol")),
+                str(row.get("event_kind") or "").strip().lower(),
+                str(row.get("position_side") or "").strip().lower(),
+                f"{cls._timestamp_value(row.get('created_at')):.6f}",
+                f"{cls._to_float(row.get('amount')):.12f}",
+                f"{cls._to_float(row.get('price')):.8f}",
+                f"{cls._to_float(row.get('pnl')):.8f}",
+            )
+        )
+
     @classmethod
     def _position_history_event_kind(cls, row: dict[str, Any]) -> tuple[str | None, str | None]:
-        event_type = str(row.get("event_type") or "").lower().strip()
+        event_type = str(row.get("event_type") or row.get("eventType") or "").lower().strip()
         if event_type.startswith("open_"):
             return "open", "long" if event_type.endswith("long") else "short" if event_type.endswith("short") else None
         if event_type.startswith("close_"):
             return "close", "long" if event_type.endswith("long") else "short" if event_type.endswith("short") else None
+        side = cls._normalize_position_side(row.get("side"))
+        if side not in {"long", "short"}:
+            return None, None
+        reduce_only = cls._to_bool(row.get("reduce_only"), False)
+        amount = cls._to_float(row.get("amount"))
+        price = cls._to_float(row.get("price"))
+        order_status = str(row.get("order_status") or row.get("status") or "").lower().strip()
+        if amount <= 1e-12 or price <= 0:
+            return None, None
+        if reduce_only and (order_status in {"", "filled", "partially_filled"} or event_type.startswith("fulfill")):
+            return "close", "short" if side == "long" else "long"
+        if order_status in {"filled", "partially_filled"} or event_type.startswith("fulfill"):
+            return "open", side
         return None, None
 
     @classmethod

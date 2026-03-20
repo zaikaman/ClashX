@@ -857,6 +857,58 @@ class PacificaClient:
             )
         return history
 
+    async def get_order_history(
+        self,
+        wallet_address: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        await self._throttle(bucket="private")
+        response = await self._http.get(
+            f"{self.settings.pacifica_rest_url}/orders/history",
+            params={"account": wallet_address, "limit": limit, "offset": offset},
+            headers={"Accept": "*/*"},
+        )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return []
+            self._raise_http_error("order-history", exc)
+        payload = self._extract_response_payload(response.json())
+        if not isinstance(payload, list):
+            raise PacificaClientError("Pacifica order-history API returned an unexpected payload shape")
+
+        history: list[dict[str, Any]] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            history.append(
+                {
+                    "history_id": item.get("historyId") or item.get("history_id"),
+                    "order_id": item.get("orderId") or item.get("order_id"),
+                    "symbol": item.get("symbol"),
+                    "side": item.get("side"),
+                    "price": float(
+                        item.get(
+                            "averageFilledPrice",
+                            item.get("average_filled_price", item.get("price", 0)),
+                        )
+                        or 0
+                    ),
+                    "amount": float(item.get("filledAmount", item.get("filled_amount", item.get("amount", 0))) or 0),
+                    "requested_amount": float(item.get("amount", 0) or 0),
+                    "order_type": item.get("orderType") or item.get("order_type"),
+                    "reduce_only": bool(item.get("reduceOnly", item.get("reduce_only", False))),
+                    "client_order_id": item.get("clientOrderId") or item.get("client_order_id"),
+                    "order_status": str(item.get("orderStatus", item.get("order_status", item.get("status", ""))) or ""),
+                    "event_type": str(item.get("eventType", item.get("event_type", "")) or ""),
+                    "created_at": item.get("createdAt") or item.get("created_at"),
+                }
+            )
+        return history
+
     async def get_order_history_by_id(self, order_id: int) -> list[dict[str, Any]]:
         await self._throttle(bucket="private")
         response = await self._http.get(
