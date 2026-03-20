@@ -511,6 +511,113 @@ def test_runtime_performance_attributes_manual_close_realized_pnl_to_bot() -> No
     assert fake_supabase.tables["bot_trade_sync_state"][0]["runtime_id"] == "runtime-a"
 
 
+def test_runtime_performance_keeps_same_symbol_wallet_closes_scoped_to_the_correct_bot() -> None:
+    fake_supabase = FakeSupabaseRestClient(_tables())
+    fake_supabase.tables["bot_execution_events"] = [
+        {
+            "id": "event-a-open",
+            "runtime_id": "runtime-a",
+            "event_type": "action.executed",
+            "decision_summary": "btc open a",
+            "request_payload": {"type": "open_long", "symbol": "BTC"},
+            "result_payload": {
+                "execution_meta": {
+                    "symbol": "BTC",
+                    "side": "bid",
+                    "amount": 1.0,
+                    "reduce_only": False,
+                    "reference_price": 100.0,
+                }
+            },
+            "status": "success",
+            "error_reason": None,
+            "created_at": "2026-03-17T00:00:00+00:00",
+        },
+        {
+            "id": "event-b-open",
+            "runtime_id": "runtime-b",
+            "event_type": "action.executed",
+            "decision_summary": "btc open b",
+            "request_payload": {"type": "open_long", "symbol": "BTC"},
+            "result_payload": {
+                "execution_meta": {
+                    "symbol": "BTC",
+                    "side": "bid",
+                    "amount": 1.0,
+                    "reduce_only": False,
+                    "reference_price": 110.0,
+                }
+            },
+            "status": "success",
+            "error_reason": None,
+            "created_at": "2026-03-17T00:02:00+00:00",
+        },
+    ]
+    fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = [
+        {
+            "symbol": "BTC",
+            "side": "bid",
+            "amount": 1.0,
+            "entry_price": 110.0,
+            "mark_price": 120.0,
+        }
+    ]
+    fake_pacifica.position_history["shared-wallet"] = [
+        {
+            "history_id": 1,
+            "symbol": "BTC",
+            "amount": 1.0,
+            "price": 100.0,
+            "entry_price": 100.0,
+            "fee": 0.0,
+            "pnl": 0.0,
+            "event_type": "open_long",
+            "created_at": "2026-03-17T00:00:00+00:00",
+        },
+        {
+            "history_id": 2,
+            "symbol": "BTC",
+            "amount": 1.0,
+            "price": 110.0,
+            "entry_price": 110.0,
+            "fee": 0.0,
+            "pnl": 0.0,
+            "event_type": "open_long",
+            "created_at": "2026-03-17T00:02:00+00:00",
+        },
+        {
+            "history_id": 3,
+            "symbol": "BTC",
+            "amount": 1.0,
+            "price": 120.0,
+            "entry_price": 100.0,
+            "fee": 0.0,
+            "pnl": 20.0,
+            "event_type": "close_long",
+            "created_at": "2026-03-17T00:05:00+00:00",
+        },
+    ]
+    service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=fake_supabase)
+
+    runtime_a = fake_supabase.maybe_one("bot_runtimes", filters={"id": "runtime-a"})
+    runtime_b = fake_supabase.maybe_one("bot_runtimes", filters={"id": "runtime-b"})
+
+    performance_a = asyncio.run(service.calculate_runtime_performance(runtime_a))
+    performance_b = asyncio.run(service.calculate_runtime_performance(runtime_b))
+
+    assert performance_a["positions"] == []
+    assert performance_a["pnl_realized"] == 20.0
+    assert performance_a["win_streak"] == 1
+    assert performance_b["pnl_realized"] == 0.0
+    assert performance_b["pnl_unrealized"] == 10.0
+    assert performance_b["win_streak"] == 0
+    assert performance_b["positions"][0]["symbol"] == "BTC"
+    assert performance_b["positions"][0]["entry_price"] == 110.0
+    assert performance_b["positions"][0]["mark_price"] == 120.0
+    assert performance_b["positions"][0]["unrealized_pnl"] == 10.0
+
+
 def test_runtime_performance_persists_ledger_idempotently_when_same_rows_already_exist() -> None:
     seeded_supabase = FakeSupabaseRestClient(_tables())
     fake_pacifica = FakePacificaClient()

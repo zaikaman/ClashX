@@ -61,6 +61,33 @@ class BotPerformanceService:
         manual_close_history: list[dict[str, Any]] | None,
         live_positions_loaded: bool | None = None,
     ) -> dict[str, Any]:
+        sibling_runtimes = self._load_wallet_runtimes(runtime)
+        if len(sibling_runtimes) > 1 and self._wallet_requires_joint_reconciliation(sibling_runtimes):
+            performance_by_runtime = await self._calculate_wallet_runtime_performance_map(
+                sibling_runtimes,
+                market_lookup=market_lookup,
+                live_position_lookup=live_position_lookup,
+                manual_close_history=manual_close_history,
+                live_positions_loaded=live_positions_loaded,
+            )
+            return performance_by_runtime.get(str(runtime.get("id") or "").strip(), self._empty_performance_payload())
+        return await self._calculate_runtime_performance_isolated(
+            runtime,
+            market_lookup=market_lookup,
+            live_position_lookup=live_position_lookup,
+            manual_close_history=manual_close_history,
+            live_positions_loaded=live_positions_loaded,
+        )
+
+    async def _calculate_runtime_performance_isolated(
+        self,
+        runtime: dict[str, Any],
+        *,
+        market_lookup: dict[str, dict[str, Any]] | None,
+        live_position_lookup: dict[str, dict[str, Any]] | None,
+        manual_close_history: list[dict[str, Any]] | None,
+        live_positions_loaded: bool | None = None,
+    ) -> dict[str, Any]:
         events = self._supabase.select(
             "bot_execution_events",
             columns="id,created_at,result_payload",
@@ -118,9 +145,302 @@ class BotPerformanceService:
             lots, closures = cached_ledger
             close_events = self._build_close_events_from_closures(closures)
 
-        realized_pnl = round(sum(float(item.get("realized_pnl") or 0.0) for item in closures), 8)
-
         resolved_market_lookup = market_lookup or await self._load_market_lookup()
+        return self._build_performance_payload(
+            runtime,
+            lots=lots,
+            closures=closures,
+            close_events=close_events,
+            market_lookup=resolved_market_lookup,
+            live_position_lookup=resolved_live_position_lookup,
+            live_positions_loaded=bool(resolved_live_positions_loaded),
+        )
+
+    async def _calculate_wallet_runtime_performance_map(
+        self,
+        runtimes: list[dict[str, Any]],
+        *,
+        market_lookup: dict[str, dict[str, Any]] | None,
+        live_position_lookup: dict[str, dict[str, Any]] | None,
+        manual_close_history: list[dict[str, Any]] | None,
+        live_positions_loaded: bool | None,
+    ) -> dict[str, dict[str, Any]]:
+        if not runtimes:
+            return {}
+
+        reference_runtime = runtimes[0]
+        resolved_live_positions_loaded = live_positions_loaded
+        if live_position_lookup is None:
+            resolved_live_position_lookup, resolved_live_positions_loaded = await self._load_live_position_lookup(reference_runtime)
+        else:
+            resolved_live_position_lookup = live_position_lookup
+            if resolved_live_positions_loaded is None:
+                resolved_live_positions_loaded = True
+
+        resolved_history = manual_close_history
+        if resolved_history is None:
+            resolved_history = await self.load_position_history_for_wallet(str(reference_runtime.get("wallet_address") or "").strip())
+        resolved_market_lookup = market_lookup or await self._load_market_lookup()
+
+        order_history_cache: dict[int, list[dict[str, Any]]] = {}
+        runtime_ledgers: dict[str, dict[str, Any]] = {}
+        global_bot_records: list[dict[str, Any]] = []
+
+        for runtime in runtimes:
+            runtime_id = str(runtime.get("id") or "").strip()
+            if not runtime_id:
+                continue
+            events = self._supabase.select(
+                "bot_execution_events",
+                columns="id,created_at,result_payload",
+                filters={"runtime_id": runtime_id, "event_type": "action.executed"},
+                order="created_at.asc",
+                limit=1000,
+            )
+            bot_records: list[dict[str, Any]] = []
+            bot_positions: dict[str, dict[str, float]] = {}
+            for event in events:
+                fills = await self._resolve_event_fills(event, order_history_cache)
+                for fill in fills:
+                    applied = self._apply_fill(bot_positions, fill)
+                    bot_records.extend(self._build_bot_records(event, fill, applied, event.get("created_at")))
+            lots, closures, _ = self._build_runtime_ledger(runtime, bot_records, [], [])
+            runtime_ledgers[runtime_id] = {
+                "runtime": runtime,
+                "lots": lots,
+                "closures": closures,
+            }
+            for record in bot_records:
+                global_bot_records.append({**record, "runtime_id": runtime_id})
+
+        history_rows = self._normalize_position_history_rows(runtimes, resolved_history or [])
+        self._consume_bot_history_matches(global_bot_records, history_rows)
+        manual_closures = self._apply_history_closures_to_lots(history_rows, runtime_ledgers)
+        self._cap_open_lots_to_live_positions(
+            runtime_ledgers,
+            live_position_lookup=resolved_live_position_lookup,
+            live_positions_loaded=bool(resolved_live_positions_loaded),
+        )
+
+        performance_by_runtime: dict[str, dict[str, Any]] = {}
+        for runtime_id, ledger in runtime_ledgers.items():
+            closures = [*ledger["closures"], *manual_closures.get(runtime_id, [])]
+            performance_by_runtime[runtime_id] = self._build_performance_payload(
+                ledger["runtime"],
+                lots=ledger["lots"],
+                closures=closures,
+                close_events=self._build_close_events_from_closures(closures),
+                market_lookup=resolved_market_lookup,
+                live_position_lookup=resolved_live_position_lookup,
+                live_positions_loaded=bool(resolved_live_positions_loaded),
+            )
+        return performance_by_runtime
+
+    def _load_wallet_runtimes(self, runtime: dict[str, Any]) -> list[dict[str, Any]]:
+        wallet_address = str(runtime.get("wallet_address") or "").strip()
+        runtime_id = str(runtime.get("id") or "").strip()
+        if not wallet_address:
+            return [runtime]
+        runtimes = self._supabase.select("bot_runtimes", filters={"wallet_address": wallet_address})
+        if not runtimes:
+            return [runtime]
+        if runtime_id and not any(str(item.get("id") or "").strip() == runtime_id for item in runtimes):
+            return [runtime, *runtimes]
+        return runtimes
+
+    def _wallet_requires_joint_reconciliation(self, runtimes: list[dict[str, Any]]) -> bool:
+        symbol_owners: dict[str, set[str]] = {}
+        for runtime in runtimes:
+            runtime_id = str(runtime.get("id") or "").strip()
+            if not runtime_id:
+                continue
+            events = self._supabase.select(
+                "bot_execution_events",
+                columns="result_payload,request_payload",
+                filters={"runtime_id": runtime_id, "event_type": "action.executed"},
+                limit=1000,
+            )
+            for event in events:
+                symbol = self._extract_event_symbol_hint(event)
+                if not symbol:
+                    continue
+                owners = symbol_owners.setdefault(symbol, set())
+                owners.add(runtime_id)
+                if len(owners) > 1:
+                    return True
+        return False
+
+    def _extract_event_symbol_hint(self, event: dict[str, Any]) -> str:
+        result_payload = event.get("result_payload") if isinstance(event.get("result_payload"), dict) else {}
+        execution_meta = result_payload.get("execution_meta") if isinstance(result_payload.get("execution_meta"), dict) else {}
+        payload = result_payload.get("payload") if isinstance(result_payload.get("payload"), dict) else {}
+        request_payload = event.get("request_payload") if isinstance(event.get("request_payload"), dict) else {}
+        for candidate in (
+            execution_meta.get("symbol"),
+            payload.get("symbol"),
+            request_payload.get("symbol"),
+        ):
+            symbol = self._normalize_symbol(candidate)
+            if symbol:
+                return symbol
+        return ""
+
+    def _normalize_position_history_rows(
+        self,
+        runtimes: list[dict[str, Any]],
+        history_rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        deployed_after = min(
+            (
+                self._timestamp_value(runtime.get("deployed_at"))
+                for runtime in runtimes
+                if self._timestamp_value(runtime.get("deployed_at")) > 0
+            ),
+            default=0.0,
+        )
+        normalized_history: list[dict[str, Any]] = []
+        for row in history_rows:
+            event_kind, position_side = self._position_history_event_kind(row)
+            amount = self._to_float(row.get("amount"))
+            price = self._to_float(row.get("price"))
+            created_at = row.get("created_at")
+            if event_kind not in {"open", "close"} or not position_side or amount <= 0 or price <= 0:
+                continue
+            if deployed_after > 0 and self._timestamp_value(created_at) < deployed_after:
+                continue
+            normalized_history.append(
+                {
+                    "history_id": row.get("history_id") or row.get("historyId"),
+                    "symbol": self._normalize_symbol(row.get("symbol")),
+                    "event_kind": event_kind,
+                    "position_side": position_side,
+                    "amount": amount,
+                    "remaining_amount": amount,
+                    "price": price,
+                    "pnl": self._to_float(row.get("pnl")),
+                    "created_at": created_at,
+                }
+            )
+        return normalized_history
+
+    def _apply_history_closures_to_lots(
+        self,
+        history_rows: list[dict[str, Any]],
+        runtime_ledgers: dict[str, dict[str, Any]],
+    ) -> dict[str, list[dict[str, Any]]]:
+        open_lots: list[dict[str, Any]] = []
+        for runtime_id, ledger in runtime_ledgers.items():
+            for lot in ledger["lots"]:
+                if self._to_float(lot.get("quantity_remaining")) <= 1e-12:
+                    continue
+                open_lots.append({"runtime_id": runtime_id, "lot": lot})
+
+        manual_closures: dict[str, list[dict[str, Any]]] = {}
+        close_rows = sorted(
+            [
+                row
+                for row in history_rows
+                if row.get("event_kind") == "close" and self._to_float(row.get("remaining_amount")) > 1e-12
+            ],
+            key=lambda row: self._timestamp_value(row.get("created_at")),
+        )
+        for row in close_rows:
+            remaining = self._to_float(row.get("remaining_amount"))
+            if remaining <= 1e-12:
+                continue
+            candidate_lots = [
+                item
+                for item in open_lots
+                if item["lot"].get("symbol") == row.get("symbol")
+                and item["lot"].get("side") == row.get("position_side")
+                and self._to_float(item["lot"].get("quantity_remaining")) > 1e-12
+            ]
+            candidate_lots.sort(key=lambda item: self._timestamp_value(item["lot"].get("opened_at")))
+            for item in candidate_lots:
+                if remaining <= 1e-12:
+                    break
+                lot = item["lot"]
+                available = self._to_float(lot.get("quantity_remaining"))
+                if available <= 1e-12:
+                    continue
+                matched = min(remaining, available)
+                remaining -= matched
+                lot["quantity_remaining"] = round(available - matched, 12)
+                lot["updated_at"] = self._coerce_iso(row.get("created_at"))
+                realized = self._calculate_realized_pnl(
+                    str(lot.get("side") or ""),
+                    self._to_float(lot.get("entry_price")),
+                    self._to_float(row.get("price")),
+                    matched,
+                )
+                runtime_id = item["runtime_id"]
+                manual_closures.setdefault(runtime_id, []).append(
+                    self._make_closure(
+                        runtime_id,
+                        lot,
+                        {
+                            "source": "manual",
+                            "created_at": row.get("created_at"),
+                            "source_history_id": row.get("history_id"),
+                        },
+                        {"price": row.get("price")},
+                        matched,
+                        realized,
+                    )
+                )
+            row["remaining_amount"] = round(remaining, 12)
+        return manual_closures
+
+    def _cap_open_lots_to_live_positions(
+        self,
+        runtime_ledgers: dict[str, dict[str, Any]],
+        *,
+        live_position_lookup: dict[str, dict[str, Any]],
+        live_positions_loaded: bool,
+    ) -> None:
+        if not live_positions_loaded:
+            return
+        lots_by_symbol_side: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for ledger in runtime_ledgers.values():
+            for lot in ledger["lots"]:
+                quantity_remaining = self._to_float(lot.get("quantity_remaining"))
+                side = str(lot.get("side") or "")
+                symbol = self._normalize_symbol(lot.get("symbol"))
+                if quantity_remaining <= 1e-12 or side not in {"long", "short"} or not symbol:
+                    continue
+                lots_by_symbol_side.setdefault((symbol, side), []).append(lot)
+
+        for (symbol, side), lots in lots_by_symbol_side.items():
+            live_position = live_position_lookup.get(symbol)
+            live_side = self._normalize_position_side((live_position or {}).get("side"))
+            live_amount = abs(self._to_float((live_position or {}).get("amount"))) if live_side == side else 0.0
+            total_open = sum(self._to_float(lot.get("quantity_remaining")) for lot in lots)
+            excess = total_open - live_amount
+            if excess <= 1e-12:
+                continue
+            lots.sort(key=lambda lot: self._timestamp_value(lot.get("opened_at")))
+            for lot in lots:
+                if excess <= 1e-12:
+                    break
+                available = self._to_float(lot.get("quantity_remaining"))
+                if available <= 1e-12:
+                    continue
+                reduction = min(excess, available)
+                lot["quantity_remaining"] = round(available - reduction, 12)
+                excess -= reduction
+
+    def _build_performance_payload(
+        self,
+        runtime: dict[str, Any],
+        *,
+        lots: list[dict[str, Any]],
+        closures: list[dict[str, Any]],
+        close_events: list[dict[str, Any]],
+        market_lookup: dict[str, dict[str, Any]],
+        live_position_lookup: dict[str, dict[str, Any]],
+        live_positions_loaded: bool,
+    ) -> dict[str, Any]:
+        realized_pnl = round(sum(float(item.get("realized_pnl") or 0.0) for item in closures), 8)
         open_positions: list[dict[str, Any]] = []
         unrealized_pnl = 0.0
         open_lots = [item for item in lots if self._to_float(item.get("quantity_remaining")) > 1e-12]
@@ -130,28 +450,21 @@ class BotPerformanceService:
             entry_price = float(state.get("entry_price") or 0.0)
             if abs(quantity) <= 1e-12 or entry_price <= 0:
                 continue
-            live_position = resolved_live_position_lookup.get(symbol)
-            if live_position is not None:
-                live_amount = abs(float(live_position.get("amount") or 0.0))
-                live_side = self._normalize_position_side(live_position.get("side"))
-                runtime_side = "long" if quantity > 0 else "short"
-                if live_amount <= 1e-12 or live_side != runtime_side:
-                    continue
-                size = min(abs(quantity), live_amount)
-                if size <= 1e-12:
-                    continue
-                live_entry_price = float(live_position.get("entry_price") or 0.0)
-                live_mark_price = float(live_position.get("mark_price") or 0.0)
-                if live_entry_price > 0:
-                    entry_price = live_entry_price
-                mark_price = live_mark_price if live_mark_price > 0 else live_entry_price
-            elif resolved_live_positions_loaded:
+            runtime_side = "long" if quantity > 0 else "short"
+            live_position = live_position_lookup.get(symbol)
+            live_side = self._normalize_position_side((live_position or {}).get("side"))
+            if live_positions_loaded and (live_position is None or live_side != runtime_side):
                 continue
-            else:
-                size = abs(quantity)
-                mark_price = float((resolved_market_lookup.get(symbol) or {}).get("mark_price") or 0.0)
-                if mark_price <= 0:
-                    mark_price = entry_price
+            mark_price = 0.0
+            if live_position is not None and live_side == runtime_side:
+                mark_price = float(live_position.get("mark_price") or 0.0)
+            if mark_price <= 0:
+                mark_price = float((market_lookup.get(symbol) or {}).get("mark_price") or 0.0)
+            if mark_price <= 0:
+                if live_positions_loaded:
+                    continue
+                mark_price = entry_price
+            size = abs(quantity)
             side = "long" if quantity > 0 else "short"
             pnl = (mark_price - entry_price) * size if quantity > 0 else (entry_price - mark_price) * size
             unrealized_pnl += pnl
@@ -169,7 +482,6 @@ class BotPerformanceService:
         total_pnl = realized_pnl + unrealized_pnl
         runtime_policy = runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {}
         allocated_capital = float(self._risk.normalize_policy(runtime_policy).get("allocated_capital_usd") or 0.0)
-
         return {
             "pnl_total": round(total_pnl, 2),
             "pnl_total_pct": round((total_pnl / allocated_capital * 100.0) if allocated_capital > 0 else 0.0, 4),
@@ -177,6 +489,17 @@ class BotPerformanceService:
             "pnl_unrealized": round(unrealized_pnl, 2),
             "win_streak": self._compute_win_streak(close_events),
             "positions": open_positions,
+        }
+
+    @staticmethod
+    def _empty_performance_payload() -> dict[str, Any]:
+        return {
+            "pnl_total": 0.0,
+            "pnl_total_pct": 0.0,
+            "pnl_realized": 0.0,
+            "pnl_unrealized": 0.0,
+            "win_streak": 0,
+            "positions": [],
         }
 
     def _load_cached_runtime_ledger(
