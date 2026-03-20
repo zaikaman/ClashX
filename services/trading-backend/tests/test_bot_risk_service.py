@@ -35,3 +35,73 @@ def test_drawdown_breach_reason_uses_allocated_capital_threshold() -> None:
     assert "$12.00" in reason
     assert "12.00%" in reason
     assert "$100.00" in reason
+
+
+def test_assess_action_blocks_quantity_based_limit_order_above_max_order_value() -> None:
+    service = BotRiskService()
+
+    issues = service.assess_action(
+        policy={"max_order_size_usd": 200},
+        action={
+            "type": "place_limit_order",
+            "symbol": "BTC",
+            "quantity": 1.0,
+            "price": 100_000.0,
+            "leverage": 1,
+        },
+        runtime_state={},
+        market_lookup={"BTC": {"mark_price": 100_000.0, "max_leverage": 5}},
+    )
+
+    assert "requested order value 100000 exceeds max_order_size_usd 200" in issues
+
+
+def test_assess_action_allows_reduce_only_limit_exit_without_entry_conflicts() -> None:
+    service = BotRiskService()
+
+    issues = service.assess_action(
+        policy={"max_open_positions": 1, "max_order_size_usd": 5_000},
+        action={
+            "type": "place_limit_order",
+            "symbol": "BTC",
+            "quantity": 0.01,
+            "price": 100_000.0,
+            "leverage": 1,
+            "reduce_only": True,
+        },
+        runtime_state={
+            "managed_positions": {
+                "BTC": {
+                    "symbol": "BTC",
+                    "amount": 0.01,
+                }
+            }
+        },
+        position_lookup={"BTC": {"symbol": "BTC", "amount": 0.01}},
+        open_order_lookup={},
+        market_lookup={"BTC": {"mark_price": 100_000.0, "max_leverage": 5}},
+    )
+
+    assert issues == []
+
+
+def test_assess_action_blocks_reduce_only_twap_without_managed_position() -> None:
+    service = BotRiskService()
+
+    issues = service.assess_action(
+        policy={"max_open_positions": 1, "max_order_size_usd": 5_000},
+        action={
+            "type": "place_twap_order",
+            "symbol": "BTC",
+            "quantity": 0.01,
+            "duration_seconds": 900,
+            "leverage": 1,
+            "reduce_only": True,
+        },
+        runtime_state={"managed_positions": {}},
+        position_lookup={},
+        open_order_lookup={},
+        market_lookup={"BTC": {"mark_price": 100_000.0, "max_leverage": 5}},
+    )
+
+    assert issues == ["bot does not manage an open position on BTC"]

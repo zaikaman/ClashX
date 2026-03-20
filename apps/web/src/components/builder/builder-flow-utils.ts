@@ -604,6 +604,7 @@ export function conditionSummary(condition: VisualCondition) {
 
 export function actionSummary(action: VisualAction) {
   const marketLabel = formatMarketReference(action.symbol);
+  const reduceOnlySuffix = action.reduce_only ? " as a reduce-only exit" : "";
   if (action.type === "open_long") {
     return `Open long on ${marketLabel} for ${action.size_usd ?? 0} USD at ${action.leverage ?? 0}x.`;
   }
@@ -611,13 +612,13 @@ export function actionSummary(action: VisualAction) {
     return `Open short on ${marketLabel} for ${action.size_usd ?? 0} USD at ${action.leverage ?? 0}x.`;
   }
   if (action.type === "place_market_order") {
-    return `Send a ${action.side ?? "long"} market order on ${marketLabel} for ${action.size_usd ?? 0} USD at ${action.leverage ?? 0}x with ${action.slippage_percent ?? 0}% slippage.`;
+    return `Send a ${action.side ?? "long"} market order on ${marketLabel} for ${action.size_usd ?? 0} USD at ${action.leverage ?? 0}x with ${action.slippage_percent ?? 0}% slippage${reduceOnlySuffix}.`;
   }
   if (action.type === "place_limit_order") {
-    return `Work a ${action.side ?? "long"} limit order on ${marketLabel} for ${action.quantity ?? 0} contracts at ${action.price ?? 0} (${action.tif ?? "GTC"}).`;
+    return `Work a ${action.side ?? "long"} limit order on ${marketLabel} for ${action.quantity ?? 0} contracts at ${action.price ?? 0} (${action.tif ?? "GTC"})${reduceOnlySuffix}.`;
   }
   if (action.type === "place_twap_order") {
-    return `Slice ${action.quantity ?? 0} contracts into ${marketLabel} over ${action.duration_seconds ?? 0}s on the ${action.side ?? "long"} side.`;
+    return `Slice ${action.quantity ?? 0} contracts into ${marketLabel} over ${action.duration_seconds ?? 0}s on the ${action.side ?? "long"} side${reduceOnlySuffix}.`;
   }
   if (action.type === "close_position") {
     return `Close the ${marketLabel} position.`;

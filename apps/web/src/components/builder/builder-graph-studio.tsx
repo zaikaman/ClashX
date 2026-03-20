@@ -2913,6 +2913,15 @@ export function BuilderGraphStudio({
                           />
                         </div>
                       </div>
+                      <label className="flex items-center justify-between rounded-md border border-[rgba(255,255,255,0.06)] bg-neutral-800 px-3 py-2 text-xs text-neutral-300">
+                        <span>Reduce-Only Exit</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(selectedAction.reduce_only)}
+                          onChange={(e) => updateActionNode(selectedAction.id, { reduce_only: e.target.checked })}
+                          className="h-4 w-4 rounded border-[rgba(255,255,255,0.18)] bg-transparent"
+                        />
+                      </label>
                     </>
                   ) : null}
 
@@ -2988,6 +2997,15 @@ export function BuilderGraphStudio({
                           />
                         </div>
                       </div>
+                      <label className="flex items-center justify-between rounded-md border border-[rgba(255,255,255,0.06)] bg-neutral-800 px-3 py-2 text-xs text-neutral-300">
+                        <span>Reduce-Only Exit</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(selectedAction.reduce_only)}
+                          onChange={(e) => updateActionNode(selectedAction.id, { reduce_only: e.target.checked })}
+                          className="h-4 w-4 rounded border-[rgba(255,255,255,0.18)] bg-transparent"
+                        />
+                      </label>
                     </>
                   ) : null}
 
@@ -3058,6 +3076,15 @@ export function BuilderGraphStudio({
                           />
                         </div>
                       </div>
+                      <label className="flex items-center justify-between rounded-md border border-[rgba(255,255,255,0.06)] bg-neutral-800 px-3 py-2 text-xs text-neutral-300">
+                        <span>Reduce-Only Exit</span>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(selectedAction.reduce_only)}
+                          onChange={(e) => updateActionNode(selectedAction.id, { reduce_only: e.target.checked })}
+                          className="h-4 w-4 rounded border-[rgba(255,255,255,0.18)] bg-transparent"
+                        />
+                      </label>
                     </>
                   ) : null}
 

@@ -65,6 +65,13 @@ class BotRiskService:
         issues: list[str] = []
         normalized = self.normalize_policy(policy)
         action_type = str(action.get("type") or "")
+        order_action_types = {
+            "open_long",
+            "open_short",
+            "place_market_order",
+            "place_limit_order",
+            "place_twap_order",
+        }
         symbol = str(action.get("symbol") or "").upper().replace("-PERP", "")
         positions = position_lookup if isinstance(position_lookup, dict) else {}
         open_orders = open_order_lookup if isinstance(open_order_lookup, dict) else {}
@@ -84,26 +91,12 @@ class BotRiskService:
             issues.append(f"symbol {symbol} is not in allowed_symbols policy")
 
         leverage = self._to_float(action.get("leverage"), 1.0)
-        if action_type in {
-            "open_long",
-            "open_short",
-            "place_market_order",
-            "place_limit_order",
-            "place_twap_order",
-            "update_leverage",
-        } and leverage > normalized["max_leverage"]:
+        if action_type in order_action_types | {"update_leverage"} and leverage > normalized["max_leverage"]:
             issues.append(f"requested leverage {leverage:g} exceeds max_leverage {normalized['max_leverage']}")
         market = markets.get(symbol) if symbol else None
         market_max_leverage = self._to_float(market.get("max_leverage"), 0.0) if isinstance(market, dict) else 0.0
         if (
-            action_type in {
-                "open_long",
-                "open_short",
-                "place_market_order",
-                "place_limit_order",
-                "place_twap_order",
-                "update_leverage",
-            }
+            action_type in order_action_types | {"update_leverage"}
             and market_max_leverage > 0
             and leverage > market_max_leverage
         ):
@@ -111,12 +104,18 @@ class BotRiskService:
                 f"requested leverage {leverage:g} exceeds {symbol} market max_leverage {market_max_leverage:g}"
             )
 
-        size_usd = self._to_float(action.get("size_usd"), 0.0)
-        if action_type in {"open_long", "open_short", "place_market_order", "place_limit_order", "place_twap_order"} and size_usd > normalized["max_order_size_usd"]:
+        requested_order_value = self._resolve_order_value_usd(
+            action=action,
+            market=market,
+        )
+        if action_type in order_action_types and requested_order_value > normalized["max_order_size_usd"]:
             issues.append(
-                f"requested size_usd {size_usd:g} exceeds max_order_size_usd {normalized['max_order_size_usd']:g}"
+                f"requested order value {requested_order_value:g} exceeds max_order_size_usd {normalized['max_order_size_usd']:g}"
             )
-        if action_type in {"open_long", "open_short", "place_market_order", "place_limit_order", "place_twap_order"}:
+        if action_type in order_action_types and self._is_reduce_only_order_action(action):
+            if abs(self._to_float(managed_position.get("amount"), 0.0)) <= 0:
+                issues.append(f"bot does not manage an open position on {symbol}")
+        elif action_type in order_action_types:
             open_positions = sum(
                 1
                 for item in managed_positions.values()
@@ -275,6 +274,31 @@ class BotRiskService:
             if normalized in {"0", "false", "no", "n"}:
                 return False
         return bool(value)
+
+    def _is_reduce_only_order_action(self, action: dict[str, Any]) -> bool:
+        action_type = str(action.get("type") or "")
+        if action_type not in {"place_market_order", "place_limit_order", "place_twap_order"}:
+            return False
+        return self._to_bool(action.get("reduce_only"), False)
+
+    def _resolve_order_value_usd(
+        self,
+        *,
+        action: dict[str, Any],
+        market: dict[str, Any] | None,
+    ) -> float:
+        quantity = self._to_float(action.get("quantity"), 0.0)
+        if quantity > 0:
+            reference_price = self._to_float(action.get("price"), 0.0)
+            if reference_price <= 0 and isinstance(market, dict):
+                reference_price = self._to_float(market.get("mark_price"), 0.0)
+            if reference_price <= 0:
+                return 0.0
+            return quantity * reference_price
+        size_usd = self._to_float(action.get("size_usd"), 0.0)
+        if size_usd <= 0:
+            return 0.0
+        return size_usd
 
     def _is_take_profit_order(self, order: dict[str, Any]) -> bool:
         if not self._to_bool(order.get("reduce_only"), False):
