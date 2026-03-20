@@ -642,9 +642,13 @@ class PacificaClient:
         params: dict[str, Any] = {
             "symbol": symbol,
             "interval": interval,
+            # The live Pacifica handler currently expects snake_case even though the local
+            # OpenAPI file still documents camelCase for this endpoint.
+            "start_time": start_time,
             "startTime": start_time,
         }
         if end_time is not None:
+            params["end_time"] = end_time
             params["endTime"] = end_time
         response = await self._http.get(
             f"{self.settings.pacifica_rest_url}/kline",

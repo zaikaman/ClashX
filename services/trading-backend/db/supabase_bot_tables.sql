@@ -3,6 +3,7 @@ begin;
 drop table if exists public.bot_leaderboard_snapshots cascade;
 drop table if exists public.bot_clones cascade;
 drop table if exists public.bot_copy_relationships cascade;
+drop table if exists public.bot_backtest_runs cascade;
 drop table if exists public.bot_execution_events cascade;
 drop table if exists public.bot_trade_closures cascade;
 drop table if exists public.bot_trade_lots cascade;
@@ -32,6 +33,35 @@ create index ix_bot_definitions_user_id on public.bot_definitions(user_id);
 create index ix_bot_definitions_wallet_address on public.bot_definitions(wallet_address);
 create index ix_bot_definitions_name on public.bot_definitions(name);
 create index ix_bot_definitions_visibility on public.bot_definitions(visibility);
+
+create table public.bot_backtest_runs (
+  id uuid primary key,
+  bot_definition_id uuid not null references public.bot_definitions(id) on delete cascade,
+  user_id uuid not null references public.users(id) on delete cascade,
+  wallet_address varchar(128) not null,
+  bot_name_snapshot varchar(120) not null,
+  rules_snapshot_json jsonb not null default '{}'::jsonb,
+  interval varchar(8) not null,
+  start_time bigint not null,
+  end_time bigint not null,
+  initial_capital_usd double precision not null default 0,
+  execution_model varchar(64) not null default 'candle_close_v1',
+  pnl_total double precision not null default 0,
+  pnl_total_pct double precision not null default 0,
+  max_drawdown_pct double precision not null default 0,
+  win_rate double precision not null default 0,
+  trade_count integer not null default 0,
+  status varchar(24) not null default 'completed',
+  result_json jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  completed_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+create index ix_bot_backtest_runs_bot_definition_id on public.bot_backtest_runs(bot_definition_id);
+create index ix_bot_backtest_runs_user_id on public.bot_backtest_runs(user_id);
+create index ix_bot_backtest_runs_wallet_address on public.bot_backtest_runs(wallet_address);
+create index ix_bot_backtest_runs_status on public.bot_backtest_runs(status);
+create index ix_bot_backtest_runs_completed_at on public.bot_backtest_runs(completed_at);
 
 create table public.bot_runtimes (
   id uuid primary key,

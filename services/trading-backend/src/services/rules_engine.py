@@ -529,13 +529,21 @@ class RulesEngine:
             if cooldown_seconds <= 0:
                 cooldown_seconds = int(condition.get("minutes") or 0) * 60
             last_executed_at = runtime_state.get("last_executed_at")
+            now_reference = runtime_state.get("now")
+            if isinstance(now_reference, str):
+                try:
+                    now_dt = datetime.fromisoformat(now_reference.replace("Z", "+00:00"))
+                except ValueError:
+                    now_dt = datetime.now(tz=UTC)
+            else:
+                now_dt = datetime.now(tz=UTC)
             if not isinstance(last_executed_at, str):
                 return True, "no last execution, cooldown satisfied"
             try:
                 last_dt = datetime.fromisoformat(last_executed_at.replace("Z", "+00:00"))
             except ValueError:
                 return True, "invalid cooldown timestamp ignored"
-            elapsed = (datetime.now(tz=UTC) - last_dt).total_seconds()
+            elapsed = (now_dt - last_dt).total_seconds()
             return elapsed >= cooldown_seconds, f"cooldown elapsed {int(elapsed)}s / {cooldown_seconds}s"
 
         if condition_type in {"rsi_above", "rsi_below"}:

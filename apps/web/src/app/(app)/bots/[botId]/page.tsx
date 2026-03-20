@@ -183,6 +183,12 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
                 Edit in builder
               </Link>
               <Link
+                href={`/backtests?botId=${encodeURIComponent(params.botId)}`}
+                className="rounded-full border border-[rgba(116,185,127,0.22)] px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#74b97f] transition hover:border-[#74b97f] hover:bg-[#74b97f]/8"
+              >
+                Open backtests
+              </Link>
+              <Link
                 href="/bots"
                 className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#dce85d] hover:text-[#dce85d]"
               >

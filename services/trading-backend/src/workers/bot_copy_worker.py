@@ -10,7 +10,7 @@ from typing import Any
 from src.services.event_broadcaster import broadcaster
 from src.services.pacifica_auth_service import PacificaAuthService
 from src.services.pacifica_client import PacificaClient, PacificaClientError
-from src.services.supabase_rest import SupabaseRestClient
+from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
 from src.services.worker_coordination_service import WorkerCoordinationService
 
 
@@ -59,6 +59,12 @@ class BotCopyWorker:
                         self._coordination.release_lease(lease_key)
                 self.last_iteration_at = datetime.now(tz=UTC).isoformat()
                 self.last_error = None
+            except SupabaseRestError as exc:
+                self.last_error = str(exc)
+                if exc.is_retryable:
+                    logger.warning("Bot copy worker iteration deferred because Supabase is temporarily unavailable: %s", exc)
+                else:
+                    logger.exception("Bot copy worker iteration failed")
             except Exception as exc:
                 self.last_error = str(exc)
                 logger.exception("Bot copy worker iteration failed")

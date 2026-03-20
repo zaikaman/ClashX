@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from html import unescape
+import re
 from typing import Any
 
 import httpx
@@ -13,6 +15,15 @@ class SupabaseRestError(RuntimeError):
         super().__init__(message)
         self.status_code = status_code
         self.response_json = response_json
+
+    @property
+    def is_retryable(self) -> bool:
+        return self.status_code >= 500
+
+
+_HTML_TITLE_RE = re.compile(r"<title>\s*(.*?)\s*</title>", re.IGNORECASE | re.DOTALL)
+_WHITESPACE_RE = re.compile(r"\s+")
+_MAX_ERROR_MESSAGE_LENGTH = 240
 
 
 class SupabaseRestClient:
@@ -139,16 +150,69 @@ class SupabaseRestClient:
         json: Any = None,
         headers: Mapping[str, str] | None = None,
     ) -> httpx.Response:
-        response = self._client.request(method, path, params=params, json=json, headers=headers)
+        try:
+            response = self._client.request(method, path, params=params, json=json, headers=headers)
+        except httpx.RequestError as exc:
+            raise SupabaseRestError(
+                f"Supabase request failed before a response was received: {exc.__class__.__name__}",
+                status_code=503,
+                response_json={"detail": str(exc)},
+            ) from exc
         if response.is_error:
             try:
                 payload = response.json()
             except ValueError:
                 payload = response.text
-            message = payload.get("message") if isinstance(payload, dict) else response.text
             raise SupabaseRestError(
-                message or f"Supabase request failed with status {response.status_code}",
+                self._build_error_message(response=response, payload=payload),
                 status_code=response.status_code,
                 response_json=payload,
             )
         return response
+
+    @classmethod
+    def _build_error_message(cls, *, response: httpx.Response, payload: Any) -> str:
+        prefix = f"Supabase request failed with status {response.status_code}"
+        if isinstance(payload, dict):
+            detail = cls._extract_json_error_detail(payload)
+            return f"{prefix}: {detail}" if detail else prefix
+
+        text = cls._normalize_error_text(payload)
+        if cls._looks_like_html_response(response=response, text=text):
+            title = cls._extract_html_title(text)
+            if title:
+                return f"{prefix}: upstream returned an HTML error page ({title})"
+            return f"{prefix}: upstream returned an HTML error page"
+        return f"{prefix}: {text}" if text else prefix
+
+    @staticmethod
+    def _extract_json_error_detail(payload: Mapping[str, Any]) -> str | None:
+        for key in ("message", "error", "details", "hint", "code"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                detail = SupabaseRestClient._normalize_error_text(value)
+                if detail:
+                    return detail
+        return None
+
+    @staticmethod
+    def _looks_like_html_response(*, response: httpx.Response, text: str) -> bool:
+        content_type = str(response.headers.get("content-type") or "").lower()
+        if "text/html" in content_type:
+            return True
+        return text.startswith("<!doctype html") or text.startswith("<html")
+
+    @staticmethod
+    def _extract_html_title(text: str) -> str | None:
+        match = _HTML_TITLE_RE.search(text)
+        if match is None:
+            return None
+        title = _WHITESPACE_RE.sub(" ", unescape(match.group(1))).strip(" |")
+        return title or None
+
+    @staticmethod
+    def _normalize_error_text(value: Any) -> str:
+        text = _WHITESPACE_RE.sub(" ", str(value or "")).strip()
+        if len(text) <= _MAX_ERROR_MESSAGE_LENGTH:
+            return text
+        return f"{text[:_MAX_ERROR_MESSAGE_LENGTH - 3].rstrip()}..."

@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.auth import router as auth_router
+from src.api.backtests import router as backtests_router
 from src.api.bot_copy import router as bot_copy_router
 from src.api.bots import router as bots_router
 from src.api.builder import router as builder_router
@@ -50,6 +51,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(auth_router)
+    app.include_router(backtests_router)
     app.include_router(bot_copy_router)
     app.include_router(bots_router)
     app.include_router(builder_router)

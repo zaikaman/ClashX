@@ -158,7 +158,7 @@ def test_normalize_payload_adds_user_alias_and_preserves_tick_level() -> None:
     assert normalized["tick_level"] == 200000
 
 
-def test_get_kline_uses_camel_case_query_params() -> None:
+def test_get_kline_sends_snake_case_and_legacy_camel_case_query_params() -> None:
     client = object.__new__(PacificaClient)
     client.settings = SimpleNamespace(pacifica_rest_url="https://pacifica.test")
     client._http = _FakeHttpClient()
@@ -176,7 +176,9 @@ def test_get_kline_uses_camel_case_query_params() -> None:
     assert client._http.calls[0]["params"] == {
         "symbol": "BTC",
         "interval": "15m",
+        "start_time": 1_000,
         "startTime": 1_000,
+        "end_time": 2_000,
         "endTime": 2_000,
     }
     assert candles[0]["trade_count"] == 7
