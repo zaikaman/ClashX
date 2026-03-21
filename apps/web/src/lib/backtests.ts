@@ -110,3 +110,16 @@ export type BacktestRunRequestPayload = {
   end_time: number;
   initial_capital_usd: number;
 };
+
+export type BacktestsBootstrapPayload = {
+  bots: Array<{
+    id: string;
+    name: string;
+    description: string;
+    strategy_type: string;
+    market_scope: string;
+    updated_at: string;
+  }>;
+  runs: BacktestRunSummary[];
+  active_run: BacktestRunDetail | null;
+};

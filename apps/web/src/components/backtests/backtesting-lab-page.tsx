@@ -1,13 +1,18 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { ArrowUpRight, FlaskConical, History, LoaderCircle, Play, RefreshCcw } from "lucide-react";
 
-import { BacktestChart } from "@/components/backtests/backtest-chart";
 import { useClashxAuth } from "@/lib/clashx-auth";
-import type { BacktestRunDetail, BacktestRunRequestPayload, BacktestRunSummary } from "@/lib/backtests";
+import type {
+  BacktestRunDetail,
+  BacktestRunRequestPayload,
+  BacktestRunSummary,
+  BacktestsBootstrapPayload,
+} from "@/lib/backtests";
 
 type SavedBot = {
   id: string;
@@ -28,6 +33,13 @@ const DATE_PRESETS = [
   { id: "90d", label: "90D", days: 90 },
   { id: "custom", label: "Custom", days: 0 },
 ] as const;
+const BacktestChart = dynamic(
+  () => import("@/components/backtests/backtest-chart").then((mod) => mod.BacktestChart),
+  {
+    ssr: false,
+    loading: () => <ChartPanelSkeleton />,
+  },
+);
 
 function presetRange(days: number) {
   const end = new Date();
@@ -106,6 +118,7 @@ export function BacktestingLabPage() {
     }
 
     let cancelled = false;
+    const controller = new AbortController();
 
     async function loadInitialState() {
       setLoading(true);
@@ -116,69 +129,33 @@ export function BacktestingLabPage() {
         if (!resolvedWallet) return;
         const headers = await getAuthHeaders();
         const walletQuery = encodeURIComponent(resolvedWallet);
-        const [botsResponse, runsResponse] = await Promise.all([
-          fetch(`${API_BASE_URL}/api/bots?wallet_address=${walletQuery}`, {
-            cache: "no-store",
-            headers,
-          }),
-          fetch(`${API_BASE_URL}/api/backtests/runs?wallet_address=${walletQuery}`, {
-            cache: "no-store",
-            headers,
-          }),
-        ]);
-
-        const [botsPayload, runsPayload] = await Promise.all([botsResponse.json(), runsResponse.json()]);
-        if (!botsResponse.ok) {
-          throw new Error(("detail" in botsPayload ? botsPayload.detail : null) ?? "Could not load saved bots.");
-        }
-        if (!runsResponse.ok) {
-          throw new Error(("detail" in runsPayload ? runsPayload.detail : null) ?? "Could not load backtest history.");
+        const response = await fetch(`${API_BASE_URL}/api/backtests/bootstrap?wallet_address=${walletQuery}`, {
+          cache: "no-store",
+          headers,
+          signal: controller.signal,
+        });
+        const payload = (await response.json()) as BacktestsBootstrapPayload | { detail?: string };
+        if (!response.ok) {
+          throw new Error(("detail" in payload ? payload.detail : null) ?? "Could not load the backtesting lab.");
         }
 
         if (cancelled) return;
-        const nextBots = botsPayload as SavedBot[];
-        const nextRuns = runsPayload as BacktestRunSummary[];
-        const initialRunId = nextRuns[0]?.id ?? null;
-        let initialRunCache: Record<string, BacktestRunDetail> = {};
-        let initialHistoryMessage: string | null = null;
-
-        if (initialRunId) {
-          try {
-            const runResponse = await fetch(
-              `${API_BASE_URL}/api/backtests/runs/${encodeURIComponent(initialRunId)}?wallet_address=${walletQuery}`,
-              {
-                cache: "no-store",
-                headers,
-              },
-            );
-            const runPayload = (await runResponse.json()) as BacktestRunDetail | { detail?: string };
-            if (!runResponse.ok) {
-              throw new Error(
-                "detail" in runPayload
-                  ? runPayload.detail ?? "Could not load the latest backtest."
-                  : "Could not load the latest backtest.",
-              );
-            }
-            initialRunCache = { [initialRunId]: runPayload as BacktestRunDetail };
-          } catch (error) {
-            initialHistoryMessage =
-              error instanceof Error ? error.message : "Could not load the latest backtest.";
-          }
-        }
-
-        if (cancelled) return;
+        const bootstrap = payload as BacktestsBootstrapPayload;
+        const nextBots = bootstrap.bots as SavedBot[];
+        const nextRuns = bootstrap.runs;
+        const activeRun = bootstrap.active_run;
         setBots(nextBots);
         setRuns(nextRuns);
-        setRunCache(initialRunCache);
-        setHistoryError(initialHistoryMessage);
+        setRunCache(activeRun ? { [activeRun.id]: activeRun } : {});
+        setHistoryError(null);
         const preferredBotId =
           queryBotId && nextBots.some((bot) => bot.id === queryBotId)
             ? queryBotId
             : nextBots[0]?.id ?? "";
         setSelectedBotId((current) => current || preferredBotId);
-        setActiveRunId((current) => current ?? initialRunId);
+        setActiveRunId((current) => current ?? activeRun?.id ?? nextRuns[0]?.id ?? null);
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
           setPageError(error instanceof Error ? error.message : "Could not load the backtesting lab.");
         }
       } finally {
@@ -191,6 +168,7 @@ export function BacktestingLabPage() {
     void loadInitialState();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [authenticated, getAuthHeaders, queryBotId, walletAddress]);
 
@@ -199,6 +177,7 @@ export function BacktestingLabPage() {
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
     async function loadRunDetail(runId: string) {
       try {
         const resolvedWallet = walletAddress;
@@ -209,6 +188,7 @@ export function BacktestingLabPage() {
           {
             cache: "no-store",
             headers,
+            signal: controller.signal,
           },
         );
         const payload = (await response.json()) as BacktestRunDetail | { detail?: string };
@@ -218,7 +198,7 @@ export function BacktestingLabPage() {
         if (cancelled) return;
         setRunCache((current) => ({ ...current, [runId]: payload as BacktestRunDetail }));
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
           setHistoryError(error instanceof Error ? error.message : "Could not load backtest run.");
         }
       }
@@ -226,6 +206,7 @@ export function BacktestingLabPage() {
     void loadRunDetail(activeRunId);
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [activeRunId, authenticated, getAuthHeaders, runCache, walletAddress]);
 
@@ -238,6 +219,7 @@ export function BacktestingLabPage() {
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
     async function loadCompareRuns() {
       try {
         const resolvedWallet = walletAddress;
@@ -250,6 +232,7 @@ export function BacktestingLabPage() {
               {
                 cache: "no-store",
                 headers,
+                signal: controller.signal,
               },
             );
             const payload = (await response.json()) as BacktestRunDetail | { detail?: string };
@@ -268,7 +251,7 @@ export function BacktestingLabPage() {
           return next;
         });
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
           setHistoryError(error instanceof Error ? error.message : "Could not load compare runs.");
         }
       }
@@ -276,6 +259,7 @@ export function BacktestingLabPage() {
     void loadCompareRuns();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [authenticated, compareIds, getAuthHeaders, runCache, walletAddress]);
 
@@ -970,4 +954,8 @@ function BacktestingLabSkeleton() {
       </section>
     </main>
   );
+}
+
+function ChartPanelSkeleton() {
+  return <div className="skeleton min-h-[26rem] w-full rounded-[2rem]" />;
 }

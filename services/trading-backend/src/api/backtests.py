@@ -8,10 +8,12 @@ from typing import Any as Session
 
 from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authenticated_user
 from src.db.session import get_db
+from src.services.bot_builder_service import BotBuilderService
 from src.services.bot_backtest_service import BotBacktestService
 
 router = APIRouter(prefix="/api/backtests", tags=["backtests"])
 bot_backtest_service = BotBacktestService()
+bot_builder_service = BotBuilderService()
 
 
 class BacktestRunRequest(BaseModel):
@@ -48,6 +50,21 @@ class BacktestRunDetailResponse(BacktestRunSummaryResponse):
     wallet_address: str
     rules_snapshot_json: dict[str, Any]
     result_json: dict[str, Any]
+
+
+class BacktestBotOptionResponse(BaseModel):
+    id: str
+    name: str
+    description: str
+    strategy_type: str
+    market_scope: str
+    updated_at: str
+
+
+class BacktestsBootstrapResponse(BaseModel):
+    bots: list[BacktestBotOptionResponse]
+    runs: list[BacktestRunSummaryResponse]
+    active_run: BacktestRunDetailResponse | None = None
 
 
 def _resolve_wallet(user: AuthenticatedUser, wallet_address: str | None) -> str:
@@ -98,6 +115,41 @@ def list_backtest_runs(
             bot_id=bot_id,
         )
     ]
+
+
+@router.get("/bootstrap", response_model=BacktestsBootstrapResponse)
+def get_backtests_bootstrap(
+    wallet_address: str | None = Query(default=None, min_length=8),
+    bot_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> BacktestsBootstrapResponse:
+    resolved_wallet = _resolve_wallet(user, wallet_address)
+    bots = bot_builder_service.list_bots(db, wallet_address=resolved_wallet)
+    runs = bot_backtest_service.list_runs(
+        db,
+        wallet_address=resolved_wallet,
+        user_id=user.user_id,
+        bot_id=bot_id,
+    )
+    active_run = None
+    if runs:
+        try:
+            active_run = bot_backtest_service.get_run(
+                db,
+                run_id=str(runs[0]["id"]),
+                wallet_address=resolved_wallet,
+                user_id=user.user_id,
+            )
+        except ValueError:
+            active_run = None
+    return BacktestsBootstrapResponse.model_validate(
+        {
+            "bots": bots,
+            "runs": runs,
+            "active_run": active_run,
+        }
+    )
 
 
 @router.get("/runs/{run_id}", response_model=BacktestRunDetailResponse)
