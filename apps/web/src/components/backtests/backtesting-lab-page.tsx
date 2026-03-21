@@ -432,13 +432,13 @@ export function BacktestingLabPage() {
                 Pick a saved bot, set the replay window, and launch a synchronous historical run against Pacifica candle data.
               </p>
             </div>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-              <label className="grid gap-1.5 text-sm text-neutral-400 xl:col-span-2">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+              <label className="grid min-w-0 gap-1.5 text-sm text-neutral-400 xl:col-span-2">
                 Saved bot
                 <select
                   value={selectedBotId}
                   onChange={(event) => setSelectedBotId(event.target.value)}
-                  className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3.5 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]"
+                  className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3.5 py-3 text-sm text-neutral-50 outline-none transition w-full focus:border-[#dce85d]"
                 >
                   <option value="">Choose a bot</option>
                   {bots.map((bot) => (
@@ -448,12 +448,12 @@ export function BacktestingLabPage() {
                   ))}
                 </select>
               </label>
-              <label className="grid gap-1.5 text-sm text-neutral-400">
+              <label className="grid min-w-0 gap-1.5 text-sm text-neutral-400">
                 Interval
                 <select
                   value={interval}
                   onChange={(event) => setInterval(event.target.value as (typeof INTERVAL_OPTIONS)[number])}
-                  className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3.5 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]"
+                  className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3.5 py-3 text-sm text-neutral-50 outline-none transition w-full focus:border-[#dce85d]"
                 >
                   {INTERVAL_OPTIONS.map((value) => (
                     <option key={value} value={value}>
@@ -462,16 +462,16 @@ export function BacktestingLabPage() {
                   ))}
                 </select>
               </label>
-              <label className="grid gap-1.5 text-sm text-neutral-400">
+              <label className="grid min-w-0 gap-1.5 text-sm text-neutral-400">
                 Initial capital
                 <input
                   value={initialCapitalUsd}
                   onChange={(event) => setInitialCapitalUsd(event.target.value)}
                   inputMode="decimal"
-                  className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3.5 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]"
+                  className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3.5 py-3 text-sm text-neutral-50 outline-none transition w-full focus:border-[#dce85d]"
                 />
               </label>
-              <div className="grid gap-1.5 text-sm text-neutral-400">
+              <div className="grid gap-1.5 text-sm text-neutral-400 xl:col-span-2">
                 Range
                 <div className="flex flex-wrap gap-2">
                   {DATE_PRESETS.map((preset) => (
@@ -492,7 +492,7 @@ export function BacktestingLabPage() {
               </div>
             </div>
             <div className="grid gap-4 md:grid-cols-2">
-              <label className="grid gap-1.5 text-sm text-neutral-400">
+              <label className="grid min-w-0 gap-1.5 text-sm text-neutral-400">
                 Start date
                 <input
                   type="date"
@@ -501,10 +501,10 @@ export function BacktestingLabPage() {
                     setDatePreset("custom");
                     setStartDate(event.target.value);
                   }}
-                  className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3.5 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]"
+                  className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3.5 py-3 text-sm text-neutral-50 outline-none transition w-full focus:border-[#dce85d]"
                 />
               </label>
-              <label className="grid gap-1.5 text-sm text-neutral-400">
+              <label className="grid min-w-0 gap-1.5 text-sm text-neutral-400">
                 End date
                 <input
                   type="date"
@@ -513,7 +513,7 @@ export function BacktestingLabPage() {
                     setDatePreset("custom");
                     setEndDate(event.target.value);
                   }}
-                  className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3.5 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]"
+                  className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3.5 py-3 text-sm text-neutral-50 outline-none transition w-full focus:border-[#dce85d]"
                 />
               </label>
             </div>
