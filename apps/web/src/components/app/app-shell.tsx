@@ -11,6 +11,7 @@ import {
 import { clsx } from "clsx";
 
 import { PrivyAuthButton } from "@/components/auth/privy-auth-button";
+import { ClashXLogo } from "@/components/clashx-logo";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
@@ -30,10 +31,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="w-64 h-full flex-shrink-0 border-r border-[rgba(255,255,255,0.06)] bg-secondary flex flex-col">
       {/* Logo Area */}
       <div className="h-16 p-4 border-b border-[rgba(255,255,255,0.06)] flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-2 group">
-          <span className="text-xl font-semibold text-neutral-50 mb-[2px]">
-            ClashX
-          </span>
+        <Link href="/" className="flex items-center gap-2.5 group">
+          <ClashXLogo className="w-7 h-7 text-neutral-50 group-hover:rotate-12 transition-transform duration-300" />
+          <div className="flex items-baseline font-black tracking-tighter text-xl uppercase mb-[2px]">
+            <span className="text-neutral-50">Clash</span>
+            <span className="text-[#dce85d] ml-[1px]">X</span>
+          </div>
         </Link>
         <button
           onClick={() => setIsMobileSidebarOpen(false)}

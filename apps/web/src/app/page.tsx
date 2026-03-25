@@ -10,6 +10,8 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
+import { ClashXLogo } from '@/components/clashx-logo';
+
 const LandingHeader = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -59,8 +61,12 @@ const LandingHeader = () => {
         }}
       >
         <div className="flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <span className="text-white text-lg font-semibold">ClashX</span>
+          <Link href="/" className="flex items-center gap-2 group">
+            <ClashXLogo className="w-6 h-6 text-white group-hover:scale-105 transition-transform duration-300" />
+            <div className="flex items-baseline font-black tracking-tighter text-lg uppercase">
+              <span className="text-white">Clash</span>
+              <span className="text-[#dce85d] ml-[1px]">X</span>
+            </div>
           </Link>
 
           <nav className="hidden md:flex items-center gap-1 text-sm font-medium text-white/60">
