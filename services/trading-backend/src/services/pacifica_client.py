@@ -144,18 +144,6 @@ class PacificaClient:
         if self.settings.pacifica_builder_code and self._uses_builder_code(request_type):
             payload["builder_code"] = self.settings.pacifica_builder_code
 
-        if account and request_type in {
-            "cancel_all_orders",
-            "cancel_order",
-            "cancel_twap_order",
-            "create_market_order",
-            "create_order",
-            "create_twap_order",
-            "set_position_tpsl",
-            "update_leverage",
-        }:
-            payload.setdefault("user", account)
-
         for key in ("amount", "price", "slippage_percent", "shares"):
             if key in payload:
                 payload[key] = str(payload[key])

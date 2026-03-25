@@ -761,7 +761,7 @@ class BotRuntimeWorker:
                     "tif": str(action.get("tif") or "GTC"),
                     "reduce_only": reduce_only,
                     "client_order_id": client_order_id,
-                    **limit_order_fields,
+                    "price": normalized_price,
                 }
             )
             response_payload = response.get("payload") if isinstance(response.get("payload"), dict) else {}
@@ -1032,7 +1032,7 @@ class BotRuntimeWorker:
                     "tif": str(action.get("tif") or "GTC"),
                     "reduce_only": reduce_only,
                     "client_order_id": client_order_id,
-                    **limit_order_fields,
+                    "price": normalized_price,
                 },
                 {
                     "symbol": symbol,

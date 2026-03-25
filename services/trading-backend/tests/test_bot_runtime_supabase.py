@@ -638,7 +638,7 @@ def test_runtime_worker_executes_limit_order_action_directly() -> None:
     assert [order["type"] for order in fake_pacifica.orders] == ["update_leverage", "create_order"]
     assert fake_pacifica.orders[1]["price"] == 100000
     assert fake_pacifica.orders[1]["side"] == "bid"
-    assert fake_pacifica.orders[1]["tick_level"] == 200000
+    assert "tick_level" not in fake_pacifica.orders[1]
 
 
 def test_runtime_worker_rejects_leverage_above_market_max() -> None:

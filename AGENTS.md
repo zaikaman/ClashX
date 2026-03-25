@@ -1,4 +1,4 @@
-Never dump raw huge output directly.
 - When working on UI tasks, please take a look at the .agents/skills/frontend-design/SKILL.md, it's a necessity. Also make sure your UI is consistent with the overall web design. One more important thing, do not write content on the UI like you're reporting to me, write it naturally like you're making a normal product, you know, product copy instead of internal notes.
 - When working with the pacifica api, it's recommend that you look at the pacifica.yaml file and python-sdk folder for the necessary docs and information, remember these are only for docs, do not change or edit anything in them.
 - Next.js is only being used as the frontend app, routing, rendering, browser-side fetches, the backend layer is using FastAPI.
+- You can answer to me in Vietnamese and English, but always write your code and content in English.

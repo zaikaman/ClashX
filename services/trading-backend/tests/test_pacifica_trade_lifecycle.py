@@ -514,7 +514,8 @@ def test_trading_service_limit_order_includes_tick_level() -> None:
 
     assert pacifica.order_calls[0]["type"] == "update_leverage"
     assert pacifica.order_calls[1]["type"] == "create_order"
-    assert pacifica.order_calls[1]["tick_level"] == 200000
+    assert pacifica.order_calls[1]["price"] == 100000.0
+    assert "tick_level" not in pacifica.order_calls[1]
 
 
 def test_trading_service_cancel_order_enriches_payload_with_open_order_metadata() -> None:

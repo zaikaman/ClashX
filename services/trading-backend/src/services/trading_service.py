@@ -123,19 +123,19 @@ class TradingService:
             "side": self._to_pacifica_side(side),
             "amount": quantity,
             "reduce_only": reduce_only,
-            "slippage_percent": slippage_percent,
             "type": "create_order" if order_type == "limit" else "create_market_order",
         }
         if order_type == "limit":
-            payload.update(
-                self._build_limit_order_price_fields(
-                    symbol=normalized_symbol,
-                    side=side,
-                    price=float(limit_price or 0),
-                    market=market,
-                )
+            limit_order_fields = self._build_limit_order_price_fields(
+                symbol=normalized_symbol,
+                side=side,
+                price=float(limit_price or 0),
+                market=market,
             )
+            payload["price"] = limit_order_fields["price"]
             payload["tif"] = tif
+        else:
+            payload["slippage_percent"] = slippage_percent
         response = await self.pacifica.place_order(payload)
         user = self._upsert_user(db, wallet_address)
         self._record_audit_event(db, user_id=user["id"], action="trading.order.submitted", payload={"symbol": normalized_symbol, "side": side, "order_type": order_type, "quantity": quantity, "size_usd": size_usd, "limit_price": limit_price, "reduce_only": reduce_only, "leverage": leverage, "request_id": response["request_id"]})
@@ -275,8 +275,6 @@ class TradingService:
         normalized_price = self._normalize_price_to_tick(price, tick_size=tick_size, rounding=rounding)
         fields: dict[str, Any] = {"price": normalized_price}
         tick_level = self._price_to_tick_level(normalized_price, tick_size=tick_size)
-        if tick_level is not None:
-            fields["tick_level"] = tick_level
         return fields
 
     def _build_cancel_order_request_fields(

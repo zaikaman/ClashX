@@ -136,7 +136,7 @@ async def _noop_throttle(**_: Any) -> None:
     return None
 
 
-def test_normalize_payload_adds_user_alias_and_preserves_tick_level() -> None:
+def test_normalize_payload_preserves_tick_level_without_injecting_user_alias() -> None:
     client = object.__new__(PacificaClient)
     client.settings = SimpleNamespace(pacifica_builder_code="")
 
@@ -154,7 +154,7 @@ def test_normalize_payload_adds_user_alias_and_preserves_tick_level() -> None:
         account="wallet-1",
     )
 
-    assert normalized["user"] == "wallet-1"
+    assert "user" not in normalized
     assert normalized["tick_level"] == 200000
 
 
