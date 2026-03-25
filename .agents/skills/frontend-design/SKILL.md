@@ -103,7 +103,10 @@ Make interactions feel fast. Use optimistic UI—update immediately, sync later.
 → *Consult [ux-writing reference](reference/ux-writing.md) for labels, errors, and empty states.*
 
 **DO**: Make every word earn its place
+**DO**: Write UI copy like product copy, not like implementation notes or assistant commentary
 **DON'T**: Repeat information users can already see
+**DON'T**: Add helper text that explains how the component works unless that information is necessary to complete the task
+**DON'T**: Use meta copy such as "this will", "the app will", "you are choosing", or copy that narrates the interface itself
 
 ---
 

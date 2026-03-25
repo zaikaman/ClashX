@@ -23,7 +23,12 @@ export function ClashxPrivyProvider({
           theme: "dark",
           accentColor: "#ea4c1d",
         },
-        externalWallets: { solana: { connectors: toSolanaWalletConnectors() } },
+        externalWallets: {
+          solana: {
+            // Avoid eager account restoration while wallets like Solflare are still locked.
+            connectors: toSolanaWalletConnectors({ shouldAutoConnect: false }),
+          },
+        },
       }}
     >
       {children}
