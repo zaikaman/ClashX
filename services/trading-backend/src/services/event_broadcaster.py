@@ -24,10 +24,12 @@ class EventBroadcaster:
 
     async def publish(self, channel: str, event: str, payload: dict[str, Any]) -> None:
         message = format_sse(event=event, data=payload)
-        for queue in list(self._channels.get(channel, set())):
-            if queue.full():
+        for queue in tuple(self._channels.get(channel, set())):
+            try:
+                queue.put_nowait(message)
+            except asyncio.QueueFull:
+                # Drop when a subscriber is slow to preserve broadcaster throughput.
                 continue
-            await queue.put(message)
 
 
 async def queue_to_stream(queue: asyncio.Queue[str]) -> AsyncIterator[str]:

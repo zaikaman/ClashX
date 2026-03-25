@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import json
 import logging
-from copy import deepcopy
 from dataclasses import dataclass
 from time import time
 from typing import Any
@@ -66,8 +65,10 @@ class PacificaMarketDataService:
             self._ws_task = None
 
     async def get_markets(self, *, force_refresh: bool = False) -> list[dict[str, Any]]:
-        market_info = await self._get_market_info(force_refresh=force_refresh)
-        prices = await self._get_price_rows(force_refresh=force_refresh)
+        market_info, prices = await asyncio.gather(
+            self._get_market_info(force_refresh=force_refresh),
+            self._get_price_rows(force_refresh=force_refresh),
+        )
         return self._merge_market_rows(market_info, prices)
 
     async def get_price_lookup(self) -> dict[str, float]:
@@ -86,7 +87,8 @@ class PacificaMarketDataService:
         if not requests:
             return {}
         resolved_end_time = int(time() * 1_000)
-        lookup: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        normalized_requests: list[tuple[str, str, int, int]] = []
+        required_lookbacks: dict[tuple[str, str, int], int] = {}
         for request in requests:
             symbol = str(request.get("symbol") or "").upper().replace("-PERP", "").strip()
             timeframe = str(request.get("timeframe") or "").strip().lower()
@@ -95,44 +97,69 @@ class PacificaMarketDataService:
             if not symbol or timeframe_ms is None:
                 continue
             boundary_end = (resolved_end_time // timeframe_ms) * timeframe_ms
+            normalized_requests.append((symbol, timeframe, lookback, boundary_end))
+            dedupe_key = (symbol, timeframe, boundary_end)
+            required_lookbacks[dedupe_key] = max(required_lookbacks.get(dedupe_key, 0), lookback)
+
+        pending_fetches: list[tuple[tuple[str, str], int, int, asyncio.Task[list[dict[str, Any]]]]] = []
+        for (symbol, timeframe, boundary_end), lookback in required_lookbacks.items():
             cache_key = (symbol, timeframe)
             cached = self._candle_cache.get(cache_key)
-            if cached is None or cached.boundary_end != boundary_end or cached.lookback < lookback:
-                start_time = boundary_end - timeframe_ms * lookback
-                candles = await self._load_candles(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    start_time=start_time,
-                    end_time=boundary_end,
+            if cached is not None and cached.boundary_end == boundary_end and cached.lookback >= lookback:
+                continue
+            timeframe_ms = TIMEFRAME_TO_MS[timeframe]
+            start_time = boundary_end - timeframe_ms * lookback
+            pending_fetches.append(
+                (
+                    cache_key,
+                    lookback,
+                    boundary_end,
+                    asyncio.create_task(
+                        self._load_candles(
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            start_time=start_time,
+                            end_time=boundary_end,
+                        )
+                    ),
                 )
-                async with self._candle_lock:
+            )
+
+        if pending_fetches:
+            resolved_candles = await asyncio.gather(*(task for _, _, _, task in pending_fetches))
+            async with self._candle_lock:
+                for (cache_key, lookback, boundary_end, _), candles in zip(pending_fetches, resolved_candles, strict=False):
                     self._candle_cache[cache_key] = _CandleCacheEntry(
                         candles=candles,
                         lookback=lookback,
                         boundary_end=boundary_end,
                     )
-                cached = self._candle_cache.get(cache_key)
+
+        lookup: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        for symbol, timeframe, lookback, _ in normalized_requests:
+            cached = self._candle_cache.get((symbol, timeframe))
             if cached is None:
                 continue
-            lookup.setdefault(symbol, {})[timeframe] = deepcopy(cached.candles)
+            candle_window = cached.candles[-lookback:] if len(cached.candles) > lookback else cached.candles
+            lookup.setdefault(symbol, {})[timeframe] = self._clone_candles(candle_window)
         return lookup
 
     async def _get_market_info(self, *, force_refresh: bool = False) -> list[dict[str, Any]]:
         ttl = self._settings.pacifica_market_cache_ttl_seconds
         if not force_refresh and self._market_info_cache and (time() - self._market_info_updated_at) < ttl:
-            return deepcopy(self._market_info_cache)
+            return self._clone_rows(self._market_info_cache)
         async with self._market_lock:
             if not force_refresh and self._market_info_cache and (time() - self._market_info_updated_at) < ttl:
-                return deepcopy(self._market_info_cache)
+                return self._clone_rows(self._market_info_cache)
             rows = await self._pacifica.get_market_info()
             self._market_info_cache = rows
             self._market_info_updated_at = time()
-            return deepcopy(rows)
+            return self._clone_rows(rows)
 
     async def _get_price_rows(self, *, force_refresh: bool = False) -> dict[str, dict[str, Any]]:
         ws_stale = (time() - self._ws_price_updated_at) >= self._settings.pacifica_price_cache_ttl_seconds
         if not force_refresh and self._ws_price_cache and not ws_stale:
-            return deepcopy(self._ws_price_cache)
+            return self._clone_price_rows(self._ws_price_cache)
         async with self._price_lock:
             rest_stale = (time() - self._rest_price_updated_at) >= self._settings.pacifica_price_cache_ttl_seconds
             if force_refresh or not self._rest_price_cache or rest_stale:
@@ -143,7 +170,7 @@ class PacificaMarketDataService:
                     if str(item.get("symbol") or "").strip()
                 }
                 self._rest_price_updated_at = time()
-        return deepcopy(self._ws_price_cache or self._rest_price_cache)
+        return self._clone_price_rows(self._ws_price_cache or self._rest_price_cache)
 
     async def _load_candles(
         self,
@@ -308,6 +335,18 @@ class PacificaMarketDataService:
             if normalized in {"false", "0", "no", "n"}:
                 return False
         return bool(value)
+
+    @staticmethod
+    def _clone_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [dict(item) for item in rows]
+
+    @staticmethod
+    def _clone_price_rows(rows: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        return {symbol: dict(item) for symbol, item in rows.items()}
+
+    @staticmethod
+    def _clone_candles(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [dict(candle) for candle in candles]
 
 
 _market_data_service: PacificaMarketDataService | None = None

@@ -640,14 +640,18 @@ export function BuilderGraphStudio({
   }, [onWalletAddressChange, walletAddress]);
 
   useEffect(() => {
+    const controller = new AbortController();
+
     void (async () => {
       const [templatesResponse, marketsResponse] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/builder/templates`, { cache: "no-store" }),
-        fetch(`${API_BASE_URL}/api/builder/markets`, { cache: "no-store" }),
+        fetch(`${API_BASE_URL}/api/builder/templates`, { signal: controller.signal }),
+        fetch(`${API_BASE_URL}/api/builder/markets`, { signal: controller.signal }),
       ]);
       if (templatesResponse.ok) setCatalogTemplates((await templatesResponse.json()) as BuilderCatalogTemplate[]);
       if (marketsResponse.ok) setMarkets((await marketsResponse.json()) as BuilderMarket[]);
     })();
+
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {

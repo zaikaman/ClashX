@@ -271,15 +271,12 @@ const Home = () => {
     if ((window as any).UnicornStudio) {
       initUnicorn();
     } else {
-      // Wait for script to load
-      const checkLoaded = setInterval(() => {
-        if ((window as any).UnicornStudio) {
-          clearInterval(checkLoaded);
-          initUnicorn();
-        }
-      }, 50);
-
-      return () => clearInterval(checkLoaded);
+      const unicornScript = document.querySelector<HTMLScriptElement>('script[src="/unicornStudio.umd.js"]');
+      if (!unicornScript) {
+        return;
+      }
+      unicornScript.addEventListener('load', initUnicorn, { once: true });
+      return () => unicornScript.removeEventListener('load', initUnicorn);
     }
   }, []);
 

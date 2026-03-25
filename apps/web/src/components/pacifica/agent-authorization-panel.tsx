@@ -7,6 +7,8 @@ import { encodeBase58 } from "@/lib/base58";
 import { useClashxAuth } from "@/lib/clashx-auth";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const PROVIDER_POLL_VISIBLE_MS = 4_000;
+const PROVIDER_POLL_HIDDEN_MS = 15_000;
 
 type SigningDraft = {
   type: string;
@@ -114,12 +116,23 @@ export function AgentAuthorizationPanel() {
       setConnectedWallet(provider?.publicKey?.toString() ?? null);
     };
 
+    let intervalId = 0;
+    const startPolling = () => {
+      window.clearInterval(intervalId);
+      const pollMs = document.visibilityState === "visible" ? PROVIDER_POLL_VISIBLE_MS : PROVIDER_POLL_HIDDEN_MS;
+      intervalId = window.setInterval(refreshProviderState, pollMs);
+    };
+
     refreshProviderState();
-    const interval = window.setInterval(refreshProviderState, 1000);
+    startPolling();
     window.addEventListener("focus", refreshProviderState);
+    window.addEventListener("online", refreshProviderState);
+    document.addEventListener("visibilitychange", startPolling);
     return () => {
-      window.clearInterval(interval);
+      window.clearInterval(intervalId);
       window.removeEventListener("focus", refreshProviderState);
+      window.removeEventListener("online", refreshProviderState);
+      document.removeEventListener("visibilitychange", startPolling);
     };
   }, []);
 
