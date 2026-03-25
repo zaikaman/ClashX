@@ -135,6 +135,16 @@ class PacificaClient:
         }
         payload = {key: value for key, value in order_payload.items() if key not in ignored_keys and value is not None}
 
+        if request_type == "cancel_order":
+            # Pacifica cancel signatures are computed from symbol + order identifier fields.
+            # Extra fields (for example side/tick_level hints) can cause signature verification
+            # failures when the server canonicalizes cancel payloads before verification.
+            payload = {
+                key: value
+                for key, value in payload.items()
+                if key in {"symbol", "order_id", "client_order_id"}
+            }
+
         if request_type in {"create_market_order", "create_order", "create_twap_order"}:
             payload.setdefault("reduce_only", False)
             payload.setdefault("client_order_id", str(uuid.uuid4()))

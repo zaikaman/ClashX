@@ -123,6 +123,31 @@ async def _wait_for_open_order(
         await asyncio.sleep(interval_seconds)
 
 
+async def _wait_for_new_open_order(
+    service: TradingService,
+    wallet_address: str,
+    symbol: str,
+    *,
+    existing_order_ids: set[int],
+    timeout_seconds: float = 30.0,
+    interval_seconds: float = 1.0,
+) -> dict[str, Any]:
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    normalized_symbol = _normalize_symbol(symbol)
+    while True:
+        orders = await service.pacifica.get_open_orders(wallet_address)
+        for item in orders:
+            if _normalize_symbol(str(item.get("symbol") or "")) != normalized_symbol:
+                continue
+            order_id = int(item.get("order_id") or 0)
+            if order_id <= 0 or order_id in existing_order_ids:
+                continue
+            return item
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError(f"Timed out waiting for a new open order on {normalized_symbol}")
+        await asyncio.sleep(interval_seconds)
+
+
 async def _close_existing_position_if_any(service: TradingService, wallet_address: str, symbol: str) -> None:
     positions = await service.pacifica.get_positions(wallet_address)
     position = next(
@@ -228,6 +253,85 @@ async def _live_limit_ioc_submission() -> None:
     assert matching_positions == []
 
 
+async def _live_limit_submit_and_cancel() -> None:
+    settings = get_settings()
+    service = TradingService()
+    service.market_data = PacificaMarketDataService(service.pacifica)
+    service.snapshot_cache = TradingSnapshotCacheService()
+    wallet_address = settings.pacifica_account_address
+    market = await _pick_market(service)
+    symbol = _normalize_symbol(str(market.get("symbol") or market.get("display_symbol") or ""))
+    mark_price = float(market.get("mark_price") or 0)
+    tick_size = float(market.get("tick_size") or 0)
+    lot_size = float(market.get("lot_size") or 0) or 1.0
+
+    existing_orders = await service.pacifica.get_open_orders(wallet_address)
+    existing_order_ids = {
+        int(item.get("order_id") or 0)
+        for item in existing_orders
+        if _normalize_symbol(str(item.get("symbol") or "")) == symbol
+    }
+
+    limit_price = max(tick_size or 0.5, mark_price * 0.5)
+    if tick_size > 0:
+        limit_price = math.floor(limit_price / tick_size) * tick_size
+
+    minimum_notional_usd = max(float(market.get("min_order_size") or 0), 10.0)
+    quantity = _round_up_to_step((minimum_notional_usd * 1.2) / max(limit_price, tick_size or 0.000001), lot_size)
+
+    submit_result = await service.place_order(
+        None,
+        wallet_address=wallet_address,
+        symbol=symbol,
+        side="long",
+        order_type="limit",
+        leverage=1,
+        quantity=quantity,
+        limit_price=limit_price,
+        tif="GTC",
+    )
+    assert submit_result["status"] == "submitted"
+
+    new_order = await _wait_for_new_open_order(
+        service,
+        wallet_address,
+        symbol,
+        existing_order_ids=existing_order_ids,
+    )
+    order_id = int(new_order.get("order_id") or 0)
+    assert order_id > 0
+    cancelled = False
+    try:
+        cancel_result = await service.cancel_order(
+            None,
+            wallet_address=wallet_address,
+            symbol=symbol,
+            order_id=str(order_id),
+        )
+        assert cancel_result["status"] == "submitted"
+        cancelled = True
+
+        await _wait_for_open_order(
+            service,
+            wallet_address,
+            symbol,
+            order_id=order_id,
+            expect_present=False,
+        )
+    finally:
+        if cancelled:
+            return
+        try:
+            await service.cancel_order(
+                None,
+                wallet_address=wallet_address,
+                symbol=symbol,
+                order_id=str(order_id),
+            )
+        except Exception:
+            pass
+
+
 def _assert_live_env_ready() -> None:
     settings = get_settings()
     if not settings.pacifica_network.lower().startswith("test"):
@@ -247,3 +351,8 @@ def test_live_market_open_close_roundtrip() -> None:
 def test_live_limit_ioc_submission() -> None:
     _assert_live_env_ready()
     asyncio.run(_live_limit_ioc_submission())
+
+
+def test_live_limit_submit_and_cancel() -> None:
+    _assert_live_env_ready()
+    asyncio.run(_live_limit_submit_and_cancel())

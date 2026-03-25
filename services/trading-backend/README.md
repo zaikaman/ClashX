@@ -33,3 +33,7 @@ Background workers are controlled with `BACKGROUND_WORKERS_ENABLED`.
 - Worker dyno: set `BACKGROUND_WORKERS_ENABLED=true`
 
 If you run a single combined process, leave it enabled.
+
+## Live Pacifica smoke
+
+The backend test suite includes a live Pacifica smoke path that validates market entry, close, IOC limit submission, and cancel-on-live-testnet against the delegated account when `PACIFICA_SMOKE_ENABLED=1` is set.

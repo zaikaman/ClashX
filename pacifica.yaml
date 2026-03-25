@@ -425,6 +425,7 @@ paths:
       tags:
       - Orders
       summary: Cancel an existing order
+      description: Cancel requests are signed from symbol plus either order_id or client_order_id.
       operationId: cancel_order
       requestBody:
         content:
@@ -1086,39 +1087,48 @@ components:
     CancelOrderRequest:
       type: object
       required:
-      - user
+      - account
       - signature
+      - timestamp
       - symbol
-      - order_id
-      - tick_level
-      - side
       properties:
         agent_wallet:
           type: string
           example: AgentWalletAddress123
+          nullable: true
+        account:
+          type: string
+          example: Cdoykiss4V6kWydv7Q1EQghNqens9Hpte2iB7qjxNxc6
+        client_order_id:
+          type: string
+          description: Full UUID string when cancelling by client order id.
+          example: f47ac10b-58cc-4372-a567-0e02b2c3d479
           nullable: true
         order_id:
           type: integer
           format: int64
           example: 12345
           minimum: 0
-        side:
-          type: string
-          example: bid
         signature:
           type: string
           example: 5j1Vy9UqYUF2jKD9r2Lv5AoMWHJuW5a1mqVzEhC9SJL5GgbPkGEQKpW3UZmKXr4UMrHMJ5xHQFMJk2wE8J5Vyc
+        timestamp:
+          type: integer
+          format: int64
+          example: 1716200000000
         symbol:
           type: string
           example: BTC
-        tick_level:
+        expiry_window:
           type: integer
-          format: int32
-          example: 100
-          minimum: 0
-        user:
-          type: string
-          example: Cdoykiss4V6kWydv7Q1EQghNqens9Hpte2iB7qjxNxc6
+          format: int64
+          example: 30000
+          nullable: true
+      oneOf:
+      - required:
+        - order_id
+      - required:
+        - client_order_id
     CancelOrderResponse:
       type: object
       required:

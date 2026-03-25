@@ -158,6 +158,28 @@ def test_normalize_payload_preserves_tick_level_without_injecting_user_alias() -
     assert normalized["tick_level"] == 200000
 
 
+def test_normalize_payload_cancel_order_ignores_side_and_tick_level_hints() -> None:
+    client = object.__new__(PacificaClient)
+    client.settings = SimpleNamespace(pacifica_builder_code="")
+
+    normalized = client._normalize_payload(
+        "cancel_order",
+        {
+            "account": "wallet-1",
+            "symbol": "BTC",
+            "order_id": "101",
+            "side": "bid",
+            "tick_level": "200000",
+        },
+        account="wallet-1",
+    )
+
+    assert normalized == {
+        "symbol": "BTC",
+        "order_id": "101",
+    }
+
+
 def test_get_kline_sends_snake_case_and_legacy_camel_case_query_params() -> None:
     client = object.__new__(PacificaClient)
     client.settings = SimpleNamespace(pacifica_rest_url="https://pacifica.test")
