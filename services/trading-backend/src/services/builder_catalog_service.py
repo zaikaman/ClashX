@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.services.indicator_context_service import IndicatorContextService
-from src.services.pacifica_client import PacificaClient, PacificaClientError
+from src.services.pacifica_client import PacificaClient, PacificaClientError, get_pacifica_client
 from src.services.rules_engine import RulesEngine
 
 
@@ -82,7 +82,7 @@ class BuilderCatalogService:
         pacifica_client: PacificaClient | None = None,
         rules_engine: RulesEngine | None = None,
     ) -> None:
-        self.pacifica_client = pacifica_client or PacificaClient()
+        self.pacifica_client = pacifica_client or get_pacifica_client()
         self.rules_engine = rules_engine or RulesEngine()
         self.indicator_context = IndicatorContextService(self.pacifica_client)
 

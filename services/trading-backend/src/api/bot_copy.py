@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from typing import Any as Session
 
@@ -143,15 +143,22 @@ class BotCopyRelationshipResponse(BaseModel):
 
 @router.get("/leaderboard", response_model=list[BotLeaderboardRow])
 async def list_public_bot_leaderboard(
+    response: Response,
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> list[BotLeaderboardRow]:
+    response.headers["Cache-Control"] = "public, max-age=15, stale-while-revalidate=45"
     rows = await bot_copy_engine.get_or_refresh_leaderboard(db, limit=limit)
     return [BotLeaderboardRow.model_validate(row) for row in rows]
 
 
 @router.get("/leaderboard/{runtime_id}", response_model=BotRuntimeProfileResponse)
-async def get_runtime_profile(runtime_id: str, db: Session = Depends(get_db)) -> BotRuntimeProfileResponse:
+async def get_runtime_profile(
+    response: Response,
+    runtime_id: str,
+    db: Session = Depends(get_db),
+) -> BotRuntimeProfileResponse:
+    response.headers["Cache-Control"] = "public, max-age=10, stale-while-revalidate=30"
     try:
         profile = await bot_copy_engine.runtime_profile(db, runtime_id=runtime_id)
     except ValueError as exc:

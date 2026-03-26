@@ -6,14 +6,14 @@ from typing import Any
 
 from src.services.bot_performance_service import BotPerformanceService
 from src.services.event_broadcaster import broadcaster
-from src.services.pacifica_client import PacificaClient
+from src.services.pacifica_client import PacificaClient, get_pacifica_client
 from src.services.supabase_rest import SupabaseRestClient
 
 
 class BotLeaderboardEngine:
     def __init__(self, pacifica_client: PacificaClient | None = None) -> None:
         self.supabase = SupabaseRestClient()
-        self.pacifica_client = pacifica_client or PacificaClient()
+        self.pacifica_client = pacifica_client or get_pacifica_client()
         self.performance_service = BotPerformanceService(pacifica_client=self.pacifica_client, supabase=self.supabase)
 
     async def refresh_public_leaderboard(self, db: Any, *, limit: int = 100) -> list[dict]:

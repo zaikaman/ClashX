@@ -5,13 +5,13 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.services.bot_risk_service import BotRiskService
-from src.services.pacifica_client import PacificaClient, PacificaClientError
+from src.services.pacifica_client import PacificaClient, PacificaClientError, get_pacifica_client
 from src.services.supabase_rest import SupabaseRestClient
 
 
 class BotPerformanceService:
     def __init__(self, pacifica_client: PacificaClient | None = None, supabase: SupabaseRestClient | None = None) -> None:
-        self._pacifica = pacifica_client or PacificaClient()
+        self._pacifica = pacifica_client or get_pacifica_client()
         self._supabase = supabase or SupabaseRestClient()
         self._risk = BotRiskService()
 

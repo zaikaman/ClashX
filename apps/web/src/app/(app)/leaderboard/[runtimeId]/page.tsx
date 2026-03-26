@@ -41,22 +41,32 @@ export default function LeaderboardRuntimePage({ params: paramsPromise }: { para
   const [openClone, setOpenClone] = useState(false);
 
   useEffect(() => {
+    const controller = new AbortController();
+
     async function loadProfile() {
       try {
-        const response = await fetch(`${API_BASE_URL}/api/bot-copy/leaderboard/${params.runtimeId}`, { cache: "no-store" });
+        const response = await fetch(`${API_BASE_URL}/api/bot-copy/leaderboard/${params.runtimeId}`, {
+          signal: controller.signal,
+        });
         const payload = (await response.json()) as RuntimeProfile | { detail?: string };
         if (!response.ok) {
           throw new Error("detail" in payload ? payload.detail ?? "Could not load runtime profile" : "Could not load runtime profile");
         }
         setProfile(payload as RuntimeProfile);
       } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
         setError(loadError instanceof Error ? loadError.message : "Could not load runtime profile");
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
       }
     }
 
     void loadProfile();
+    return () => controller.abort();
   }, [params.runtimeId]);
 
   return (

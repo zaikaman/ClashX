@@ -1,8 +1,9 @@
 import asyncio
 import contextlib
 import logging
+from time import perf_counter
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.auth import router as auth_router
@@ -14,6 +15,7 @@ from src.api.pacifica import router as pacifica_router
 from src.api.stream import router as stream_router
 from src.api.stream import websocket_fallback
 from src.api.trading import router as trading_router
+from src.core.performance_metrics import get_performance_metrics_store
 from src.core.settings import get_settings
 from src.middleware.auth import AuthMiddleware
 from src.services.pacifica_market_data_service import get_pacifica_market_data_service
@@ -37,6 +39,7 @@ _configure_logging()
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    metrics = get_performance_metrics_store()
     app = FastAPI(title=settings.app_name)
     bot_copy_worker = BotCopyWorker()
     bot_runtime_worker = BotRuntimeWorker()
@@ -58,6 +61,18 @@ def create_app() -> FastAPI:
     app.include_router(pacifica_router)
     app.include_router(stream_router)
     app.include_router(trading_router)
+
+    @app.middleware("http")
+    async def track_http_latency(request: Request, call_next):
+        started = perf_counter()
+        try:
+            response = await call_next(request)
+            return response
+        finally:
+            elapsed_ms = (perf_counter() - started) * 1000.0
+            route = request.scope.get("route")
+            route_path = getattr(route, "path", request.url.path)
+            metrics.record(f"http:{request.method}:{route_path}", elapsed_ms)
 
     display_network = "Devnet" if settings.pacifica_network.lower().startswith("test") else settings.pacifica_network
 
@@ -98,6 +113,13 @@ def create_app() -> FastAPI:
                 "last_error": worker_ref.last_error,
             }
         return {"status": "ok", "network": display_network, "workers": workers}
+
+    @app.get("/healthz/perf", tags=["ops"])
+    async def healthz_perf() -> dict[str, object]:
+        return {
+            "status": "ok",
+            "metrics": metrics.snapshot(),
+        }
 
     app.websocket("/ws")(websocket_fallback)
     return app

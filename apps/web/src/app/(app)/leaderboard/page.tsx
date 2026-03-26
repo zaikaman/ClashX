@@ -48,22 +48,30 @@ export default function BotLeaderboardPage() {
   const [selectedForClone, setSelectedForClone] = useState<BotLeaderboardRow | null>(null);
 
   useEffect(() => {
+    const controller = new AbortController();
+
     async function loadLeaderboard() {
       try {
-        const response = await fetch(`${API_BASE_URL}/api/bot-copy/leaderboard?limit=50`, { cache: "no-store" });
+        const response = await fetch(`${API_BASE_URL}/api/bot-copy/leaderboard?limit=50`, { signal: controller.signal });
         const payload = (await response.json()) as BotLeaderboardRow[] | { detail?: string };
         if (!response.ok) {
           throw new Error("detail" in payload ? payload.detail ?? "Could not load leaderboard" : "Could not load leaderboard");
         }
         setRows(payload as BotLeaderboardRow[]);
       } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
         setError(loadError instanceof Error ? loadError.message : "Could not load leaderboard");
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
       }
     }
 
     void loadLeaderboard();
+    return () => controller.abort();
   }, []);
 
   const topThree = useMemo(() => rows.slice(0, 3), [rows]);

@@ -6,7 +6,7 @@ import httpx
 
 from src.core.settings import get_settings
 from src.services.pacifica_auth_service import PacificaAuthService
-from src.services.pacifica_client import PacificaClient, PacificaClientError
+from src.services.pacifica_client import PacificaClientError, get_pacifica_client
 
 
 MIN_SOL_BALANCE = 0.1
@@ -16,8 +16,9 @@ MIN_EQUITY_USD = 100.0
 class PacificaReadinessService:
     def __init__(self) -> None:
         self.settings = get_settings()
-        self.pacifica = PacificaClient()
+        self.pacifica = get_pacifica_client()
         self.auth = PacificaAuthService()
+        self._rpc_http = httpx.AsyncClient(timeout=10.0)
 
     async def get_readiness(self, db: Any, wallet_address: str) -> dict[str, Any]:
         sol_balance = await self._get_sol_balance(wallet_address)
@@ -75,12 +76,11 @@ class PacificaReadinessService:
 
     async def _get_sol_balance(self, wallet_address: str) -> float:
         payload = {"jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [wallet_address, {"commitment": "confirmed"}]}
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(self.settings.pacifica_solana_rpc_url, json=payload)
-            response.raise_for_status()
-            result = response.json().get("result", {})
-            lamports = int(result.get("value", 0) or 0)
-            return lamports / 1_000_000_000
+        response = await self._rpc_http.post(self.settings.pacifica_solana_rpc_url, json=payload)
+        response.raise_for_status()
+        result = response.json().get("result", {})
+        lamports = int(result.get("value", 0) or 0)
+        return lamports / 1_000_000_000
 
     async def _verify_account_access(self, wallet_address: str) -> bool:
         try:

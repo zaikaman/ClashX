@@ -8,7 +8,7 @@ from typing import Any
 
 from src.services.event_broadcaster import broadcaster
 from src.services.pacifica_auth_service import PacificaAuthService
-from src.services.pacifica_client import PacificaClient, PacificaClientError
+from src.services.pacifica_client import PacificaClient, PacificaClientError, get_pacifica_client
 from src.services.pacifica_market_data_service import get_pacifica_market_data_service
 from src.services.supabase_rest import SupabaseRestClient
 from src.services.trading_snapshot_cache_service import get_trading_snapshot_cache_service
@@ -16,7 +16,7 @@ from src.services.trading_snapshot_cache_service import get_trading_snapshot_cac
 
 class TradingService:
     def __init__(self) -> None:
-        self.pacifica = PacificaClient()
+        self.pacifica = get_pacifica_client()
         self.auth_service = PacificaAuthService()
         self.supabase = SupabaseRestClient()
         self.market_data = get_pacifica_market_data_service()

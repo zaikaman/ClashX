@@ -319,28 +319,56 @@ export function BotsFleetPage() {
     }
 
     let cancelled = false;
+    const controller = new AbortController();
 
     async function loadBots() {
       setLoading(true);
       try {
-        const response = await fetch(`${API_BASE_URL}/api/bots?wallet_address=${encodeURIComponent(resolvedWallet ?? "")}`, {
-          cache: "no-store",
-          headers: await getAuthHeaders(),
-        });
-        const payload = (await response.json()) as BotFleetItem[] | { detail?: string };
-        if (!response.ok) {
-          throw new Error("detail" in payload ? payload.detail ?? "Could not load bots" : "Could not load bots");
+        const headers = await getAuthHeaders();
+        const walletParam = encodeURIComponent(resolvedWallet ?? "");
+
+        const fastResponse = await fetch(
+          `${API_BASE_URL}/api/bots?wallet_address=${walletParam}&include_performance=true&performance_mode=fast`,
+          {
+            headers,
+            signal: controller.signal,
+          },
+        );
+        const fastPayload = (await fastResponse.json()) as BotFleetItem[] | { detail?: string };
+        if (!fastResponse.ok) {
+          throw new Error(
+            "detail" in fastPayload ? fastPayload.detail ?? "Could not load bots" : "Could not load bots",
+          );
         }
-        if (!cancelled) {
-          setBots(payload as BotFleetItem[]);
-          setError(null);
+
+        if (cancelled || controller.signal.aborted) {
+          return;
+        }
+
+        setBots(fastPayload as BotFleetItem[]);
+        setError(null);
+        setLoading(false);
+
+        const fullResponse = await fetch(
+          `${API_BASE_URL}/api/bots?wallet_address=${walletParam}&include_performance=true&performance_mode=full`,
+          {
+            headers,
+            signal: controller.signal,
+          },
+        );
+        if (!fullResponse.ok || cancelled || controller.signal.aborted) {
+          return;
+        }
+        const fullPayload = (await fullResponse.json()) as BotFleetItem[];
+        if (!cancelled && !controller.signal.aborted) {
+          setBots(fullPayload);
         }
       } catch (loadError) {
-        if (!cancelled) {
+        if (!cancelled && !controller.signal.aborted) {
           setError(loadError instanceof Error ? loadError.message : "Could not load bots");
         }
       } finally {
-        if (!cancelled) {
+        if (!cancelled && !controller.signal.aborted) {
           setLoading(false);
         }
       }
@@ -349,6 +377,7 @@ export function BotsFleetPage() {
     void loadBots();
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [authenticated, walletAddress, getAuthHeaders, refreshKey]);
 

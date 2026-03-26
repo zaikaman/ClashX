@@ -9,7 +9,7 @@ from src.services.bot_leaderboard_engine import BotLeaderboardEngine
 from src.services.bot_performance_service import BotPerformanceService
 from src.services.event_broadcaster import broadcaster
 from src.services.pacifica_auth_service import PacificaAuthService
-from src.services.pacifica_client import PacificaClient
+from src.services.pacifica_client import PacificaClient, get_pacifica_client
 from src.services.supabase_rest import SupabaseRestClient
 
 
@@ -18,9 +18,10 @@ SNAPSHOT_TTL_SECONDS = 60
 
 class BotCopyEngine:
     def __init__(self, *, leaderboard_engine: BotLeaderboardEngine | None = None, pacifica_client: PacificaClient | None = None) -> None:
+        resolved_pacifica = pacifica_client or get_pacifica_client()
         self.supabase = SupabaseRestClient()
-        self.leaderboard_engine = leaderboard_engine or BotLeaderboardEngine(pacifica_client=pacifica_client)
-        self.pacifica_client = pacifica_client or PacificaClient()
+        self.leaderboard_engine = leaderboard_engine or BotLeaderboardEngine(pacifica_client=resolved_pacifica)
+        self.pacifica_client = resolved_pacifica
         self.performance_service = BotPerformanceService(pacifica_client=self.pacifica_client, supabase=self.supabase)
         self.auth_service = PacificaAuthService()
         self.builder_service = BotBuilderService()

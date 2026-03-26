@@ -5,11 +5,13 @@ import contextlib
 import logging
 from datetime import UTC, datetime
 from decimal import ROUND_DOWN, Decimal
+from time import perf_counter
 from typing import Any
 
+from src.core.performance_metrics import get_performance_metrics_store
 from src.services.event_broadcaster import broadcaster
 from src.services.pacifica_auth_service import PacificaAuthService
-from src.services.pacifica_client import PacificaClient, PacificaClientError
+from src.services.pacifica_client import PacificaClientError, get_pacifica_client
 from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
 from src.services.worker_coordination_service import WorkerCoordinationService
 
@@ -22,10 +24,11 @@ class BotCopyWorker:
         self.poll_interval_seconds = poll_interval_seconds
         self._task: asyncio.Task | None = None
         self._running = False
-        self._pacifica = PacificaClient()
+        self._pacifica = get_pacifica_client()
         self._auth = PacificaAuthService()
         self._supabase = SupabaseRestClient()
         self._coordination = WorkerCoordinationService(self._supabase)
+        self._metrics = get_performance_metrics_store()
         self.last_iteration_at: str | None = None
         self.last_error: str | None = None
 
@@ -45,8 +48,13 @@ class BotCopyWorker:
 
     async def run_forever(self) -> None:
         while self._running:
+            iteration_started = perf_counter()
             try:
-                active = self._supabase.select("bot_copy_relationships", filters={"status": "active", "mode": "mirror"})
+                active = await asyncio.to_thread(
+                    self._supabase.select,
+                    "bot_copy_relationships",
+                    filters={"status": "active", "mode": "mirror"},
+                )
                 for relationship in active:
                     lease_key = f"bot-copy:{relationship['id']}"
                     if not self._coordination.try_claim_lease(
@@ -68,16 +76,23 @@ class BotCopyWorker:
             except Exception as exc:
                 self.last_error = str(exc)
                 logger.exception("Bot copy worker iteration failed")
+            finally:
+                self._metrics.record("worker:bot_copy:iteration", (perf_counter() - iteration_started) * 1000.0)
             await asyncio.sleep(self.poll_interval_seconds)
 
     async def _process_relationship(self, relationship: dict[str, Any]) -> None:
-        runtime = self._supabase.maybe_one("bot_runtimes", filters={"id": relationship["source_runtime_id"]})
+        runtime = await asyncio.to_thread(
+            self._supabase.maybe_one,
+            "bot_runtimes",
+            filters={"id": relationship["source_runtime_id"]},
+        )
         if runtime is None or runtime["status"] != "active":
             return
 
         credentials = self._auth.get_trading_credentials(None, relationship["follower_wallet_address"])
         if credentials is None:
-            self._supabase.update(
+            await asyncio.to_thread(
+                self._supabase.update,
                 "bot_copy_relationships",
                 {"status": "paused", "updated_at": datetime.now(tz=UTC).isoformat()},
                 filters={"id": relationship["id"]},
@@ -86,7 +101,8 @@ class BotCopyWorker:
 
         source_events = list(
             reversed(
-                self._supabase.select(
+                await asyncio.to_thread(
+                    self._supabase.select,
                     "bot_execution_events",
                     filters={
                         "runtime_id": relationship["source_runtime_id"],
@@ -110,7 +126,11 @@ class BotCopyWorker:
 
         for source_event in source_events:
             marker = f"bot_copy.mirror:{relationship['id']}:{source_event['id']}"
-            seen = self._supabase.maybe_one("audit_events", filters={"action": marker})
+            seen = await asyncio.to_thread(
+                self._supabase.maybe_one,
+                "audit_events",
+                filters={"action": marker},
+            )
             if seen is not None:
                 continue
 
@@ -132,7 +152,8 @@ class BotCopyWorker:
                 status = "error"
                 error_reason = str(exc)
 
-            self._supabase.insert(
+            await asyncio.to_thread(
+                self._supabase.insert,
                 "audit_events",
                 {
                     "id": marker,
@@ -148,7 +169,7 @@ class BotCopyWorker:
                         "result_payload": result,
                     },
                     "created_at": datetime.now(tz=UTC).isoformat(),
-                },
+                    },
             )
             await broadcaster.publish(
                 channel=f"user:{relationship['follower_user_id']}",
@@ -161,7 +182,8 @@ class BotCopyWorker:
                 },
             )
 
-        self._supabase.update(
+        await asyncio.to_thread(
+            self._supabase.update,
             "bot_copy_relationships",
             {"updated_at": datetime.now(tz=UTC).isoformat()},
             filters={"id": relationship["id"]},

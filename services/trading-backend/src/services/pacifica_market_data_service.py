@@ -11,7 +11,7 @@ from typing import Any
 import websockets
 
 from src.core.settings import get_settings
-from src.services.pacifica_client import PacificaClient, PacificaClientError
+from src.services.pacifica_client import PacificaClient, PacificaClientError, get_pacifica_client
 
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ class _CandleCacheEntry:
 class PacificaMarketDataService:
     def __init__(self, pacifica_client: PacificaClient | None = None) -> None:
         self._settings = get_settings()
-        self._pacifica = pacifica_client or PacificaClient()
+        self._pacifica = pacifica_client or get_pacifica_client()
         self._running = False
         self._ws_task: asyncio.Task | None = None
         self._market_info_cache: list[dict[str, Any]] = []

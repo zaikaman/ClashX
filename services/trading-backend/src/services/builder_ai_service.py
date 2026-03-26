@@ -66,6 +66,7 @@ ACTION_OPTIONS = [
 class BuilderAiService:
     def __init__(self) -> None:
         self.settings = get_settings()
+        self._http = httpx.AsyncClient(timeout=45.0)
 
     async def generate_draft(
         self,
@@ -80,25 +81,24 @@ class BuilderAiService:
         ):
             raise RuntimeError("Missing OPENAI_API_KEY, OPENAI_BASE_URL, or OPENAI_MODEL.")
 
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            response = await client.post(
-                self._build_responses_url(self.settings.openai_base_url),
-                headers={
-                    "Authorization": f"Bearer {self.settings.openai_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.settings.openai_model,
-                    "input": [
-                        {
-                            "role": "system",
-                            "content": self._build_system_prompt(available_markets, current_draft),
-                        },
-                        *messages,
-                    ],
-                },
-            )
-            payload = response.json()
+        response = await self._http.post(
+            self._build_responses_url(self.settings.openai_base_url),
+            headers={
+                "Authorization": f"Bearer {self.settings.openai_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.settings.openai_model,
+                "input": [
+                    {
+                        "role": "system",
+                        "content": self._build_system_prompt(available_markets, current_draft),
+                    },
+                    *messages,
+                ],
+            },
+        )
+        payload = response.json()
 
         if response.status_code >= 400:
             error = payload.get("error", {}) if isinstance(payload, dict) else {}

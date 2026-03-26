@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.services.indicator_context_service import extract_candle_requests, normalize_symbol
-from src.services.pacifica_client import PacificaClient, PacificaClientError
+from src.services.pacifica_client import PacificaClient, PacificaClientError, get_pacifica_client
 from src.services.rules_engine import RulesEngine
 from src.services.supabase_rest import SupabaseRestClient
 
@@ -47,7 +47,7 @@ class BotBacktestService:
         supabase: SupabaseRestClient | None = None,
         rules_engine: RulesEngine | None = None,
     ) -> None:
-        self._pacifica = pacifica_client or PacificaClient()
+        self._pacifica = pacifica_client or get_pacifica_client()
         self._supabase = supabase or SupabaseRestClient()
         self._rules = rules_engine or RulesEngine()
 

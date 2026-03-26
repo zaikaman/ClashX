@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from typing import Literal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -222,13 +223,40 @@ async def _build_runtime_performance(runtime: dict[str, Any] | None) -> RuntimeP
     return RuntimePerformanceResponse.model_validate(payload)
 
 
+def _build_fast_runtime_performance(runtime: dict[str, Any] | None) -> RuntimePerformanceResponse | None:
+    if runtime is None:
+        return None
+    risk_policy = runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {}
+    runtime_state = risk_policy.get("_runtime_state") if isinstance(risk_policy.get("_runtime_state"), dict) else {}
+
+    allocated_capital = float(runtime_state.get("allocated_capital_usd") or risk_policy.get("allocated_capital_usd") or 0.0)
+    pnl_total = float(runtime_state.get("pnl_total_usd") or 0.0)
+    pnl_realized = float(runtime_state.get("realized_pnl_usd") or 0.0)
+    pnl_unrealized = float(runtime_state.get("unrealized_pnl_usd") or 0.0)
+    win_streak = int(runtime_state.get("win_streak") or 0)
+    pnl_total_pct = (pnl_total / allocated_capital * 100.0) if allocated_capital > 0 else 0.0
+
+    return RuntimePerformanceResponse(
+        pnl_total=pnl_total,
+        pnl_total_pct=pnl_total_pct,
+        pnl_realized=pnl_realized,
+        pnl_unrealized=pnl_unrealized,
+        win_streak=win_streak,
+        positions=[],
+    )
+
+
 @router.get("", response_model=list[BotFleetItemResponse])
 async def list_bots(
+    response: Response,
     wallet_address: str | None = Query(default=None, min_length=8),
     include_performance: bool = Query(default=True),
+    performance_mode: Literal["full", "fast"] = Query(default="full"),
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> list[BotFleetItemResponse]:
+    if performance_mode == "fast":
+        response.headers["Cache-Control"] = "private, max-age=2, stale-while-revalidate=8"
     resolved_wallet = _resolve_wallet(user, wallet_address)
     definitions = bot_builder_service.list_bots(db, wallet_address=resolved_wallet)
     runtimes_for_wallet = bot_runtime_engine.list_runtimes_for_wallet(
@@ -238,7 +266,9 @@ async def list_bots(
     )
     runtimes = {runtime["bot_definition_id"]: runtime for runtime in runtimes_for_wallet}
     performances: list[RuntimePerformanceResponse | None]
-    if include_performance and runtimes_for_wallet:
+    if include_performance and runtimes_for_wallet and performance_mode == "fast":
+        performances = [_build_fast_runtime_performance(runtimes.get(row["id"])) for row in definitions]
+    elif include_performance and runtimes_for_wallet:
         market_lookup = await bot_performance_service.load_market_lookup()
         live_position_lookup, live_positions_loaded = await bot_performance_service.load_live_position_lookup_for_wallet(
             resolved_wallet

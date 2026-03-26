@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from functools import lru_cache
 from time import time
 from typing import Any
 
@@ -965,3 +966,8 @@ class PacificaClient:
                 }
             )
         return history
+
+
+@lru_cache(maxsize=1)
+def get_pacifica_client() -> PacificaClient:
+    return PacificaClient()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.services.pacifica_client import PacificaClient
+from src.services.pacifica_client import PacificaClient, get_pacifica_client
 from src.services.pacifica_market_data_service import PacificaMarketDataService, get_pacifica_market_data_service
 
 TIMEFRAME_TO_MS: dict[str, int] = {
@@ -143,7 +143,7 @@ def extract_candle_requests(rules_json: dict[str, Any]) -> list[dict[str, Any]]:
 
 class IndicatorContextService:
     def __init__(self, pacifica_client: PacificaClient | None = None) -> None:
-        self.pacifica_client = pacifica_client or PacificaClient()
+        self.pacifica_client = pacifica_client or get_pacifica_client()
         if pacifica_client is None:
             self.market_data = get_pacifica_market_data_service()
         else:

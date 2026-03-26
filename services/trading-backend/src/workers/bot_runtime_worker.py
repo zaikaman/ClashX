@@ -9,8 +9,10 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
+from time import perf_counter
 from typing import Any
 
+from src.core.performance_metrics import get_performance_metrics_store
 from src.core.settings import get_settings
 from src.services.bot_risk_service import BotRiskService
 from src.services.bot_runtime_engine import BotRuntimeEngine
@@ -18,7 +20,7 @@ from src.services.bot_performance_service import BotPerformanceService
 from src.services.event_broadcaster import broadcaster
 from src.services.indicator_context_service import IndicatorContextService, TIMEFRAME_TO_MS, extract_candle_requests
 from src.services.pacifica_auth_service import PacificaAuthService
-from src.services.pacifica_client import PacificaClient, PacificaClientError
+from src.services.pacifica_client import PacificaClient, PacificaClientError, get_pacifica_client
 from src.services.pacifica_market_data_service import get_pacifica_market_data_service
 from src.services.rules_engine import RulesEngine
 from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
@@ -48,11 +50,12 @@ class BotRuntimeWorker:
         self._rules = RulesEngine()
         self._risk = BotRiskService()
         self._auth = PacificaAuthService()
-        self._pacifica = PacificaClient()
+        self._pacifica = get_pacifica_client()
         self._indicator_context = IndicatorContextService(self._pacifica)
         self._market_data = get_pacifica_market_data_service()
         self._supabase = SupabaseRestClient()
         self._coordination = WorkerCoordinationService(self._supabase)
+        self._metrics = get_performance_metrics_store()
         self.last_iteration_at: str | None = None
         self.last_error: str | None = None
 
@@ -74,13 +77,18 @@ class BotRuntimeWorker:
 
     async def run_forever(self) -> None:
         while self._running:
+            iteration_started = perf_counter()
             try:
-                runtimes = list(self._engine.get_active_runtimes(None))
+                runtimes = await asyncio.to_thread(lambda: list(self._engine.get_active_runtimes(None)))
                 runtime_specs: list[dict[str, Any]] = []
                 shared_candle_requests: list[dict[str, Any]] = []
                 need_shared_markets = False
                 for runtime in runtimes:
-                    bot = self._supabase.maybe_one("bot_definitions", filters={"id": runtime["bot_definition_id"]})
+                    bot = await asyncio.to_thread(
+                        self._supabase.maybe_one,
+                        "bot_definitions",
+                        filters={"id": runtime["bot_definition_id"]},
+                    )
                     runtime_policy = self._risk.normalize_policy(
                         runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {}
                     )
@@ -145,6 +153,8 @@ class BotRuntimeWorker:
             except Exception as exc:
                 self.last_error = str(exc)
                 logger.exception("Bot runtime worker iteration failed")
+            finally:
+                self._metrics.record("worker:bot_runtime:iteration", (perf_counter() - iteration_started) * 1000.0)
             await asyncio.sleep(self.poll_interval_seconds)
 
     async def _process_runtime(
@@ -161,7 +171,11 @@ class BotRuntimeWorker:
     ) -> None:
         del db
         now = datetime.now(tz=UTC)
-        bot = bot or self._supabase.maybe_one("bot_definitions", filters={"id": runtime["bot_definition_id"]})
+        bot = bot or await asyncio.to_thread(
+            self._supabase.maybe_one,
+            "bot_definitions",
+            filters={"id": runtime["bot_definition_id"]},
+        )
         if bot is None:
             logger.error(
                 "Runtime %s failed because bot definition %s was not found",
@@ -382,7 +396,7 @@ class BotRuntimeWorker:
                     position_lookup=position_lookup,
                 )
                 skip_result = {"issues": issues}
-                if self._should_record_skip_event(
+                if await self._should_record_skip_event_async(
                     runtime_id=runtime["id"],
                     decision_summary=skipped_key,
                     request_payload=action,
@@ -1305,7 +1319,7 @@ class BotRuntimeWorker:
             {"risk_policy_json": runtime_policy, "updated_at": resolved_now},
         )
 
-    def _should_record_skip_event(
+    async def _should_record_skip_event_async(
         self,
         *,
         runtime_id: str,
@@ -1313,16 +1327,42 @@ class BotRuntimeWorker:
         request_payload: dict[str, Any],
         result_payload: dict[str, Any],
     ) -> bool:
-        latest_events = self._supabase.select(
+        latest_events = await asyncio.to_thread(
+            self._supabase.select,
             "bot_execution_events",
             filters={"runtime_id": runtime_id},
             order="created_at.desc",
             limit=12,
         )
-        if not latest_events:
+        return self._should_record_skip_event(
+            runtime_id=runtime_id,
+            decision_summary=decision_summary,
+            request_payload=request_payload,
+            result_payload=result_payload,
+            latest_events=latest_events,
+        )
+
+    def _should_record_skip_event(
+        self,
+        *,
+        runtime_id: str,
+        decision_summary: str,
+        request_payload: dict[str, Any],
+        result_payload: dict[str, Any],
+        latest_events: list[dict[str, Any]] | None = None,
+    ) -> bool:
+        resolved_latest_events = latest_events
+        if resolved_latest_events is None:
+            resolved_latest_events = self._supabase.select(
+                "bot_execution_events",
+                filters={"runtime_id": runtime_id},
+                order="created_at.desc",
+                limit=12,
+            )
+        if not resolved_latest_events:
             return True
         cutoff = datetime.now(tz=UTC) - timedelta(seconds=SKIP_EVENT_DEDUP_SECONDS)
-        for event in latest_events:
+        for event in resolved_latest_events:
             created_at = self._parse_runtime_state_timestamp(str(event.get("created_at") or ""))
             if created_at is None or created_at < cutoff:
                 continue
