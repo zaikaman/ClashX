@@ -327,17 +327,17 @@ export function BotsFleetPage() {
         const headers = await getAuthHeaders();
         const walletParam = encodeURIComponent(resolvedWallet ?? "");
 
-        const fastResponse = await fetch(
-          `${API_BASE_URL}/api/bots?wallet_address=${walletParam}&include_performance=true&performance_mode=fast`,
+        const listResponse = await fetch(
+          `${API_BASE_URL}/api/bots?wallet_address=${walletParam}&include_performance=false`,
           {
             headers,
             signal: controller.signal,
           },
         );
-        const fastPayload = (await fastResponse.json()) as BotFleetItem[] | { detail?: string };
-        if (!fastResponse.ok) {
+        const listPayload = (await listResponse.json()) as BotFleetItem[] | { detail?: string };
+        if (!listResponse.ok) {
           throw new Error(
-            "detail" in fastPayload ? fastPayload.detail ?? "Could not load bots" : "Could not load bots",
+            "detail" in listPayload ? listPayload.detail ?? "Could not load bots" : "Could not load bots",
           );
         }
 
@@ -345,7 +345,7 @@ export function BotsFleetPage() {
           return;
         }
 
-        setBots(fastPayload as BotFleetItem[]);
+        setBots(listPayload as BotFleetItem[]);
         setError(null);
         setLoading(false);
 
@@ -356,7 +356,7 @@ export function BotsFleetPage() {
             signal: controller.signal,
           },
         );
-        if (!fullResponse.ok || cancelled || controller.signal.aborted) {
+        if (cancelled || controller.signal.aborted || !fullResponse.ok) {
           return;
         }
         const fullPayload = (await fullResponse.json()) as BotFleetItem[];

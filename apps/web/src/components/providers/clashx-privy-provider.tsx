@@ -3,6 +3,8 @@
 import { PrivyProvider } from "@privy-io/react-auth";
 import { toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
 
+const solanaWalletConnectors = toSolanaWalletConnectors({ shouldAutoConnect: false });
+
 export function ClashxPrivyProvider({
   appId,
   children,
@@ -18,15 +20,18 @@ export function ClashxPrivyProvider({
     <PrivyProvider
       appId={appId}
       config={{
+        loginMethods: ["wallet"],
         appearance: {
+          showWalletLoginFirst: true,
           walletChainType: "ethereum-and-solana",
           theme: "dark",
           accentColor: "#ea4c1d",
         },
         externalWallets: {
+          walletConnect: { enabled: false },
           solana: {
             // Avoid eager account restoration while wallets like Solflare are still locked.
-            connectors: toSolanaWalletConnectors({ shouldAutoConnect: false }),
+            connectors: solanaWalletConnectors,
           },
         },
       }}
