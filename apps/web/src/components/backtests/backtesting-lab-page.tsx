@@ -11,6 +11,7 @@ import type {
   BacktestRunDetail,
   BacktestRunRequestPayload,
   BacktestRunSummary,
+  BacktestTriggerEvent,
   BacktestsBootstrapPayload,
 } from "@/lib/backtests";
 
@@ -27,6 +28,7 @@ type HistoryFilter = "all" | "completed" | "failed";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const INTERVAL_OPTIONS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"] as const;
+const INSPECTOR_PAGE_SIZE = 12;
 const DATE_PRESETS = [
   { id: "7d", label: "7D", days: 7 },
   { id: "30d", label: "30D", days: 30 },
@@ -76,6 +78,55 @@ function formatDuration(seconds: number) {
   return `${hours}h ${minutes}m`;
 }
 
+function formatDateTime(value: number | string) {
+  return new Date(value).toLocaleString();
+}
+
+function formatLabel(value: string) {
+  return value
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function getEventTone(kind: string) {
+  const normalized = kind.toLowerCase();
+
+  if (
+    normalized.includes("stop") ||
+    normalized.includes("risk") ||
+    normalized.includes("reject") ||
+    normalized.includes("error")
+  ) {
+    return "border-[#e06c6e]/20 bg-[#e06c6e]/10 text-[#f4b0b1]";
+  }
+
+  if (normalized.includes("exit") || normalized.includes("close") || normalized.includes("take")) {
+    return "border-[#8ec5ff]/20 bg-[#8ec5ff]/10 text-[#b7d9ff]";
+  }
+
+  if (normalized.includes("entry") || normalized.includes("open") || normalized.includes("signal")) {
+    return "border-[#74b97f]/20 bg-[#74b97f]/10 text-[#9fddb0]";
+  }
+
+  return "border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.04)] text-neutral-300";
+}
+
+function summarizeEventGroups(events: BacktestTriggerEvent[]) {
+  const counts = new Map<string, number>();
+
+  events.forEach((event) => {
+    const label = formatLabel(event.kind || event.title);
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  });
+
+  return Array.from(counts.entries())
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 4)
+    .map(([label, count]) => ({ label, count }));
+}
+
 export function BacktestingLabPage() {
   const searchParams = useSearchParams();
   const queryBotId = searchParams.get("botId");
@@ -93,6 +144,9 @@ export function BacktestingLabPage() {
   const [initialCapitalUsd, setInitialCapitalUsd] = useState("10000");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [compareIds, setCompareIds] = useState<string[]>([]);
+  const [inspectorView, setInspectorView] = useState<"trades" | "journal">("trades");
+  const [tradePage, setTradePage] = useState(1);
+  const [journalPage, setJournalPage] = useState(1);
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>("all");
   const [loading, setLoading] = useState(true);
@@ -369,6 +423,50 @@ export function BacktestingLabPage() {
 
   const summary = currentRun?.result_json.summary ?? null;
   const preflightIssues = currentRun?.result_json.preflight_issues ?? [];
+  const trades = currentRun?.result_json.trades ?? [];
+  const triggerEvents = currentRun?.result_json.trigger_events ?? [];
+  const tradePageCount = Math.max(1, Math.ceil(trades.length / INSPECTOR_PAGE_SIZE));
+  const journalPageCount = Math.max(1, Math.ceil(triggerEvents.length / INSPECTOR_PAGE_SIZE));
+  const visibleTrades = useMemo(
+    () => trades.slice((tradePage - 1) * INSPECTOR_PAGE_SIZE, tradePage * INSPECTOR_PAGE_SIZE),
+    [tradePage, trades],
+  );
+  const visibleTriggerEvents = useMemo(
+    () => triggerEvents.slice((journalPage - 1) * INSPECTOR_PAGE_SIZE, journalPage * INSPECTOR_PAGE_SIZE),
+    [journalPage, triggerEvents],
+  );
+  const recentJournalEvents = useMemo(() => [...triggerEvents].reverse().slice(0, 5), [triggerEvents]);
+  const eventGroups = useMemo(() => summarizeEventGroups(triggerEvents), [triggerEvents]);
+  const trackedSymbols = useMemo(() => {
+    const symbols = new Set<string>();
+
+    triggerEvents.forEach((event) => {
+      if (event.symbol) {
+        symbols.add(event.symbol);
+      }
+    });
+
+    trades.forEach((trade) => {
+      if (trade.symbol) {
+        symbols.add(trade.symbol);
+      }
+    });
+
+    return Array.from(symbols).slice(0, 4);
+  }, [trades, triggerEvents]);
+
+  useEffect(() => {
+    setTradePage(1);
+    setJournalPage(1);
+  }, [activeRunId]);
+
+  useEffect(() => {
+    setTradePage((current) => Math.min(current, tradePageCount));
+  }, [tradePageCount]);
+
+  useEffect(() => {
+    setJournalPage((current) => Math.min(current, journalPageCount));
+  }, [journalPageCount]);
 
   if (!authenticated) {
     return (
@@ -615,42 +713,196 @@ export function BacktestingLabPage() {
             <BacktestChart run={currentRun} compareRuns={compareRuns} />
           </section>
 
-          <section className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+          <section className="grid gap-4">
             <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
-              <div className="flex items-center justify-between gap-3">
-                <span className="label text-[#dce85d]">Triggered events</span>
-                <span className="text-xs text-neutral-500">
-                  {currentRun?.result_json.trigger_events.length ?? 0} events
-                </span>
+              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[rgba(255,255,255,0.06)] pb-4">
+                <div className="grid gap-1">
+                  <span className="label text-[#dce85d]">Tester log</span>
+                  <p className="text-sm text-neutral-500">
+                    Keep fills in view by default, then switch to the journal when you want the rule trail behind each move.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {(["trades", "journal"] as const).map((view) => (
+                    <button
+                      key={view}
+                      type="button"
+                      onClick={() => setInspectorView(view)}
+                      className={`rounded-full border px-3 py-2 text-[0.6rem] font-semibold uppercase tracking-[0.16em] transition ${
+                        inspectorView === view
+                          ? "border-[#dce85d]/40 bg-[#dce85d]/10 text-[#dce85d]"
+                          : "border-[rgba(255,255,255,0.12)] text-neutral-400 hover:border-white hover:text-neutral-50"
+                      }`}
+                    >
+                      {view === "trades" ? "Trade log" : "Journal"}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div className="grid gap-3">
-                {currentRun?.result_json.trigger_events.length ? (
-                  currentRun.result_json.trigger_events.map((event) => (
-                    <div key={`${event.timestamp}-${event.title}-${event.detail}`} className="rounded-[1.4rem] bg-[#090a0a] p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-sm font-semibold text-neutral-50">{event.title}</span>
-                        <span className="text-[0.62rem] uppercase tracking-[0.16em] text-neutral-500">{event.symbol}</span>
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-neutral-400">{event.detail}</p>
-                      <p className="mt-2 text-xs text-neutral-500">{new Date(event.timestamp).toLocaleString()}</p>
-                    </div>
-                  ))
-                ) : (
-                  <div className="rounded-[1.4rem] bg-[#090a0a] p-4 text-sm leading-6 text-neutral-500">
-                    Actionable ticks will appear here after a run is loaded.
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                {[
+                  { label: "Trades", value: String(trades.length) },
+                  { label: "Journal events", value: String(triggerEvents.length) },
+                  { label: "Symbols", value: trackedSymbols.length ? trackedSymbols.join(", ") : "--" },
+                  {
+                    label: "Latest event",
+                    value: triggerEvents.length ? formatDateTime(triggerEvents[triggerEvents.length - 1].timestamp) : "Waiting for a run",
+                  },
+                ].map((item) => (
+                  <article key={item.label} className="grid gap-1 rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#090a0a] p-4">
+                    <span className="label text-neutral-500">{item.label}</span>
+                    <div className="text-sm font-semibold text-neutral-100">{item.value}</div>
+                  </article>
+                ))}
+              </div>
+
+              {inspectorView === "trades" ? (
+                <div className="min-w-0 overflow-hidden rounded-[1.6rem] border border-[rgba(255,255,255,0.06)] bg-[#090a0a]">
+                  <div className="hidden grid-cols-[1.1fr_0.95fr_0.95fr_0.85fr_0.9fr_0.7fr] gap-4 border-b border-[rgba(255,255,255,0.06)] px-4 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500 md:grid">
+                    <span>Position</span>
+                    <span>Opened</span>
+                    <span>Closed</span>
+                    <span>Size</span>
+                    <span>Result</span>
+                    <span>Duration</span>
                   </div>
-                )}
-              </div>
+                  <div className="grid max-h-[32rem] gap-2 overflow-auto p-3 md:p-4">
+                    {trades.length ? (
+                      visibleTrades.map((trade) => (
+                        <div
+                          key={`${trade.trade_id}-${trade.status}`}
+                          className="rounded-[1.25rem] border border-[rgba(255,255,255,0.05)] bg-[#111315] px-4 py-3"
+                        >
+                          <div className="grid gap-3 md:hidden">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <div className="font-mono text-sm font-bold uppercase text-neutral-50">
+                                  {trade.symbol} {trade.side}
+                                </div>
+                                <div className="text-[0.68rem] uppercase tracking-[0.16em] text-neutral-500">
+                                  {trade.status === "open"
+                                    ? "Open position"
+                                    : trade.close_reason
+                                      ? formatLabel(trade.close_reason)
+                                      : "Closed position"}
+                                </div>
+                              </div>
+                              <div
+                                className={`font-mono text-sm font-bold ${
+                                  trade.pnl_usd !== null && trade.pnl_usd < 0 ? "text-[#e06c6e]" : "text-[#74b97f]"
+                                }`}
+                              >
+                                {trade.pnl_usd !== null ? formatMoney(trade.pnl_usd) : formatMoney(trade.unrealized_pnl ?? 0)}
+                              </div>
+                            </div>
+                            <div className="grid gap-2 text-sm text-neutral-400">
+                              <div>Opened {formatDateTime(trade.entry_time)}</div>
+                              <div>{trade.exit_time ? `Closed ${formatDateTime(trade.exit_time)}` : "Still open"}</div>
+                              <div>Size {formatMoney(trade.notional_usd)}</div>
+                              <div>{trade.duration_seconds !== null ? formatDuration(trade.duration_seconds) : "Open"}</div>
+                            </div>
+                          </div>
+
+                          <div className="hidden items-center gap-4 md:grid md:grid-cols-[1.1fr_0.95fr_0.95fr_0.85fr_0.9fr_0.7fr]">
+                            <div className="min-w-0">
+                              <div className="font-mono text-sm font-bold uppercase text-neutral-50">
+                                {trade.symbol} {trade.side}
+                              </div>
+                              <div className="truncate text-[0.68rem] uppercase tracking-[0.16em] text-neutral-500">
+                                {trade.status === "open"
+                                  ? "Open position"
+                                  : trade.close_reason
+                                    ? formatLabel(trade.close_reason)
+                                    : "Closed position"}
+                              </div>
+                            </div>
+                            <div className="text-sm text-neutral-300">{formatDateTime(trade.entry_time)}</div>
+                            <div className="text-sm text-neutral-300">{trade.exit_time ? formatDateTime(trade.exit_time) : "Still open"}</div>
+                            <div className="text-sm text-neutral-300">{formatMoney(trade.notional_usd)}</div>
+                            <div
+                              className={`font-mono text-sm font-bold ${
+                                trade.pnl_usd !== null && trade.pnl_usd < 0 ? "text-[#e06c6e]" : "text-[#74b97f]"
+                              }`}
+                            >
+                              {trade.pnl_usd !== null ? formatMoney(trade.pnl_usd) : formatMoney(trade.unrealized_pnl ?? 0)}
+                            </div>
+                            <div className="text-sm text-neutral-300">
+                              {trade.duration_seconds !== null ? formatDuration(trade.duration_seconds) : "Open"}
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded-[1.25rem] border border-dashed border-[rgba(255,255,255,0.08)] bg-[#111315] p-5 text-sm leading-6 text-neutral-500">
+                        Closed and open positions will land here after the replay finishes.
+                      </div>
+                    )}
+                  </div>
+                  <InspectorPagination
+                    page={tradePage}
+                    pageCount={tradePageCount}
+                    totalItems={trades.length}
+                    pageSize={INSPECTOR_PAGE_SIZE}
+                    noun="trades"
+                    onPageChange={setTradePage}
+                  />
+                </div>
+              ) : (
+                <div className="overflow-hidden rounded-[1.6rem] border border-[rgba(255,255,255,0.06)] bg-[#090a0a]">
+                  <div className="grid max-h-[32rem] gap-2 overflow-auto p-3 md:p-4">
+                    {triggerEvents.length ? (
+                      visibleTriggerEvents.map((event) => (
+                        <div
+                          key={`${event.timestamp}-${event.title}-${event.detail}`}
+                          className="rounded-[1.25rem] border border-[rgba(255,255,255,0.05)] bg-[#111315] px-4 py-3"
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={`rounded-full border px-2 py-1 text-[0.55rem] font-semibold uppercase tracking-[0.16em] ${getEventTone(event.kind)}`}>
+                                  {formatLabel(event.kind)}
+                                </span>
+                                <span className="text-sm font-semibold text-neutral-50">{event.title}</span>
+                              </div>
+                              <p className="mt-2 text-sm leading-6 text-neutral-400">{event.detail}</p>
+                            </div>
+                            <div className="grid justify-items-end gap-1 text-right">
+                              <span className="rounded-full border border-[rgba(255,255,255,0.08)] px-2 py-1 text-[0.55rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
+                                {event.symbol}
+                              </span>
+                              <span className="text-xs text-neutral-500">{formatDateTime(event.timestamp)}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded-[1.25rem] border border-dashed border-[rgba(255,255,255,0.08)] bg-[#111315] p-5 text-sm leading-6 text-neutral-500">
+                        The journal fills in once the replay starts hitting entries, exits, and rule checks.
+                      </div>
+                    )}
+                  </div>
+                  <InspectorPagination
+                    page={journalPage}
+                    pageCount={journalPageCount}
+                    totalItems={triggerEvents.length}
+                    pageSize={INSPECTOR_PAGE_SIZE}
+                    noun="events"
+                    onPageChange={setJournalPage}
+                  />
+                </div>
+              )}
             </article>
 
-            <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
+            {false ? (
+              <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
               <div className="flex items-center justify-between gap-3">
-                <span className="label text-[#74b97f]">Trade log</span>
-                <span className="text-xs text-neutral-500">{currentRun?.result_json.trades.length ?? 0} rows</span>
+                <span className="label text-[#74b97f]">Activity snapshot</span>
+                <span className="text-xs text-neutral-500">{triggerEvents.length} events</span>
               </div>
               <div className="grid gap-3">
-                {currentRun?.result_json.trades.length ? (
-                  currentRun.result_json.trades.map((trade) => (
+                {trades.length ? (
+                  trades.map((trade) => (
                     <div key={`${trade.trade_id}-${trade.status}`} className="rounded-[1.4rem] bg-[#090a0a] p-4">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
@@ -680,7 +932,8 @@ export function BacktestingLabPage() {
                   </div>
                 )}
               </div>
-            </article>
+              </article>
+            ) : null}
           </section>
         </div>
 
@@ -879,29 +1132,36 @@ function BacktestingLabSkeleton() {
             <div className="skeleton h-[25rem] w-full rounded-[1.6rem]" />
           </section>
 
-          <section className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
-            {Array.from({ length: 2 }).map((_, columnIndex) => (
-              <article
-                key={`panel-skeleton-${columnIndex}`}
-                className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="skeleton h-4 w-28 rounded-full" />
-                  <div className="skeleton h-3 w-16 rounded-full" />
+          <section className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="grid gap-2">
+                <div className="skeleton h-4 w-28 rounded-full" />
+                <div className="skeleton h-4 w-72 rounded-full" />
+              </div>
+              <div className="flex gap-2">
+                <div className="skeleton h-9 w-24 rounded-full" />
+                <div className="skeleton h-9 w-24 rounded-full" />
+              </div>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {Array.from({ length: 4 }).map((_, index) => (
+                <div key={`tester-summary-skeleton-${index}`} className="grid gap-2 rounded-[1.4rem] bg-[#090a0a] p-4">
+                  <div className="skeleton h-3 w-20 rounded-full" />
+                  <div className="skeleton h-4 w-full rounded-full" />
                 </div>
-                <div className="grid gap-3">
-                  {Array.from({ length: 3 }).map((_, rowIndex) => (
-                    <div key={`panel-skeleton-${columnIndex}-${rowIndex}`} className="rounded-[1.4rem] bg-[#090a0a] p-4">
-                      <div className="grid gap-3">
-                        <div className="skeleton h-4 w-40 rounded-full" />
-                        <div className="skeleton h-4 w-full rounded-full" />
-                        <div className="skeleton h-4 w-2/3 rounded-full" />
-                      </div>
-                    </div>
-                  ))}
+              ))}
+            </div>
+            <div className="grid gap-3 rounded-[1.6rem] border border-[rgba(255,255,255,0.06)] bg-[#090a0a] p-3 md:p-4">
+              {Array.from({ length: 4 }).map((_, rowIndex) => (
+                <div key={`tester-row-skeleton-${rowIndex}`} className="rounded-[1.4rem] bg-[#111315] p-4">
+                  <div className="grid gap-3">
+                    <div className="skeleton h-4 w-40 rounded-full" />
+                    <div className="skeleton h-4 w-full rounded-full" />
+                    <div className="skeleton h-4 w-2/3 rounded-full" />
+                  </div>
                 </div>
-              </article>
-            ))}
+              ))}
+            </div>
           </section>
         </div>
 
@@ -953,6 +1213,54 @@ function BacktestingLabSkeleton() {
         </aside>
       </section>
     </main>
+  );
+}
+
+function InspectorPagination({
+  page,
+  pageCount,
+  totalItems,
+  pageSize,
+  noun,
+  onPageChange,
+}: {
+  page: number;
+  pageCount: number;
+  totalItems: number;
+  pageSize: number;
+  noun: string;
+  onPageChange: (page: number) => void;
+}) {
+  const start = totalItems === 0 ? 0 : (page - 1) * pageSize + 1;
+  const end = totalItems === 0 ? 0 : Math.min(totalItems, page * pageSize);
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[rgba(255,255,255,0.06)] px-3 pb-3 pt-1 text-xs text-neutral-500 md:px-4 md:pb-4">
+      <span>
+        {start}-{end} of {totalItems} {noun}
+      </span>
+      <div className="flex items-center gap-2">
+        <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-600">
+          Page {page} / {pageCount}
+        </span>
+        <button
+          type="button"
+          onClick={() => onPageChange(page - 1)}
+          disabled={page <= 1}
+          className="rounded-full border border-[rgba(255,255,255,0.12)] px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-white hover:text-neutral-50 disabled:cursor-not-allowed disabled:border-[rgba(255,255,255,0.08)] disabled:text-neutral-600"
+        >
+          Prev
+        </button>
+        <button
+          type="button"
+          onClick={() => onPageChange(page + 1)}
+          disabled={page >= pageCount}
+          className="rounded-full border border-[rgba(255,255,255,0.12)] px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-white hover:text-neutral-50 disabled:cursor-not-allowed disabled:border-[rgba(255,255,255,0.08)] disabled:text-neutral-600"
+        >
+          Next
+        </button>
+      </div>
+    </div>
   );
 }
 
