@@ -643,12 +643,27 @@ export function BuilderGraphStudio({
     const controller = new AbortController();
 
     void (async () => {
-      const [templatesResponse, marketsResponse] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/builder/templates`, { signal: controller.signal }),
-        fetch(`${API_BASE_URL}/api/builder/markets`, { signal: controller.signal }),
-      ]);
-      if (templatesResponse.ok) setCatalogTemplates((await templatesResponse.json()) as BuilderCatalogTemplate[]);
-      if (marketsResponse.ok) setMarkets((await marketsResponse.json()) as BuilderMarket[]);
+      try {
+        const [templatesResponse, marketsResponse] = await Promise.all([
+          fetch(`${API_BASE_URL}/api/builder/templates`, { signal: controller.signal }),
+          fetch(`${API_BASE_URL}/api/builder/markets`, { signal: controller.signal }),
+        ]);
+
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        if (templatesResponse.ok) {
+          setCatalogTemplates((await templatesResponse.json()) as BuilderCatalogTemplate[]);
+        }
+        if (marketsResponse.ok) {
+          setMarkets((await marketsResponse.json()) as BuilderMarket[]);
+        }
+      } catch (loadError) {
+        if (!(loadError instanceof DOMException && loadError.name === "AbortError")) {
+          setError(loadError instanceof Error ? loadError.message : "Could not load builder data");
+        }
+      }
     })();
 
     return () => controller.abort();

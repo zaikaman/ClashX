@@ -2,3 +2,4 @@
 - When working with the pacifica api, it's recommend that you look at the pacifica.yaml file and python-sdk folder for the necessary docs and information, remember these are only for docs, do not change or edit anything in them.
 - Next.js is only being used as the frontend app, routing, rendering, browser-side fetches, the backend layer is using FastAPI.
 - You can answer to me in Vietnamese and English, but always write your code and content in English.
+- ripgrep binary in this environment is unusable, just use Powershell.
