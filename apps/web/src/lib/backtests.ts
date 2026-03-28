@@ -121,5 +121,4 @@ export type BacktestsBootstrapPayload = {
     updated_at: string;
   }>;
   runs: BacktestRunSummary[];
-  active_run: BacktestRunDetail | null;
 };

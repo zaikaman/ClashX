@@ -64,7 +64,6 @@ class BacktestBotOptionResponse(BaseModel):
 class BacktestsBootstrapResponse(BaseModel):
     bots: list[BacktestBotOptionResponse]
     runs: list[BacktestRunSummaryResponse]
-    active_run: BacktestRunDetailResponse | None = None
 
 
 def _resolve_wallet(user: AuthenticatedUser, wallet_address: str | None) -> str:
@@ -132,22 +131,10 @@ def get_backtests_bootstrap(
         user_id=user.user_id,
         bot_id=bot_id,
     )
-    active_run = None
-    if runs:
-        try:
-            active_run = bot_backtest_service.get_run(
-                db,
-                run_id=str(runs[0]["id"]),
-                wallet_address=resolved_wallet,
-                user_id=user.user_id,
-            )
-        except ValueError:
-            active_run = None
     return BacktestsBootstrapResponse.model_validate(
         {
             "bots": bots,
             "runs": runs,
-            "active_run": active_run,
         }
     )
 

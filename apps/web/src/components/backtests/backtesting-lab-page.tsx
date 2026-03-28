@@ -197,17 +197,16 @@ export function BacktestingLabPage() {
         const bootstrap = payload as BacktestsBootstrapPayload;
         const nextBots = bootstrap.bots as SavedBot[];
         const nextRuns = bootstrap.runs;
-        const activeRun = bootstrap.active_run;
         setBots(nextBots);
         setRuns(nextRuns);
-        setRunCache(activeRun ? { [activeRun.id]: activeRun } : {});
+        setRunCache({});
         setHistoryError(null);
         const preferredBotId =
           queryBotId && nextBots.some((bot) => bot.id === queryBotId)
             ? queryBotId
             : nextBots[0]?.id ?? "";
         setSelectedBotId((current) => current || preferredBotId);
-        setActiveRunId((current) => current ?? activeRun?.id ?? nextRuns[0]?.id ?? null);
+        setActiveRunId(null);
       } catch (error) {
         if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
           setPageError(error instanceof Error ? error.message : "Could not load the backtesting lab.");
