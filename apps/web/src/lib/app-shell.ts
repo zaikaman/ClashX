@@ -133,42 +133,6 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
     };
   }
 
-  if (normalizedPathname === "/leagues") {
-    return {
-      eyebrow: "Legacy route",
-      title: "The seasonal leaderboard replaced leagues",
-      description: "ClashX now runs on one ranked board with quarterly seasons instead of separate competitions.",
-      guidanceTitle: "Use the new flow",
-      guidance: [
-        "Open the leaderboard to see the current season and live rankings.",
-        "Use Builder studio to ship a bot that can climb the board.",
-        "Open a runtime profile before you follow or clone a top performer.",
-      ],
-      actions: [
-        { href: "/leaderboard", label: "Open leaderboard", tone: "primary" },
-        { href: "/build", label: "Create a bot", tone: "secondary" },
-      ],
-    };
-  }
-
-  if (normalizedPathname.startsWith("/leagues/")) {
-    return {
-      eyebrow: "Legacy route",
-      title: "Competition pages now resolve to one board",
-      description: "League-specific detail pages are deprecated because rankings now live on a single seasonal leaderboard.",
-      guidanceTitle: "What changed",
-      guidance: [
-        "The board resets into a new season every three months.",
-        "Every bot competes in the same ladder instead of segmented leagues.",
-        "Use runtime profiles for detail instead of league pages.",
-      ],
-      actions: [
-        { href: "/leaderboard", label: "Open leaderboard", tone: "primary" },
-        { href: "/build", label: "Create a bot", tone: "ghost" },
-      ],
-    };
-  }
-
   if (normalizedPathname === "/leaderboard") {
     return {
       eyebrow: "Seasonal leaderboard",
@@ -187,7 +151,7 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
     };
   }
 
-  if (normalizedPathname === "/build" || normalizedPathname === "/trade") {
+  if (normalizedPathname === "/build") {
     return {
       eyebrow: "Builder studio",
       title: "Build a bot step by step",
@@ -238,21 +202,6 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
         { href: "/leaderboard", label: "Browse the public board", tone: "primary" },
         { href: "/bots", label: "Open my bots", tone: "secondary" },
       ],
-    };
-  }
-
-  if (normalizedPathname === "/operator/leagues") {
-    return {
-      eyebrow: "Legacy route",
-      title: "Admin league ops were removed",
-      description: "The leaderboard now advances seasons automatically every three months, so this operator desk is no longer part of the product.",
-      guidanceTitle: "Use instead",
-      guidance: [
-        "Use the leaderboard to monitor the current season.",
-        "Use bot and copy desks for operational work that still matters.",
-        "Treat season boundaries as automatic rather than manually administered.",
-      ],
-      actions: [{ href: "/leaderboard", label: "Open leaderboard", tone: "secondary" }],
     };
   }
 
