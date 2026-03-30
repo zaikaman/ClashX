@@ -132,6 +132,44 @@ class _FakeHttpClient:
         )
 
 
+class _ChunkedFakeHttpClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def get(self, url: str, *, params: dict[str, Any], headers: dict[str, str]) -> _FakeHttpResponse:
+        self.calls.append({"url": url, "params": params, "headers": headers})
+        start_time = int(params["start_time"])
+        end_time = int(params["end_time"])
+        return _FakeHttpResponse(
+            [
+                {
+                    "symbol": params["symbol"],
+                    "interval": params["interval"],
+                    "openTime": start_time,
+                    "closeTime": start_time + 60_000,
+                    "open": "100000",
+                    "high": "101000",
+                    "low": "99000",
+                    "close": "100500",
+                    "volume": "42",
+                    "tradeCount": 7,
+                },
+                {
+                    "symbol": params["symbol"],
+                    "interval": params["interval"],
+                    "openTime": end_time,
+                    "closeTime": end_time + 60_000,
+                    "open": "100500",
+                    "high": "101500",
+                    "low": "99500",
+                    "close": "101000",
+                    "volume": "43",
+                    "tradeCount": 8,
+                },
+            ]
+        )
+
+
 async def _noop_throttle(**_: Any) -> None:
     return None
 
@@ -204,6 +242,31 @@ def test_get_kline_sends_snake_case_and_legacy_camel_case_query_params() -> None
         "endTime": 2_000,
     }
     assert candles[0]["trade_count"] == 7
+
+
+def test_get_kline_chunks_long_ranges_into_multiple_requests() -> None:
+    client = object.__new__(PacificaClient)
+    client.settings = SimpleNamespace(pacifica_rest_url="https://pacifica.test")
+    client._http = _ChunkedFakeHttpClient()
+    client._throttle = _noop_throttle
+
+    candles = asyncio.run(
+        client.get_kline(
+            "BTC",
+            interval="15m",
+            start_time=0,
+            end_time=900_000 * 4_001,
+        )
+    )
+
+    assert len(client._http.calls) == 2
+    assert client._http.calls[0]["params"]["start_time"] == 0
+    assert client._http.calls[0]["params"]["end_time"] == 900_000 * 3_999
+    assert client._http.calls[1]["params"]["start_time"] == 900_000 * 3_999 + 1
+    assert client._http.calls[1]["params"]["end_time"] == 900_000 * 4_001
+    assert len(candles) == 4
+    assert candles[0]["open_time"] == 0
+    assert candles[-1]["open_time"] == 900_000 * 4_001
 
 
 def test_execute_action_uses_normalized_client_order_id_from_client_payload() -> None:

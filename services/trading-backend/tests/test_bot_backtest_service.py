@@ -6,20 +6,28 @@ from typing import Any
 
 import pytest
 
-from src.services.bot_backtest_service import BotBacktestService
+from src.services.bot_backtest_service import BotBacktestService, MARKET_UNIVERSE_SYMBOL
 
 
 BASE_TIME_MS = 1_710_000_000_000
 FIFTEEN_MINUTES_MS = 900_000
 
 
-def _candle(offset: int, open_price: float, high_price: float, low_price: float, close_price: float, volume: float = 1000.0) -> dict[str, Any]:
+def _symbol_candle(
+    symbol: str,
+    offset: int,
+    open_price: float,
+    high_price: float,
+    low_price: float,
+    close_price: float,
+    volume: float = 1000.0,
+) -> dict[str, Any]:
     open_time = BASE_TIME_MS + offset * FIFTEEN_MINUTES_MS
     close_time = open_time + FIFTEEN_MINUTES_MS
     return {
         "open_time": open_time,
         "close_time": close_time,
-        "symbol": "BTC",
+        "symbol": symbol,
         "interval": "15m",
         "open": open_price,
         "high": high_price,
@@ -28,6 +36,10 @@ def _candle(offset: int, open_price: float, high_price: float, low_price: float,
         "volume": volume,
         "trade_count": 10,
     }
+
+
+def _candle(offset: int, open_price: float, high_price: float, low_price: float, close_price: float, volume: float = 1000.0) -> dict[str, Any]:
+    return _symbol_candle("BTC", offset, open_price, high_price, low_price, close_price, volume)
 
 
 def _graph_rules(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, Any]:
@@ -308,6 +320,168 @@ def test_backtest_honors_cooldown_and_indicator_conditions() -> None:
     assert run["trade_count"] == 1
 
 
+def test_backtest_records_trade_timing_and_realized_equity_exactly() -> None:
+    rules_json = _graph_rules(
+        nodes=[
+            {"id": "condition-open", "kind": "condition", "position": {"x": 120, "y": 80}, "config": {"type": "price_above", "symbol": "BTC", "value": 90}},
+            {"id": "action-open", "kind": "action", "position": {"x": 320, "y": 80}, "config": {"type": "open_long", "symbol": "BTC", "size_usd": 100, "leverage": 1}},
+            {"id": "condition-close", "kind": "condition", "position": {"x": 120, "y": 220}, "config": {"type": "position_pnl_above", "symbol": "BTC", "value": 20}},
+            {"id": "action-close", "kind": "action", "position": {"x": 320, "y": 220}, "config": {"type": "close_position", "symbol": "BTC"}},
+        ],
+        edges=[
+            {"id": "edge-open-1", "source": "builder-entry", "target": "condition-open"},
+            {"id": "edge-open-2", "source": "condition-open", "target": "action-open"},
+            {"id": "edge-close-1", "source": "builder-entry", "target": "condition-close"},
+            {"id": "edge-close-2", "source": "condition-close", "target": "action-close"},
+        ],
+    )
+    candles = [
+        _candle(0, 99, 101, 98, 100),
+        _candle(1, 100, 131, 100, 130),
+    ]
+    service, _ = _service(rules_json, candles)
+
+    run = asyncio.run(
+        service.run_backtest(
+            None,
+            bot_id="bot-a",
+            wallet_address="wallet-a",
+            user_id="user-a",
+            interval="15m",
+            start_time=BASE_TIME_MS,
+            end_time=BASE_TIME_MS + 3 * FIFTEEN_MINUTES_MS,
+            initial_capital_usd=10_000,
+        )
+    )
+
+    trade = run["result_json"]["trades"][0]
+    assert trade["entry_price"] == 100.0
+    assert trade["exit_price"] == 130.0
+    assert trade["pnl_usd"] == 30.0
+    assert trade["duration_seconds"] == 900
+    assert trade["entry_time"] == service._iso_from_ms(BASE_TIME_MS + FIFTEEN_MINUTES_MS)
+    assert trade["exit_time"] == service._iso_from_ms(BASE_TIME_MS + 2 * FIFTEEN_MINUTES_MS)
+    assert run["result_json"]["equity_curve"] == [
+        {"time": BASE_TIME_MS + FIFTEEN_MINUTES_MS, "equity": 10_000.0, "realized_pnl": 0.0, "unrealized_pnl": 0.0},
+        {"time": BASE_TIME_MS + 2 * FIFTEEN_MINUTES_MS, "equity": 10_030.0, "realized_pnl": 30.0, "unrealized_pnl": 0.0},
+    ]
+    assert run["result_json"]["summary"]["ending_equity"] == 10_030.0
+
+
+def test_backtest_reversal_closes_existing_trade_and_carries_new_open_position() -> None:
+    rules_json = _graph_rules(
+        nodes=[
+            {"id": "condition-open-long", "kind": "condition", "position": {"x": 120, "y": 80}, "config": {"type": "price_above", "symbol": "BTC", "value": 90}},
+            {"id": "action-open-long", "kind": "action", "position": {"x": 320, "y": 80}, "config": {"type": "open_long", "symbol": "BTC", "size_usd": 100, "leverage": 1}},
+            {"id": "condition-open-short", "kind": "condition", "position": {"x": 120, "y": 220}, "config": {"type": "price_below", "symbol": "BTC", "value": 95}},
+            {"id": "action-open-short", "kind": "action", "position": {"x": 320, "y": 220}, "config": {"type": "open_short", "symbol": "BTC", "size_usd": 100, "leverage": 1}},
+        ],
+        edges=[
+            {"id": "edge-open-long-1", "source": "builder-entry", "target": "condition-open-long"},
+            {"id": "edge-open-long-2", "source": "condition-open-long", "target": "action-open-long"},
+            {"id": "edge-open-short-1", "source": "builder-entry", "target": "condition-open-short"},
+            {"id": "edge-open-short-2", "source": "condition-open-short", "target": "action-open-short"},
+        ],
+    )
+    candles = [
+        _candle(0, 99, 101, 98, 100),
+        _candle(1, 100, 101, 79, 80),
+        _candle(2, 80, 82, 74, 75),
+    ]
+    service, _ = _service(rules_json, candles)
+
+    run = asyncio.run(
+        service.run_backtest(
+            None,
+            bot_id="bot-a",
+            wallet_address="wallet-a",
+            user_id="user-a",
+            interval="15m",
+            start_time=BASE_TIME_MS,
+            end_time=BASE_TIME_MS + 4 * FIFTEEN_MINUTES_MS,
+            initial_capital_usd=10_000,
+        )
+    )
+
+    closed_trade, open_trade = run["result_json"]["trades"]
+    assert closed_trade["status"] == "closed"
+    assert closed_trade["side"] == "long"
+    assert closed_trade["close_reason"] == "action_reverse"
+    assert closed_trade["pnl_usd"] == -20.0
+    assert closed_trade["duration_seconds"] == 900
+    assert open_trade["status"] == "open"
+    assert open_trade["side"] == "short"
+    assert open_trade["entry_price"] == 80.0
+    assert open_trade["unrealized_pnl"] == 6.25
+    assert run["trade_count"] == 1
+    assert run["result_json"]["summary"]["realized_pnl"] == -20.0
+    assert run["result_json"]["summary"]["unrealized_pnl"] == 6.25
+    assert run["result_json"]["summary"]["ending_equity"] == 9_986.25
+    assert run["result_json"]["equity_curve"][-1]["equity"] == 9_986.25
+
+
+def test_backtest_aggregates_multi_symbol_equity_and_price_series() -> None:
+    rules_json = _graph_rules(
+        nodes=[
+            {
+                "id": "condition-open",
+                "kind": "condition",
+                "position": {"x": 120, "y": 80},
+                "config": {"type": "price_above", "symbol": MARKET_UNIVERSE_SYMBOL, "value": 90},
+            },
+            {
+                "id": "action-open",
+                "kind": "action",
+                "position": {"x": 320, "y": 80},
+                "config": {"type": "open_long", "symbol": MARKET_UNIVERSE_SYMBOL, "size_usd": 100, "leverage": 1},
+            },
+        ],
+        edges=[
+            {"id": "edge-open-1", "source": "builder-entry", "target": "condition-open"},
+            {"id": "edge-open-2", "source": "condition-open", "target": "action-open"},
+        ],
+    )
+    tables = _tables(rules_json)
+    tables["bot_definitions"][0]["market_scope"] = "Pacifica perpetuals / BTC,ETH"
+    supabase = FakeSupabaseRestClient(tables)
+    pacifica = FakePacificaClient(
+        {
+            ("BTC", "15m"): [
+                _symbol_candle("BTC", 0, 99, 101, 98, 100),
+                _symbol_candle("BTC", 1, 100, 106, 99, 105),
+            ],
+            ("ETH", "15m"): [
+                _symbol_candle("ETH", 0, 199, 201, 198, 200),
+                _symbol_candle("ETH", 1, 200, 211, 199, 210),
+            ],
+        }
+    )
+    service = BotBacktestService(pacifica_client=pacifica, supabase=supabase)
+
+    run = asyncio.run(
+        service.run_backtest(
+            None,
+            bot_id="bot-a",
+            wallet_address="wallet-a",
+            user_id="user-a",
+            interval="15m",
+            start_time=BASE_TIME_MS,
+            end_time=BASE_TIME_MS + 3 * FIFTEEN_MINUTES_MS,
+            initial_capital_usd=10_000,
+        )
+    )
+
+    assert run["status"] == "completed"
+    assert run["trade_count"] == 0
+    assert len(run["result_json"]["trades"]) == 2
+    assert {trade["symbol"] for trade in run["result_json"]["trades"]} == {"BTC", "ETH"}
+    assert run["result_json"]["summary"]["symbols"] == ["BTC", "ETH"]
+    assert run["result_json"]["summary"]["unrealized_pnl"] == 10.0
+    assert run["result_json"]["summary"]["ending_equity"] == 10_010.0
+    assert run["result_json"]["equity_curve"][-1]["unrealized_pnl"] == 10.0
+    assert sorted(run["result_json"]["price_series"]["series_by_symbol"]) == ["BTC", "ETH"]
+
+
 def test_backtest_returns_failed_run_for_unsupported_actions() -> None:
     rules_json = _graph_rules(
         nodes=[
@@ -337,6 +511,90 @@ def test_backtest_returns_failed_run_for_unsupported_actions() -> None:
 
     assert run["status"] == "failed"
     assert run["result_json"]["preflight_issues"]
+
+
+def test_backtest_allows_ranges_longer_than_two_thousand_bars() -> None:
+    rules_json = _graph_rules(
+        nodes=[
+            {"id": "condition-open", "kind": "condition", "position": {"x": 120, "y": 80}, "config": {"type": "price_above", "symbol": "BTC", "value": 90}},
+            {"id": "action-open", "kind": "action", "position": {"x": 320, "y": 80}, "config": {"type": "open_long", "symbol": "BTC", "size_usd": 100, "leverage": 1}},
+        ],
+        edges=[
+            {"id": "edge-open-1", "source": "builder-entry", "target": "condition-open"},
+            {"id": "edge-open-2", "source": "condition-open", "target": "action-open"},
+        ],
+    )
+    candles = [_candle(index, 99, 101, 98, 100 + (index % 5)) for index in range(2_005)]
+    service, _ = _service(rules_json, candles)
+
+    run = asyncio.run(
+        service.run_backtest(
+            None,
+            bot_id="bot-a",
+            wallet_address="wallet-a",
+            user_id="user-a",
+            interval="15m",
+            start_time=BASE_TIME_MS,
+            end_time=BASE_TIME_MS + 2_006 * FIFTEEN_MINUTES_MS,
+            initial_capital_usd=10_000,
+        )
+    )
+
+    assert run["status"] == "completed"
+    assert len(run["result_json"]["equity_curve"]) == 2_005
+    assert run["result_json"].get("preflight_issues") in (None, [])
+
+
+def test_backtest_skips_symbols_without_history_when_others_are_available() -> None:
+    rules_json = _graph_rules(
+        nodes=[
+            {
+                "id": "condition-open",
+                "kind": "condition",
+                "position": {"x": 120, "y": 80},
+                "config": {"type": "price_above", "symbol": MARKET_UNIVERSE_SYMBOL, "value": 90},
+            },
+            {
+                "id": "action-open",
+                "kind": "action",
+                "position": {"x": 320, "y": 80},
+                "config": {"type": "open_long", "symbol": MARKET_UNIVERSE_SYMBOL, "size_usd": 100, "leverage": 1},
+            },
+        ],
+        edges=[
+            {"id": "edge-open-1", "source": "builder-entry", "target": "condition-open"},
+            {"id": "edge-open-2", "source": "condition-open", "target": "action-open"},
+        ],
+    )
+    tables = _tables(rules_json)
+    tables["bot_definitions"][0]["market_scope"] = "Pacifica perpetuals / BTC,COPPER"
+    supabase = FakeSupabaseRestClient(tables)
+    pacifica = FakePacificaClient(
+        {
+            ("BTC", "15m"): [_candle(0, 99, 101, 98, 100), _candle(1, 100, 104, 99, 103)],
+            ("COPPER", "15m"): [],
+        }
+    )
+    service = BotBacktestService(pacifica_client=pacifica, supabase=supabase)
+
+    run = asyncio.run(
+        service.run_backtest(
+            None,
+            bot_id="bot-a",
+            wallet_address="wallet-a",
+            user_id="user-a",
+            interval="15m",
+            start_time=BASE_TIME_MS,
+            end_time=BASE_TIME_MS + 3 * FIFTEEN_MINUTES_MS,
+            initial_capital_usd=10_000,
+        )
+    )
+
+    assert run["status"] == "completed"
+    assert run["result_json"]["summary"]["symbols"] == ["BTC"]
+    assert run["result_json"]["summary"]["requested_symbols"] == ["BTC", "COPPER"]
+    assert run["result_json"]["summary"]["skipped_symbols"] == ["COPPER"]
+    assert any("skipped" in line.lower() for line in run["result_json"]["assumptions"])
 
 
 def test_backtest_runs_are_scoped_to_wallet_history_and_detail() -> None:
@@ -396,3 +654,50 @@ def test_backtest_runs_are_scoped_to_wallet_history_and_detail() -> None:
 
     with pytest.raises(ValueError, match="Backtest run not found"):
         service.get_run(None, run_id=run_a["id"], wallet_address="wallet-b", user_id="user-b")
+
+
+def test_list_runs_returns_full_history_without_truncation() -> None:
+    rules_json = _graph_rules(
+        nodes=[
+            {"id": "condition-open", "kind": "condition", "position": {"x": 120, "y": 80}, "config": {"type": "price_above", "symbol": "BTC", "value": 90}},
+            {"id": "action-open", "kind": "action", "position": {"x": 320, "y": 80}, "config": {"type": "open_long", "symbol": "BTC", "size_usd": 100, "leverage": 1}},
+        ],
+        edges=[
+            {"id": "edge-open-1", "source": "builder-entry", "target": "condition-open"},
+            {"id": "edge-open-2", "source": "condition-open", "target": "action-open"},
+        ],
+    )
+    candles = [_candle(0, 99, 101, 98, 100)]
+    service, supabase = _service(rules_json, candles)
+
+    for index in range(105):
+        supabase.insert(
+            "bot_backtest_runs",
+            {
+                "id": f"run-{index}",
+                "bot_definition_id": "bot-a",
+                "user_id": "user-a",
+                "wallet_address": "wallet-a",
+                "bot_name_snapshot": "Backtest Bot",
+                "rules_snapshot_json": rules_json,
+                "interval": "15m",
+                "start_time": BASE_TIME_MS,
+                "end_time": BASE_TIME_MS + 2 * FIFTEEN_MINUTES_MS,
+                "initial_capital_usd": 10_000,
+                "execution_model": "candle_close_v1",
+                "pnl_total": float(index),
+                "pnl_total_pct": float(index) / 100.0,
+                "max_drawdown_pct": 1.0,
+                "win_rate": 50.0,
+                "trade_count": 1,
+                "status": "completed",
+                "result_json": {"summary": {"symbols": ["BTC"]}},
+                "created_at": f"2026-03-16T00:00:{index % 60:02d}+00:00",
+                "completed_at": f"2026-03-16T00:01:{index % 60:02d}+00:00",
+                "updated_at": f"2026-03-16T00:01:{index % 60:02d}+00:00",
+            },
+        )
+
+    runs = service.list_runs(None, wallet_address="wallet-a", user_id="user-a")
+
+    assert len(runs) == 105

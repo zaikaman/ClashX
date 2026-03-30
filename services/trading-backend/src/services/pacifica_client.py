@@ -19,6 +19,16 @@ from src.services.pacifica_signing import prepare_message
 
 
 CLIENT_ORDER_ID_NAMESPACE = uuid.UUID("d98f4ee8-e7ed-4d37-8f62-d3f87d22dcff")
+KLINE_INTERVAL_MS: dict[str, int] = {
+    "1m": 60_000,
+    "5m": 300_000,
+    "15m": 900_000,
+    "30m": 1_800_000,
+    "1h": 3_600_000,
+    "4h": 14_400_000,
+    "1d": 86_400_000,
+}
+MAX_KLINE_CANDLES_PER_REQUEST = 4_000
 
 
 class PacificaClientError(RuntimeError):
@@ -637,6 +647,56 @@ class PacificaClient:
         start_time: int,
         end_time: int | None = None,
     ) -> list[dict[str, Any]]:
+        interval_ms = KLINE_INTERVAL_MS.get(interval)
+        resolved_end_time = end_time if end_time is not None else int(time() * 1000)
+        if interval_ms is None or resolved_end_time <= start_time:
+            return await self._get_kline_window(
+                symbol,
+                interval=interval,
+                start_time=start_time,
+                end_time=end_time,
+            )
+
+        estimated_candles = ((resolved_end_time - start_time) // interval_ms) + 1
+        if estimated_candles <= MAX_KLINE_CANDLES_PER_REQUEST:
+            return await self._get_kline_window(
+                symbol,
+                interval=interval,
+                start_time=start_time,
+                end_time=end_time,
+            )
+
+        chunk_span_ms = interval_ms * (MAX_KLINE_CANDLES_PER_REQUEST - 1)
+        candles_by_open_time: dict[int, dict[str, Any]] = {}
+        chunk_start = start_time
+
+        while chunk_start <= resolved_end_time:
+            chunk_end = min(resolved_end_time, chunk_start + chunk_span_ms)
+            chunk_candles = await self._get_kline_window(
+                symbol,
+                interval=interval,
+                start_time=chunk_start,
+                end_time=chunk_end,
+            )
+            for candle in chunk_candles:
+                open_time = self._coerce_int(candle.get("open_time"), -1)
+                if open_time < 0:
+                    continue
+                candles_by_open_time[open_time] = candle
+            if chunk_end >= resolved_end_time:
+                break
+            chunk_start = chunk_end + 1
+
+        return [candles_by_open_time[key] for key in sorted(candles_by_open_time)]
+
+    async def _get_kline_window(
+        self,
+        symbol: str,
+        *,
+        interval: str,
+        start_time: int,
+        end_time: int | None,
+    ) -> list[dict[str, Any]]:
         await self._throttle(bucket="public")
         params: dict[str, Any] = {
             "symbol": symbol,
@@ -665,6 +725,15 @@ class PacificaClient:
         if not isinstance(payload, list):
             raise PacificaClientError("Pacifica kline API returned an unexpected payload shape")
 
+        return self._parse_kline_payload(payload, symbol=symbol, interval=interval)
+
+    def _parse_kline_payload(
+        self,
+        payload: list[dict[str, Any]],
+        *,
+        symbol: str,
+        interval: str,
+    ) -> list[dict[str, Any]]:
         candles: list[dict[str, Any]] = []
         for item in payload:
             if not isinstance(item, dict):

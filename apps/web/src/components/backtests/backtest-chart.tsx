@@ -2,7 +2,6 @@
 
 import { useEffect, useRef } from "react";
 import {
-  CandlestickSeries,
   createChart,
   createSeriesMarkers,
   LineSeries,
@@ -16,21 +15,21 @@ function asUtc(value: number): UTCTimestamp {
   return Math.floor(value / 1000) as UTCTimestamp;
 }
 
-const EQUITY_COLORS = ["#dce85d", "#74b97f", "#8ec5ff"];
+const EQUITY_COLORS = ["#dce85d", "#74b97f", "#8ec5ff", "#f59e0b"];
 
 export function BacktestChart({
-  run,
-  compareRuns,
+  runs,
 }: {
-  run: BacktestRunDetail | null;
-  compareRuns: BacktestRunDetail[];
+  runs: BacktestRunDetail[];
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const visibleRuns = runs.filter((run) => run.result_json.equity_curve.length > 0);
+  const primaryRun = visibleRuns[0] ?? null;
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || !run) {
+    if (!container || !primaryRun) {
       return;
     }
 
@@ -54,7 +53,7 @@ export function BacktestChart({
         timeVisible: true,
       },
       rightPriceScale: {
-        borderColor: "rgba(255,255,255,0.08)",
+        visible: false,
       },
       leftPriceScale: {
         visible: true,
@@ -63,30 +62,31 @@ export function BacktestChart({
     });
     chartRef.current = chart;
 
-    const result = run.result_json;
-    const primarySymbol = result.price_series.primary_symbol;
-    const priceData = primarySymbol ? result.price_series.series_by_symbol[primarySymbol] ?? [] : [];
-    const candlestickSeries = chart.addSeries(CandlestickSeries, {
-      upColor: "#74b97f",
-      downColor: "#e06c6e",
-      wickUpColor: "#74b97f",
-      wickDownColor: "#e06c6e",
-      borderVisible: false,
-      priceScaleId: "right",
+    const seriesRefs = visibleRuns.map((run, index) => {
+      const equitySeries = chart.addSeries(LineSeries, {
+        priceScaleId: "left",
+        color: EQUITY_COLORS[index % EQUITY_COLORS.length],
+        lineWidth: index === 0 ? 3 : 2,
+        lastValueVisible: true,
+        crosshairMarkerVisible: true,
+        priceFormat: {
+          type: "price",
+          precision: 2,
+          minMove: 0.01,
+        },
+      });
+      equitySeries.setData(
+        run.result_json.equity_curve.map((point) => ({
+          time: asUtc(point.time),
+          value: point.equity,
+        })),
+      );
+      return equitySeries;
     });
-    candlestickSeries.setData(
-      priceData.map((candle) => ({
-        time: asUtc(candle.time),
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close,
-      })),
-    );
 
-    const markerPlugin = createSeriesMarkers(candlestickSeries);
+    const markerPlugin = createSeriesMarkers(seriesRefs[0]);
     markerPlugin.setMarkers(
-      result.trades.flatMap((trade) => {
+      primaryRun.result_json.trades.flatMap((trade) => {
         const entryMarker = {
           time: asUtc(new Date(trade.entry_time).getTime()),
           position: trade.side === "long" ? "belowBar" : "aboveBar",
@@ -108,25 +108,6 @@ export function BacktestChart({
       }),
     );
 
-    const visibleCompareRuns = compareRuns.length > 0 ? compareRuns : [run];
-    const equitySeriesRefs = [];
-    visibleCompareRuns.forEach((compareRun, index) => {
-      const equitySeries = chart.addSeries(LineSeries, {
-        priceScaleId: "left",
-        color: EQUITY_COLORS[index % EQUITY_COLORS.length],
-        lineWidth: compareRun.id === run.id ? 3 : 2,
-        lastValueVisible: true,
-        crosshairMarkerVisible: true,
-      });
-      equitySeries.setData(
-        compareRun.result_json.equity_curve.map((point) => ({
-          time: asUtc(point.time),
-          value: point.equity,
-        })),
-      );
-      equitySeriesRefs.push(equitySeries);
-    });
-
     chart.timeScale().fitContent();
     const resizeObserver = new ResizeObserver(() => {
       chart.timeScale().fitContent();
@@ -135,17 +116,24 @@ export function BacktestChart({
 
     return () => {
       resizeObserver.disconnect();
-      equitySeriesRefs.length = 0;
       markerPlugin.setMarkers([]);
       chart.remove();
       chartRef.current = null;
     };
-  }, [compareRuns, run]);
+  }, [primaryRun, visibleRuns]);
 
-  if (!run) {
+  if (!runs.length) {
     return (
       <div className="flex min-h-[26rem] items-center justify-center rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#090a0a] text-sm text-neutral-500">
-        Run a backtest or open one from history to load the chart.
+        Open a run from history to load the balance curve.
+      </div>
+    );
+  }
+
+  if (!primaryRun) {
+    return (
+      <div className="flex min-h-[26rem] items-center justify-center rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#090a0a] text-sm text-neutral-500">
+        This run did not produce an equity curve.
       </div>
     );
   }

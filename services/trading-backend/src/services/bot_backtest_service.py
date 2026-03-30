@@ -37,7 +37,6 @@ UNSUPPORTED_ACTION_TYPES = {
     "cancel_all_orders",
 }
 MARKET_UNIVERSE_SYMBOL = "__BOT_MARKET_UNIVERSE__"
-MAX_MAIN_BARS = 2_000
 
 
 class BotBacktestService:
@@ -152,7 +151,7 @@ class BotBacktestService:
         filters: dict[str, Any] = {"wallet_address": wallet_address}
         if bot_id:
             filters["bot_definition_id"] = bot_id
-        rows = self._supabase.select("bot_backtest_runs", filters=filters, order="completed_at.desc", limit=100)
+        rows = self._supabase.select("bot_backtest_runs", filters=filters, order="completed_at.desc")
         return [self.serialize_run_summary(row) for row in rows]
 
     def get_run(
@@ -191,6 +190,7 @@ class BotBacktestService:
         )
         if not active_symbols:
             raise ValueError("Backtests need at least one concrete market symbol.")
+        requested_symbols = list(active_symbols)
 
         candle_requests = {
             (symbol, interval): {"symbol": symbol, "timeframe": interval}
@@ -206,6 +206,7 @@ class BotBacktestService:
 
         candle_lookup: dict[str, dict[str, list[dict[str, Any]]]] = {}
         close_time_lookup: dict[tuple[str, str], list[int]] = {}
+        missing_main_symbols: set[str] = set()
         for symbol, timeframe in sorted(candle_requests):
             candles = await self._pacifica.get_kline(
                 symbol,
@@ -214,9 +215,26 @@ class BotBacktestService:
                 end_time=end_time,
             )
             if timeframe == interval and not candles:
-                raise ValueError(f"No historical candles were returned for {symbol} on {interval}.")
+                missing_main_symbols.add(symbol)
+                continue
             candle_lookup.setdefault(symbol, {})[timeframe] = candles
             close_time_lookup[(symbol, timeframe)] = [int(item.get("close_time") or 0) for item in candles]
+
+        if missing_main_symbols:
+            active_symbols = [symbol for symbol in active_symbols if symbol not in missing_main_symbols]
+            evaluation_rulesets = [
+                ruleset
+                for ruleset in evaluation_rulesets
+                if self._extract_symbols(ruleset).intersection(active_symbols)
+            ]
+
+        if not active_symbols:
+            if len(requested_symbols) == 1:
+                raise ValueError(f"No historical candles were returned for {requested_symbols[0]} on {interval}.")
+            raise ValueError(
+                "No historical candles were returned for any requested symbol on "
+                f"{interval}. Missing: {', '.join(sorted(missing_main_symbols))}."
+            )
 
         main_candles = {symbol: candle_lookup.get(symbol, {}).get(interval, []) for symbol in active_symbols}
         timeline = sorted(
@@ -378,6 +396,8 @@ class BotBacktestService:
         summary = {
             "primary_symbol": primary_symbol,
             "symbols": active_symbols,
+            "requested_symbols": requested_symbols,
+            "skipped_symbols": sorted(missing_main_symbols),
             "interval": interval,
             "initial_capital_usd": round(initial_capital_usd, 8),
             "ending_equity": round(ending_equity, 8),
@@ -419,6 +439,13 @@ class BotBacktestService:
                 "Take-profit and stop-loss checks use candle high/low on later bars.",
                 "If both TP and SL are touched in one bar, the replay picks the less favorable exit.",
                 "No fees, funding, or slippage are modeled in v1.",
+                *(
+                    [
+                        "Symbols without main-interval history are skipped instead of failing the entire replay."
+                    ]
+                    if missing_main_symbols
+                    else []
+                ),
             ],
         }
 
@@ -443,11 +470,6 @@ class BotBacktestService:
             issues.append("Replay interval is not supported.")
         if end_time <= start_time:
             issues.append("End time must be after start time.")
-        interval_ms = MAIN_TIMEFRAME_MS.get(interval, 0)
-        if interval_ms > 0:
-            estimated_bars = max(1, (end_time - start_time) // interval_ms)
-            if estimated_bars > MAX_MAIN_BARS:
-                issues.append(f"Backtests are capped at {MAX_MAIN_BARS} replay bars per symbol in v1.")
         if initial_capital_usd <= 0:
             issues.append("Initial capital must be greater than zero.")
         action_types = self._action_types_in_rules(rules_json)

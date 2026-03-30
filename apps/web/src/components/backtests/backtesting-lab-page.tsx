@@ -25,10 +25,12 @@ type SavedBot = {
 };
 
 type HistoryFilter = "all" | "completed" | "failed";
+type HistoryScope = "all" | "selected";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const INTERVAL_OPTIONS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"] as const;
 const INSPECTOR_PAGE_SIZE = 12;
+const COMPARE_COLORS = ["#dce85d", "#74b97f", "#8ec5ff", "#f59e0b"];
 const DATE_PRESETS = [
   { id: "7d", label: "7D", days: 7 },
   { id: "30d", label: "30D", days: 30 },
@@ -149,6 +151,7 @@ export function BacktestingLabPage() {
   const [journalPage, setJournalPage] = useState(1);
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>("all");
+  const [historyScope, setHistoryScope] = useState<HistoryScope>("all");
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -158,6 +161,20 @@ export function BacktestingLabPage() {
   const currentRun = activeRunId ? runCache[activeRunId] ?? null : null;
   const compareRuns = compareIds.map((runId) => runCache[runId]).filter(Boolean) as BacktestRunDetail[];
   const selectedBot = bots.find((bot) => bot.id === selectedBotId) ?? null;
+  const comparisonRuns = useMemo(() => {
+    const next: BacktestRunDetail[] = [];
+    const seen = new Set<string>();
+
+    [currentRun, ...compareRuns].forEach((run) => {
+      if (!run || seen.has(run.id)) {
+        return;
+      }
+      seen.add(run.id);
+      next.push(run);
+    });
+
+    return next;
+  }, [compareRuns, currentRun]);
 
   useEffect(() => {
     if (!authenticated || !walletAddress) {
@@ -322,7 +339,7 @@ export function BacktestingLabPage() {
       if (historyFilter !== "all" && run.status !== historyFilter) {
         return false;
       }
-      if (selectedBotId && run.bot_definition_id !== selectedBotId && query.length === 0) {
+      if (historyScope === "selected" && selectedBotId && run.bot_definition_id !== selectedBotId) {
         return false;
       }
       if (!query) {
@@ -334,7 +351,7 @@ export function BacktestingLabPage() {
         run.status.toLowerCase().includes(query)
       );
     });
-  }, [deferredHistoryQuery, historyFilter, runs, selectedBotId]);
+  }, [deferredHistoryQuery, historyFilter, historyScope, runs, selectedBotId]);
 
   async function refreshHistory() {
     if (!authenticated || !walletAddress) return;
@@ -421,9 +438,9 @@ export function BacktestingLabPage() {
   }
 
   const summary = currentRun?.result_json.summary ?? null;
-  const preflightIssues = currentRun?.result_json.preflight_issues ?? [];
-  const trades = currentRun?.result_json.trades ?? [];
-  const triggerEvents = currentRun?.result_json.trigger_events ?? [];
+  const preflightIssues = useMemo(() => currentRun?.result_json.preflight_issues ?? [], [currentRun]);
+  const trades = useMemo(() => currentRun?.result_json.trades ?? [], [currentRun]);
+  const triggerEvents = useMemo(() => currentRun?.result_json.trigger_events ?? [], [currentRun]);
   const tradePageCount = Math.max(1, Math.ceil(trades.length / INSPECTOR_PAGE_SIZE));
   const journalPageCount = Math.max(1, Math.ceil(triggerEvents.length / INSPECTOR_PAGE_SIZE));
   const visibleTrades = useMemo(
@@ -437,6 +454,11 @@ export function BacktestingLabPage() {
   const recentJournalEvents = useMemo(() => [...triggerEvents].reverse().slice(0, 5), [triggerEvents]);
   const eventGroups = useMemo(() => summarizeEventGroups(triggerEvents), [triggerEvents]);
   const trackedSymbols = useMemo(() => {
+    const summarySymbols = currentRun?.result_json.summary?.symbols ?? [];
+    if (summarySymbols.length > 0) {
+      return summarySymbols;
+    }
+
     const symbols = new Set<string>();
 
     triggerEvents.forEach((event) => {
@@ -451,8 +473,17 @@ export function BacktestingLabPage() {
       }
     });
 
-    return Array.from(symbols).slice(0, 4);
-  }, [trades, triggerEvents]);
+    return Array.from(symbols);
+  }, [currentRun, trades, triggerEvents]);
+  const visibleTrackedSymbols = trackedSymbols.slice(0, 6);
+  const hiddenTrackedSymbolCount = Math.max(0, trackedSymbols.length - visibleTrackedSymbols.length);
+  const chartDescription = summary
+    ? trackedSymbols.length > 1
+      ? `Portfolio balance across ${trackedSymbols.length} symbols on ${currentRun?.interval ?? summary.interval}.`
+      : summary.primary_symbol
+        ? `Portfolio balance for ${summary.primary_symbol} on ${currentRun?.interval ?? summary.interval}.`
+        : "Portfolio balance for the selected replay."
+    : "Open a run to load the chart.";
 
   useEffect(() => {
     setTradePage(1);
@@ -676,17 +707,20 @@ export function BacktestingLabPage() {
             </article>
           ) : null}
 
-          {compareRuns.length > 1 ? (
+          {comparisonRuns.length > 1 ? (
             <section className="grid gap-3 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5 md:grid-cols-3">
-              {compareRuns.map((run, index) => (
+              {comparisonRuns.map((run, index) => (
                 <article key={run.id} className="grid gap-2 rounded-[1.5rem] bg-[#090a0a] p-4">
-                  <span className="label" style={{ color: ["#dce85d", "#74b97f", "#8ec5ff"][index % 3] }}>
-                    Compare {index + 1}
+                  <span className="label" style={{ color: COMPARE_COLORS[index % COMPARE_COLORS.length] }}>
+                    {currentRun ? (index === 0 ? "Selected run" : `Compare ${index}`) : `Compare ${index + 1}`}
                   </span>
                   <div className="font-mono text-lg font-bold uppercase text-neutral-50">{run.bot_name_snapshot}</div>
                   <div className="text-sm text-neutral-400">
                     {formatMoney(run.pnl_total)} / {formatPercent(run.pnl_total_pct)}
                   </div>
+                  {(run.result_json.summary?.symbols?.length ?? 0) > 1 ? (
+                    <div className="text-xs text-neutral-500">{run.result_json.summary.symbols.length} symbols in rotation</div>
+                  ) : null}
                   <div className="text-xs text-neutral-500">
                     DD {run.max_drawdown_pct.toFixed(2)}% · WR {run.win_rate.toFixed(1)}% · {run.trade_count} trades
                   </div>
@@ -699,17 +733,39 @@ export function BacktestingLabPage() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="grid gap-1">
                 <span className="label text-[#74b97f]">Replay chart</span>
-                <p className="text-sm text-neutral-500">
-                  {summary?.primary_symbol ? `${summary.primary_symbol} candles on the right scale, equity on the left.` : "Open a run to load the chart."}
-                </p>
+                <p className="text-sm text-neutral-500">{chartDescription}</p>
               </div>
               {currentRun ? (
-                <div className="rounded-full border border-[rgba(255,255,255,0.08)] px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
-                  {currentRun.interval} replay
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="rounded-full border border-[rgba(255,255,255,0.08)] px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
+                    {currentRun.interval} replay
+                  </div>
+                  {trackedSymbols.length ? (
+                    <div className="rounded-full border border-[rgba(255,255,255,0.08)] px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
+                      {trackedSymbols.length} {trackedSymbols.length === 1 ? "symbol" : "symbols"}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>
-            <BacktestChart run={currentRun} compareRuns={compareRuns} />
+            {visibleTrackedSymbols.length ? (
+              <div className="flex flex-wrap gap-2">
+                {visibleTrackedSymbols.map((symbol) => (
+                  <span
+                    key={symbol}
+                    className="rounded-full border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300"
+                  >
+                    {symbol}
+                  </span>
+                ))}
+                {hiddenTrackedSymbolCount > 0 ? (
+                  <span className="rounded-full border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3 py-1.5 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                    +{hiddenTrackedSymbolCount} more
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+            <BacktestChart runs={comparisonRuns} />
           </section>
 
           <section className="grid gap-4">
@@ -743,7 +799,12 @@ export function BacktestingLabPage() {
                 {[
                   { label: "Trades", value: String(trades.length) },
                   { label: "Journal events", value: String(triggerEvents.length) },
-                  { label: "Symbols", value: trackedSymbols.length ? trackedSymbols.join(", ") : "--" },
+                  {
+                    label: "Symbols",
+                    value: trackedSymbols.length
+                      ? `${visibleTrackedSymbols.join(", ")}${hiddenTrackedSymbolCount > 0 ? ` +${hiddenTrackedSymbolCount}` : ""}`
+                      : "--",
+                  },
                   {
                     label: "Latest event",
                     value: triggerEvents.length ? formatDateTime(triggerEvents[triggerEvents.length - 1].timestamp) : "Waiting for a run",
@@ -941,7 +1002,7 @@ export function BacktestingLabPage() {
             <div className="flex items-center justify-between gap-3">
               <div className="grid gap-1">
                 <span className="label text-[#dce85d]">Run history</span>
-                <p className="text-sm text-neutral-500">Keep up to three runs selected for compare.</p>
+                <p className="text-sm text-neutral-500">Browse the full wallet history and keep up to three extra runs selected for compare.</p>
               </div>
               <History className="h-4 w-4 text-neutral-500" />
             </div>
@@ -954,6 +1015,31 @@ export function BacktestingLabPage() {
                 className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3.5 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]"
               />
             </label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setHistoryScope("all")}
+                className={`rounded-full border px-3 py-2 text-[0.6rem] font-semibold uppercase tracking-[0.16em] transition ${
+                  historyScope === "all"
+                    ? "border-[#74b97f]/40 bg-[#74b97f]/10 text-[#74b97f]"
+                    : "border-[rgba(255,255,255,0.12)] text-neutral-400 hover:border-white hover:text-neutral-50"
+                }`}
+              >
+                All bots
+              </button>
+              <button
+                type="button"
+                onClick={() => setHistoryScope("selected")}
+                disabled={!selectedBotId}
+                className={`rounded-full border px-3 py-2 text-[0.6rem] font-semibold uppercase tracking-[0.16em] transition ${
+                  historyScope === "selected"
+                    ? "border-[#74b97f]/40 bg-[#74b97f]/10 text-[#74b97f]"
+                    : "border-[rgba(255,255,255,0.12)] text-neutral-400 hover:border-white hover:text-neutral-50"
+                } disabled:cursor-not-allowed disabled:border-[rgba(255,255,255,0.08)] disabled:text-neutral-600`}
+              >
+                Launch bot
+              </button>
+            </div>
             <div className="flex flex-wrap gap-2">
               {(["all", "completed", "failed"] as const).map((filter) => (
                 <button
@@ -970,6 +1056,9 @@ export function BacktestingLabPage() {
                 </button>
               ))}
             </div>
+            <p className="text-xs text-neutral-500">
+              Showing {filteredRuns.length} of {runs.length} saved runs.
+            </p>
             {historyError ? <p className="text-sm text-[#dce85d]">{historyError}</p> : null}
             <div className="grid gap-3">
               {loading ? (
