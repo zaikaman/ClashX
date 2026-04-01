@@ -72,6 +72,9 @@ class Settings:
     pacifica_performance_refresh_seconds: int
     privy_app_id: str
     privy_verification_key: str
+    gemini_api_key: str
+    gemini_base_url: str
+    gemini_model: str
     openai_api_key: str
     openai_base_url: str
     openai_model: str
@@ -125,6 +128,9 @@ def get_settings() -> Settings:
         pacifica_performance_refresh_seconds=max(int(os.getenv("PACIFICA_PERFORMANCE_REFRESH_SECONDS", "60")), 5),
         privy_app_id=os.getenv("PRIVY_APP_ID", ""),
         privy_verification_key=os.getenv("PRIVY_VERIFICATION_KEY", ""),
+        gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
+        gemini_base_url=os.getenv("GEMINI_BASE_URL", "").strip(),
+        gemini_model=os.getenv("GEMINI_MODEL", "").strip(),
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         openai_base_url=os.getenv("OPENAI_BASE_URL", "").strip(),
         openai_model=os.getenv("OPENAI_MODEL", "").strip(),

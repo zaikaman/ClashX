@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -63,6 +64,13 @@ ACTION_OPTIONS = [
 ]
 
 
+@dataclass(frozen=True)
+class _ProviderAttempt:
+    name: str
+    request_coro: Any
+    extract_text: Any
+
+
 class BuilderAiService:
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -74,13 +82,105 @@ class BuilderAiService:
         available_markets: list[str],
         current_draft: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        if (
-            not self.settings.openai_api_key
-            or not self.settings.openai_base_url
-            or not self.settings.openai_model
-        ):
-            raise RuntimeError("Missing OPENAI_API_KEY, OPENAI_BASE_URL, or OPENAI_MODEL.")
+        attempts = self._build_provider_attempts(
+            messages=messages,
+            available_markets=available_markets,
+            current_draft=current_draft,
+        )
+        if not attempts:
+            raise RuntimeError(
+                "Missing Gemini and OpenAI configuration. Set GEMINI_API_KEY, GEMINI_BASE_URL, and GEMINI_MODEL "
+                "or OPENAI_API_KEY, OPENAI_BASE_URL, and OPENAI_MODEL."
+            )
 
+        errors: list[str] = []
+        for attempt in attempts:
+            try:
+                payload = await attempt.request_coro()
+                raw_text = attempt.extract_text(payload)
+                parsed = self._normalize_tool_payload(self._extract_json(raw_text))
+                return self._sanitize_draft(parsed, available_markets)
+            except RuntimeError as exc:
+                errors.append(f"{attempt.name}: {exc}")
+        raise RuntimeError("; ".join(errors))
+
+    def _build_provider_attempts(
+        self,
+        messages: list[dict[str, str]],
+        available_markets: list[str],
+        current_draft: dict[str, Any] | None,
+    ) -> list[_ProviderAttempt]:
+        system_prompt = self._build_system_prompt(available_markets, current_draft)
+        attempts: list[_ProviderAttempt] = []
+        if self._has_gemini_config():
+            attempts.append(
+                _ProviderAttempt(
+                    name="Gemini",
+                    request_coro=lambda: self._request_gemini(messages, system_prompt),
+                    extract_text=self._extract_gemini_text,
+                )
+            )
+        if self._has_openai_config():
+            attempts.append(
+                _ProviderAttempt(
+                    name="OpenAI",
+                    request_coro=lambda: self._request_openai(messages, system_prompt),
+                    extract_text=self._extract_openai_text,
+                )
+            )
+        return attempts
+
+    def _has_gemini_config(self) -> bool:
+        return bool(
+            self.settings.gemini_api_key
+            and self.settings.gemini_base_url
+            and self.settings.gemini_model
+        )
+
+    def _has_openai_config(self) -> bool:
+        return bool(
+            self.settings.openai_api_key
+            and self.settings.openai_base_url
+            and self.settings.openai_model
+        )
+
+    async def _request_gemini(
+        self,
+        messages: list[dict[str, str]],
+        system_prompt: str,
+    ) -> Any:
+        response = await self._http.post(
+            self._build_gemini_url(self.settings.gemini_base_url, self.settings.gemini_model),
+            headers={
+                "Authorization": f"Bearer {self.settings.gemini_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "systemInstruction": {
+                    "parts": [
+                        {
+                            "text": system_prompt,
+                        }
+                    ]
+                },
+                "contents": self._build_gemini_contents(messages),
+                "generationConfig": {
+                    "temperature": 1,
+                    "topP": 1,
+                    "thinkingConfig": {
+                        "includeThoughts": True,
+                        "thinkingBudget": 26240,
+                    },
+                },
+            },
+        )
+        return self._parse_response_payload(response)
+
+    async def _request_openai(
+        self,
+        messages: list[dict[str, str]],
+        system_prompt: str,
+    ) -> Any:
         response = await self._http.post(
             self._build_responses_url(self.settings.openai_base_url),
             headers={
@@ -92,22 +192,13 @@ class BuilderAiService:
                 "input": [
                     {
                         "role": "system",
-                        "content": self._build_system_prompt(available_markets, current_draft),
+                        "content": system_prompt,
                     },
                     *messages,
                 ],
             },
         )
-        payload = response.json()
-
-        if response.status_code >= 400:
-            error = payload.get("error", {}) if isinstance(payload, dict) else {}
-            detail = error.get("message") if isinstance(error, dict) else None
-            raise RuntimeError(str(detail or "AI request failed."))
-
-        raw_text = self._extract_text(payload)
-        parsed = self._extract_json(raw_text)
-        return self._sanitize_draft(parsed, available_markets)
+        return self._parse_response_payload(response)
 
     def _build_responses_url(self, base_url: str) -> str:
         normalized = base_url.strip().rstrip("/")
@@ -116,6 +207,17 @@ class BuilderAiService:
         if normalized.endswith("/v1"):
             return f"{normalized}/responses"
         return f"{normalized}/v1/responses"
+
+    def _build_gemini_url(self, base_url: str, model: str) -> str:
+        normalized = base_url.strip().rstrip("/")
+        if normalized.endswith(":generateContent"):
+            return normalized
+        model_path = f"/models/{model}"
+        if model_path in normalized:
+            return normalized if normalized.endswith(":generateContent") else f"{normalized}:generateContent"
+        if normalized.endswith("/models"):
+            return f"{normalized}/{model}:generateContent"
+        return f"{normalized}/models/{model}:generateContent"
 
     def _build_system_prompt(
         self,
@@ -141,7 +243,29 @@ class BuilderAiService:
             ]
         )
 
-    def _extract_text(self, payload: Any) -> str:
+    def _build_gemini_contents(self, messages: list[dict[str, str]]) -> list[dict[str, Any]]:
+        contents: list[dict[str, Any]] = []
+        for message in messages:
+            content = message.get("content", "").strip()
+            if not content:
+                continue
+            contents.append(
+                {
+                    "role": "model" if message.get("role") == "assistant" else "user",
+                    "parts": [{"text": content}],
+                }
+            )
+        return contents
+
+    def _parse_response_payload(self, response: Any) -> Any:
+        payload = response.json()
+        if getattr(response, "status_code", 500) >= 400:
+            error = payload.get("error", {}) if isinstance(payload, dict) else {}
+            detail = error.get("message") if isinstance(error, dict) else None
+            raise RuntimeError(str(detail or "AI request failed."))
+        return payload
+
+    def _extract_openai_text(self, payload: Any) -> str:
         if not isinstance(payload, dict):
             return ""
         output_text = payload.get("output_text")
@@ -163,6 +287,27 @@ class BuilderAiService:
                 return "\n".join(chunks).strip()
         return ""
 
+    def _extract_gemini_text(self, payload: Any) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        candidates = payload.get("candidates")
+        if not isinstance(candidates, list):
+            return ""
+        chunks: list[str] = []
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            content = candidate.get("content")
+            if not isinstance(content, dict):
+                continue
+            parts = content.get("parts")
+            if not isinstance(parts, list):
+                continue
+            for part in parts:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    chunks.append(part["text"])
+        return "\n".join(chunks).strip()
+
     def _extract_json(self, value: str) -> dict[str, Any]:
         trimmed = value.strip()
         if not trimmed:
@@ -177,6 +322,23 @@ class BuilderAiService:
         if not isinstance(parsed, dict):
             raise RuntimeError("AI response JSON must be an object")
         return parsed
+
+    def _normalize_tool_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        nested_function = payload.get("function")
+        if isinstance(nested_function, dict) and "arguments" in nested_function:
+            return self._coerce_tool_arguments(nested_function["arguments"])
+
+        if "arguments" in payload and any(key in payload for key in ("name", "tool", "type", "call")):
+            return self._coerce_tool_arguments(payload["arguments"])
+
+        return payload
+
+    def _coerce_tool_arguments(self, value: Any) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            return self._extract_json(value)
+        raise RuntimeError("AI function-call arguments must be a JSON object")
 
     def _normalize_markets(self, value: Any) -> list[str]:
         if not isinstance(value, list):
