@@ -118,21 +118,50 @@ class BotCopyEngine:
             mirrored_positions.append({"symbol": str(position.get("symbol") or ""), "side": str(position.get("side") or ""), "size_source": float(position.get("amount", 0) or 0), "size_mirrored": mirrored_size, "mark_price": mark_price, "notional_estimate": notional})
         return {"source_runtime_id": runtime["id"], "source_bot_definition_id": source_definition["id"], "source_bot_name": source_definition["name"], "source_wallet_address": runtime["wallet_address"], "follower_wallet_address": follower_wallet_address, "mode": "mirror", "scale_bps": scale_bps, "warnings": self._build_mirror_warnings(total_notional=total_notional, position_count=len(mirrored_positions)), "mirrored_positions": mirrored_positions}
 
-    async def activate_mirror(self, db: Any, *, runtime_id: str, follower_wallet_address: str, follower_display_name: str | None, scale_bps: int, risk_ack_version: str) -> dict:
+    async def activate_mirror(
+        self,
+        db: Any,
+        *,
+        runtime_id: str,
+        follower_wallet_address: str,
+        follower_display_name: str | None,
+        scale_bps: int,
+        risk_ack_version: str,
+        portfolio_basket_id: str | None = None,
+        max_notional_usd: float | None = None,
+    ) -> dict:
         del db
         self.auth_service.require_active_authorization(None, follower_wallet_address)
         preview = await self.preview_mirror(None, runtime_id=runtime_id, follower_wallet_address=follower_wallet_address, scale_bps=scale_bps)
         follower = self._find_or_create_follower(wallet_address=follower_wallet_address, display_name=follower_display_name)
-        active = self.supabase.select("bot_copy_relationships", filters={"follower_user_id": follower["id"], "status": "active"})
         now = datetime.now(tz=UTC).isoformat()
-        for relationship in active:
-            if relationship["source_runtime_id"] != runtime_id:
-                self.supabase.update("bot_copy_relationships", {"status": "stopped", "updated_at": now}, filters={"id": relationship["id"]})
-        relationship = self.supabase.maybe_one("bot_copy_relationships", filters={"follower_user_id": follower["id"], "source_runtime_id": runtime_id})
+        filters: dict[str, Any] = {"follower_user_id": follower["id"], "source_runtime_id": runtime_id}
+        if portfolio_basket_id:
+            filters["portfolio_basket_id"] = portfolio_basket_id
+        relationship = self.supabase.maybe_one("bot_copy_relationships", filters=filters)
+        values = {
+            "source_runtime_id": runtime_id,
+            "follower_user_id": follower["id"],
+            "follower_wallet_address": follower_wallet_address,
+            "portfolio_basket_id": portfolio_basket_id,
+            "mode": "mirror",
+            "scale_bps": scale_bps,
+            "max_notional_usd": max_notional_usd,
+            "status": "active",
+            "risk_ack_version": risk_ack_version,
+            "confirmed_at": now,
+            "updated_at": now,
+        }
         if relationship is None:
-            relationship = self.supabase.insert("bot_copy_relationships", {"id": str(uuid.uuid4()), "source_runtime_id": runtime_id, "follower_user_id": follower["id"], "follower_wallet_address": follower_wallet_address, "mode": "mirror", "scale_bps": scale_bps, "status": "active", "risk_ack_version": risk_ack_version, "confirmed_at": now, "updated_at": now})[0]
+            relationship = self.supabase.insert(
+                "bot_copy_relationships",
+                {
+                    "id": str(uuid.uuid4()),
+                    **values,
+                },
+            )[0]
         else:
-            relationship = self.supabase.update("bot_copy_relationships", {"mode": "mirror", "scale_bps": scale_bps, "status": "active", "risk_ack_version": risk_ack_version, "confirmed_at": now, "updated_at": now}, filters={"id": relationship["id"]})[0]
+            relationship = self.supabase.update("bot_copy_relationships", values, filters={"id": relationship["id"]})[0]
         self.supabase.insert("audit_events", {"id": str(uuid.uuid4()), "user_id": follower["id"], "action": "bot_copy.mirror.activated", "payload": {"relationship_id": relationship["id"], "source_runtime_id": runtime_id, "scale_bps": scale_bps}, "created_at": now})
         await broadcaster.publish(channel=f"user:{follower['id']}", event="bot.copy.updated", payload={"relationship_id": relationship["id"], "status": relationship["status"], "source_runtime_id": relationship["source_runtime_id"], "scale_bps": relationship["scale_bps"], "preview": preview})
         return self.serialize_relationship(None, relationship)
@@ -205,6 +234,8 @@ class BotCopyEngine:
             "follower_wallet_address": relationship["follower_wallet_address"],
             "mode": relationship["mode"],
             "scale_bps": relationship["scale_bps"],
+            "max_notional_usd": relationship.get("max_notional_usd"),
+            "portfolio_basket_id": relationship.get("portfolio_basket_id"),
             "status": relationship["status"],
             "risk_ack_version": relationship["risk_ack_version"],
             "confirmed_at": relationship["confirmed_at"],

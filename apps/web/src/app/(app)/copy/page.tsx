@@ -3,7 +3,16 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { PortfolioBasketComposer } from "@/components/copy/portfolio-basket-composer";
+import { PortfolioHealthPanel } from "@/components/copy/portfolio-health-panel";
+import {
+  createEmptyPortfolioDraft,
+  draftFromPortfolio,
+  type PortfolioBasket,
+  type PortfolioDraft,
+} from "@/lib/copy-portfolios";
 import { useClashxAuth } from "@/lib/clashx-auth";
+import { fetchLeaderboard, type LeaderboardRow } from "@/lib/public-bots";
 
 type BotCopyRelationship = {
   id: string;
@@ -83,22 +92,49 @@ function LoadingCard() {
   );
 }
 
+function serializePortfolioDraft(draft: PortfolioDraft) {
+  return {
+    name: draft.name,
+    description: draft.description,
+    rebalance_mode: draft.rebalance_mode,
+    rebalance_interval_minutes: draft.rebalance_interval_minutes,
+    drift_threshold_pct: draft.drift_threshold_pct,
+    target_notional_usd: draft.target_notional_usd,
+    activate_on_create: draft.activate_on_create,
+    risk_policy: draft.risk_policy,
+    members: draft.members.map((member) => ({
+      source_runtime_id: member.source_runtime_id,
+      target_weight_pct: member.target_weight_pct,
+      max_scale_bps: member.max_scale_bps,
+    })),
+  };
+}
+
 export default function CopyPage() {
   const { ready, authenticated, login, walletAddress, getAuthHeaders } = useClashxAuth();
   const [relationships, setRelationships] = useState<BotCopyRelationship[]>([]);
   const [clones, setClones] = useState<CloneListItem[]>([]);
+  const [portfolios, setPortfolios] = useState<PortfolioBasket[]>([]);
+  const [candidateBots, setCandidateBots] = useState<LeaderboardRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [savingRelationshipId, setSavingRelationshipId] = useState<string | null>(null);
   const [scaleDrafts, setScaleDrafts] = useState<Record<string, number>>({});
+  const [portfolioDraft, setPortfolioDraft] = useState<PortfolioDraft>(createEmptyPortfolioDraft());
+  const [editingPortfolioId, setEditingPortfolioId] = useState<string | null>(null);
+  const [savingPortfolio, setSavingPortfolio] = useState(false);
+  const [busyPortfolioId, setBusyPortfolioId] = useState<string | null>(null);
+  const [busyPortfolioAction, setBusyPortfolioAction] = useState<"rebalance" | "kill" | "resume" | null>(null);
 
   const loadManagementData = useCallback(
     async (silent = false) => {
       if (!authenticated || !walletAddress) {
         setRelationships([]);
         setClones([]);
+        setPortfolios([]);
+        setCandidateBots([]);
         setError(null);
         setLastSyncedAt(null);
         setLoading(false);
@@ -113,7 +149,7 @@ export default function CopyPage() {
 
       try {
         const headers = await getAuthHeaders();
-        const [relationshipsResponse, clonesResponse] = await Promise.all([
+        const [relationshipsResponse, clonesResponse, portfoliosResponse, leaderboardRows] = await Promise.all([
           fetch(`${API_BASE_URL}/api/bot-copy?wallet_address=${encodeURIComponent(walletAddress)}`, {
             cache: "no-store",
             headers,
@@ -122,10 +158,16 @@ export default function CopyPage() {
             cache: "no-store",
             headers,
           }),
+          fetch(`${API_BASE_URL}/api/portfolios?wallet_address=${encodeURIComponent(walletAddress)}`, {
+            cache: "no-store",
+            headers,
+          }),
+          fetchLeaderboard(24),
         ]);
 
         const relationshipsPayload = await parseJson<BotCopyRelationship[]>(relationshipsResponse);
         const clonesPayload = await parseJson<CloneListItem[]>(clonesResponse);
+        const portfoliosPayload = await parseJson<PortfolioBasket[]>(portfoliosResponse);
 
         if (!relationshipsResponse.ok) {
           throw new Error(
@@ -139,8 +181,16 @@ export default function CopyPage() {
           );
         }
 
+        if (!portfoliosResponse.ok) {
+          throw new Error(
+            "detail" in portfoliosPayload ? portfoliosPayload.detail ?? "Could not load portfolio baskets." : "Could not load portfolio baskets.",
+          );
+        }
+
         setRelationships(relationshipsPayload as BotCopyRelationship[]);
         setClones(clonesPayload as CloneListItem[]);
+        setPortfolios(portfoliosPayload as PortfolioBasket[]);
+        setCandidateBots(leaderboardRows);
         setError(null);
         setLastSyncedAt(new Date().toISOString());
       } catch (loadError) {
@@ -179,6 +229,31 @@ export default function CopyPage() {
     () => relationships.filter((relationship) => relationship.status !== "active").length,
     [relationships],
   );
+
+  const activePortfolios = useMemo(
+    () => portfolios.filter((portfolio) => portfolio.status === "active").length,
+    [portfolios],
+  );
+
+  const totalPortfolioCapital = useMemo(
+    () => portfolios.reduce((sum, portfolio) => sum + portfolio.target_notional_usd, 0),
+    [portfolios],
+  );
+
+  function resetPortfolioEditor() {
+    setEditingPortfolioId(null);
+    setPortfolioDraft(createEmptyPortfolioDraft());
+  }
+
+  function upsertPortfolio(nextPortfolio: PortfolioBasket) {
+    setPortfolios((current) => {
+      const exists = current.some((portfolio) => portfolio.id === nextPortfolio.id);
+      if (!exists) {
+        return [nextPortfolio, ...current];
+      }
+      return current.map((portfolio) => (portfolio.id === nextPortfolio.id ? nextPortfolio : portfolio));
+    });
+  }
 
   async function updateRelationship(
     relationshipId: string,
@@ -241,6 +316,89 @@ export default function CopyPage() {
     }
   }
 
+  async function savePortfolio() {
+    if (!walletAddress) {
+      return;
+    }
+
+    setSavingPortfolio(true);
+    setError(null);
+
+    try {
+      const isEditing = Boolean(editingPortfolioId);
+      const response = await fetch(
+        isEditing
+          ? `${API_BASE_URL}/api/portfolios/${editingPortfolioId}?wallet_address=${encodeURIComponent(walletAddress)}`
+          : `${API_BASE_URL}/api/portfolios`,
+        {
+          method: isEditing ? "PATCH" : "POST",
+          headers: await getAuthHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify(
+            isEditing
+              ? serializePortfolioDraft(portfolioDraft)
+              : {
+                  wallet_address: walletAddress,
+                  ...serializePortfolioDraft(portfolioDraft),
+                },
+          ),
+        },
+      );
+      const payload = await parseJson<PortfolioBasket>(response);
+      if (!response.ok) {
+        throw new Error("detail" in payload ? payload.detail ?? "Could not save the basket." : "Could not save the basket.");
+      }
+      upsertPortfolio(payload as PortfolioBasket);
+      resetPortfolioEditor();
+      setLastSyncedAt(new Date().toISOString());
+      void loadManagementData(true);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Could not save the basket.");
+    } finally {
+      setSavingPortfolio(false);
+    }
+  }
+
+  async function runPortfolioAction(portfolioId: string, action: "rebalance" | "kill" | "resume") {
+    if (!walletAddress) {
+      return;
+    }
+
+    setBusyPortfolioId(portfolioId);
+    setBusyPortfolioAction(action);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        action === "rebalance"
+          ? `${API_BASE_URL}/api/portfolios/${portfolioId}/rebalance?wallet_address=${encodeURIComponent(walletAddress)}`
+          : `${API_BASE_URL}/api/portfolios/${portfolioId}/kill-switch?wallet_address=${encodeURIComponent(walletAddress)}`,
+        {
+          method: "POST",
+          headers: await getAuthHeaders({ "Content-Type": "application/json" }),
+          body:
+            action === "rebalance"
+              ? undefined
+              : JSON.stringify({
+                  engaged: action === "kill",
+                  reason: action === "kill" ? "Manual kill switch triggered from Copy Center." : null,
+                }),
+        },
+      );
+      const payload = await parseJson<PortfolioBasket>(response);
+      if (!response.ok) {
+        throw new Error("detail" in payload ? payload.detail ?? "Portfolio action failed." : "Portfolio action failed.");
+      }
+      upsertPortfolio(payload as PortfolioBasket);
+      setLastSyncedAt(new Date().toISOString());
+      void loadManagementData(true);
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Portfolio action failed.");
+    } finally {
+      setBusyPortfolioId(null);
+      setBusyPortfolioAction(null);
+    }
+  }
+
   if (!ready) {
     return (
       <main className="shell grid gap-8 pb-10 md:pb-12">
@@ -251,17 +409,10 @@ export default function CopyPage() {
             <div className="skeleton h-4 w-full max-w-3xl rounded-sm" />
           </div>
         </section>
-        <section className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
-          <div className="grid gap-4">
-            {Array.from({ length: 2 }).map((_, index) => (
-              <LoadingCard key={`loading-follow-${index}`} />
-            ))}
-          </div>
-          <div className="grid gap-4">
-            {Array.from({ length: 2 }).map((_, index) => (
-              <LoadingCard key={`loading-clone-${index}`} />
-            ))}
-          </div>
+        <section className="grid gap-4">
+          {Array.from({ length: 3 }).map((_, index) => (
+            <LoadingCard key={`loading-portfolio-${index}`} />
+          ))}
         </section>
       </main>
     );
@@ -275,16 +426,16 @@ export default function CopyPage() {
           <div className="grid gap-3 lg:grid-cols-[1.2fr_0.8fr] lg:items-end">
             <div className="grid gap-3">
               <h1 className="font-mono text-[clamp(2.25rem,5vw,4.5rem)] font-extrabold uppercase leading-[0.92] tracking-[-0.05em] text-neutral-50">
-                Keep every live follow and every cloned draft in one place.
+                Run single follows or a whole bot basket from one desk.
               </h1>
               <p className="max-w-3xl text-sm leading-7 text-neutral-400 md:text-base">
-                Sign in to see the bots you mirror live, reopen the drafts you cloned for custom tuning, and move back to the public board when you want a new strategy to evaluate.
+                Sign in to resize live follows, reopen cloned drafts, and split capital across several public bots with a portfolio kill switch above the whole book.
               </p>
             </div>
             <div className="grid gap-3 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-5">
               <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Before you start</span>
               <p className="text-sm leading-7 text-neutral-400">
-                Your connected wallet decides which follows and drafts appear here. Use your Privy session to unlock the management view.
+                Your connected wallet decides which follows, drafts, and portfolio baskets appear here. Use your Privy session to unlock the management view.
               </p>
             </div>
           </div>
@@ -318,7 +469,7 @@ export default function CopyPage() {
               Run your follow book with real controls.
             </h1>
             <p className="max-w-3xl text-sm leading-7 text-neutral-400 md:text-base">
-              Adjust live follow sizing, pause or resume a mirror, and reopen cloned drafts without leaving the operating desk.
+              Manage single mirrors, cloned drafts, and multi-bot baskets without leaving the operating desk.
             </p>
           </div>
 
@@ -361,7 +512,7 @@ export default function CopyPage() {
         </article>
       ) : null}
 
-      <section className="grid gap-4 md:grid-cols-4">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <article className="grid gap-1 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
           <span className="label text-[#dce85d]">Active follows</span>
           <span className="font-mono text-4xl font-bold uppercase text-neutral-50">{loading ? "--" : activeFollows}</span>
@@ -378,10 +529,59 @@ export default function CopyPage() {
           <p className="text-sm leading-6 text-neutral-400">Private strategy copies ready for edits, deployment, or archive cleanup.</p>
         </article>
         <article className="grid gap-1 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
+          <span className="label text-[#74b97f]">Active baskets</span>
+          <span className="font-mono text-4xl font-bold uppercase text-neutral-50">{loading ? "--" : activePortfolios}</span>
+          <p className="text-sm leading-6 text-neutral-400">Portfolio books balancing multiple source bots at once.</p>
+        </article>
+        <article className="grid gap-1 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
+          <span className="label text-[#dce85d]">Basket capital</span>
+          <span className="font-mono text-3xl font-bold uppercase text-neutral-50">${loading ? "--" : totalPortfolioCapital.toLocaleString()}</span>
+          <p className="text-sm leading-6 text-neutral-400">Target notional assigned across every portfolio basket in this wallet.</p>
+        </article>
+        <article className="grid gap-1 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
           <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Risk acknowledgement</span>
           <span className="font-mono text-xl font-bold uppercase text-neutral-50">Version v1</span>
           <p className="text-sm leading-6 text-neutral-400">Scale changes apply to future mirrored actions, not retroactive fills.</p>
         </article>
+      </section>
+
+      <PortfolioBasketComposer
+        draft={portfolioDraft}
+        candidates={candidateBots}
+        editingLabel={editingPortfolioId ? "Editing basket" : null}
+        submitting={savingPortfolio}
+        onDraftChange={setPortfolioDraft}
+        onSubmit={() => void savePortfolio()}
+        onCancelEdit={editingPortfolioId ? resetPortfolioEditor : undefined}
+      />
+
+      <section className="grid gap-4">
+        {loading ? (
+          Array.from({ length: 2 }).map((_, index) => <LoadingCard key={`portfolio-panel-${index}`} />)
+        ) : portfolios.length === 0 ? (
+          <article className="grid gap-4 rounded-[2rem] border border-dashed border-[rgba(255,255,255,0.08)] bg-[#16181a] px-6 py-7">
+            <div className="grid gap-2">
+              <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">No baskets yet</h2>
+              <p className="max-w-3xl text-sm leading-7 text-neutral-400">
+                Create a basket when one mirrored bot is too concentrated. Blend a few public leaders, set the portfolio drawdown line, and let the basket worker keep the mix aligned.
+              </p>
+            </div>
+          </article>
+        ) : (
+          portfolios.map((portfolio) => (
+            <PortfolioHealthPanel
+              key={portfolio.id}
+              portfolio={portfolio}
+              busyAction={busyPortfolioId === portfolio.id ? busyPortfolioAction : null}
+              onEdit={() => {
+                setEditingPortfolioId(portfolio.id);
+                setPortfolioDraft(draftFromPortfolio(portfolio));
+              }}
+              onRebalance={() => void runPortfolioAction(portfolio.id, "rebalance")}
+              onKillSwitch={(engaged) => void runPortfolioAction(portfolio.id, engaged ? "kill" : "resume")}
+            />
+          ))
+        )}
       </section>
 
       <section className="grid gap-6 xl:grid-cols-[1.18fr_0.82fr]">
@@ -435,10 +635,7 @@ export default function CopyPage() {
               const isSaving = savingRelationshipId === relationship.id;
 
               return (
-                <article
-                  key={relationship.id}
-                  className="grid gap-5 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-5 py-5"
-                >
+                <article key={relationship.id} className="grid gap-5 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-5 py-5">
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div className="grid gap-2">
                       <div className="flex flex-wrap items-center gap-3">
@@ -447,9 +644,7 @@ export default function CopyPage() {
                         </span>
                         <span
                           className={`rounded-full px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.16em] ${
-                            relationship.status === "active"
-                              ? "bg-[color:var(--mint-dim)] text-[#74b97f]"
-                              : "bg-neutral-900 text-neutral-400"
+                            relationship.status === "active" ? "bg-[color:var(--mint-dim)] text-[#74b97f]" : "bg-neutral-900 text-neutral-400"
                           }`}
                         >
                           {relationship.status}
@@ -466,7 +661,6 @@ export default function CopyPage() {
                       <span>{formatWalletAddress(relationship.follower_wallet_address)}</span>
                     </div>
                   </div>
-
                   <div className="grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
                     <div className="grid gap-3 rounded-[1.25rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4">
                       <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Position sizing</span>
@@ -521,11 +715,7 @@ export default function CopyPage() {
                           <button
                             type="button"
                             onClick={() =>
-                              void updateRelationship(
-                                relationship.id,
-                                { status: "active", scale_bps: scaleDraft },
-                                "Could not resume this live follow.",
-                              )
+                              void updateRelationship(relationship.id, { status: "active", scale_bps: scaleDraft }, "Could not resume this live follow.")
                             }
                             disabled={isSaving}
                             className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#74b97f] hover:text-[#74b97f] disabled:cursor-not-allowed disabled:opacity-50"
@@ -544,9 +734,7 @@ export default function CopyPage() {
 
                       <div className="grid gap-2 rounded-[1.25rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4 text-sm leading-6 text-neutral-400">
                         <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Execution note</span>
-                        <p>
-                          This relationship mirrors source runtime actions under your current risk acknowledgement and linked Pacifica authorization.
-                        </p>
+                        <p>This relationship mirrors source runtime actions under your current risk acknowledgement and linked Pacifica authorization.</p>
                       </div>
                     </div>
                   </div>
@@ -593,14 +781,9 @@ export default function CopyPage() {
             </article>
           ) : (
             clones.map((clone) => (
-              <article
-                key={clone.clone_id}
-                className="grid gap-4 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-5 py-5"
-              >
+              <article key={clone.clone_id} className="grid gap-4 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-5 py-5">
                 <div className="grid gap-2">
-                  <span className="font-mono text-xl font-bold uppercase tracking-tight text-neutral-50">
-                    {clone.new_bot_name}
-                  </span>
+                  <span className="font-mono text-xl font-bold uppercase tracking-tight text-neutral-50">{clone.new_bot_name}</span>
                   <p className="text-sm leading-7 text-neutral-400">
                     Cloned from {clone.source_bot_name} on {new Date(clone.created_at).toLocaleString()}.
                   </p>

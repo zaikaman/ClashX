@@ -71,6 +71,8 @@ CREATE TABLE public.bot_copy_relationships (
   risk_ack_version character varying NOT NULL DEFAULT 'v1'::character varying,
   confirmed_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  portfolio_basket_id uuid,
+  max_notional_usd double precision,
   CONSTRAINT bot_copy_relationships_pkey PRIMARY KEY (id),
   CONSTRAINT bot_copy_relationships_source_runtime_id_fkey FOREIGN KEY (source_runtime_id) REFERENCES public.bot_runtimes(id),
   CONSTRAINT bot_copy_relationships_follower_user_id_fkey FOREIGN KEY (follower_user_id) REFERENCES public.users(id)
@@ -281,6 +283,68 @@ CREATE TABLE public.pacifica_authorizations (
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT pacifica_authorizations_pkey PRIMARY KEY (id),
   CONSTRAINT pacifica_authorizations_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
+);
+CREATE TABLE public.portfolio_allocation_members (
+  id uuid NOT NULL,
+  portfolio_basket_id uuid NOT NULL,
+  source_runtime_id uuid NOT NULL,
+  target_weight_pct double precision NOT NULL DEFAULT 0,
+  target_notional_usd double precision NOT NULL DEFAULT 0,
+  max_scale_bps integer NOT NULL DEFAULT 20000,
+  target_scale_bps integer NOT NULL DEFAULT 10000,
+  relationship_id uuid,
+  status character varying NOT NULL DEFAULT 'active'::character varying,
+  latest_scale_bps integer,
+  last_rebalanced_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT portfolio_allocation_members_pkey PRIMARY KEY (id),
+  CONSTRAINT portfolio_allocation_members_portfolio_basket_id_fkey FOREIGN KEY (portfolio_basket_id) REFERENCES public.portfolio_baskets(id),
+  CONSTRAINT portfolio_allocation_members_source_runtime_id_fkey FOREIGN KEY (source_runtime_id) REFERENCES public.bot_runtimes(id),
+  CONSTRAINT portfolio_allocation_members_relationship_id_fkey FOREIGN KEY (relationship_id) REFERENCES public.bot_copy_relationships(id)
+);
+CREATE TABLE public.portfolio_baskets (
+  id uuid NOT NULL,
+  owner_user_id uuid NOT NULL,
+  wallet_address character varying NOT NULL,
+  name character varying NOT NULL,
+  description text NOT NULL DEFAULT ''::text,
+  status character varying NOT NULL DEFAULT 'draft'::character varying,
+  rebalance_mode character varying NOT NULL DEFAULT 'drift'::character varying,
+  rebalance_interval_minutes integer NOT NULL DEFAULT 60,
+  drift_threshold_pct double precision NOT NULL DEFAULT 6,
+  target_notional_usd double precision NOT NULL DEFAULT 0,
+  current_notional_usd double precision NOT NULL DEFAULT 0,
+  kill_switch_reason text,
+  last_rebalanced_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT portfolio_baskets_pkey PRIMARY KEY (id),
+  CONSTRAINT portfolio_baskets_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES public.users(id)
+);
+CREATE TABLE public.portfolio_rebalance_events (
+  id uuid NOT NULL,
+  portfolio_basket_id uuid NOT NULL,
+  trigger character varying NOT NULL DEFAULT 'manual'::character varying,
+  status character varying NOT NULL DEFAULT 'completed'::character varying,
+  summary_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT portfolio_rebalance_events_pkey PRIMARY KEY (id),
+  CONSTRAINT portfolio_rebalance_events_portfolio_basket_id_fkey FOREIGN KEY (portfolio_basket_id) REFERENCES public.portfolio_baskets(id)
+);
+CREATE TABLE public.portfolio_risk_policies (
+  id uuid NOT NULL,
+  portfolio_basket_id uuid NOT NULL UNIQUE,
+  max_drawdown_pct double precision NOT NULL DEFAULT 18,
+  max_member_drawdown_pct double precision NOT NULL DEFAULT 22,
+  min_trust_score integer NOT NULL DEFAULT 55,
+  max_active_members integer NOT NULL DEFAULT 5,
+  auto_pause_on_source_stale boolean NOT NULL DEFAULT true,
+  kill_switch_on_breach boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT portfolio_risk_policies_pkey PRIMARY KEY (id),
+  CONSTRAINT portfolio_risk_policies_portfolio_basket_id_fkey FOREIGN KEY (portfolio_basket_id) REFERENCES public.portfolio_baskets(id)
 );
 CREATE TABLE public.strategy_activity_records (
   id uuid NOT NULL,

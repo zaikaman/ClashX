@@ -12,6 +12,7 @@ from src.api.bot_copy import router as bot_copy_router
 from src.api.bots import router as bots_router
 from src.api.builder import router as builder_router
 from src.api.pacifica import router as pacifica_router
+from src.api.portfolios import router as portfolios_router
 from src.api.stream import router as stream_router
 from src.api.stream import websocket_fallback
 from src.api.trading import router as trading_router
@@ -21,6 +22,7 @@ from src.middleware.auth import AuthMiddleware
 from src.services.pacifica_market_data_service import get_pacifica_market_data_service
 from src.workers.bot_copy_worker import BotCopyWorker
 from src.workers.bot_runtime_worker import BotRuntimeWorker
+from src.workers.portfolio_allocator_worker import PortfolioAllocatorWorker
 
 
 def _configure_logging() -> None:
@@ -43,6 +45,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name)
     bot_copy_worker = BotCopyWorker()
     bot_runtime_worker = BotRuntimeWorker()
+    portfolio_allocator_worker = PortfolioAllocatorWorker()
     market_data_service = get_pacifica_market_data_service()
 
     app.add_middleware(AuthMiddleware)
@@ -59,6 +62,7 @@ def create_app() -> FastAPI:
     app.include_router(bots_router)
     app.include_router(builder_router)
     app.include_router(pacifica_router)
+    app.include_router(portfolios_router)
     app.include_router(stream_router)
     app.include_router(trading_router)
 
@@ -83,25 +87,31 @@ def create_app() -> FastAPI:
             return
         app.state.bot_runtime_worker = bot_runtime_worker
         app.state.bot_copy_worker = bot_copy_worker
+        app.state.portfolio_allocator_worker = portfolio_allocator_worker
         bot_runtime_worker.start()
         bot_copy_worker.start()
+        portfolio_allocator_worker.start()
 
     @app.on_event("shutdown")
     async def shutdown() -> None:
         running_bot_copy_worker: BotCopyWorker | None = getattr(app.state, "bot_copy_worker", None)
         running_bot_runtime_worker: BotRuntimeWorker | None = getattr(app.state, "bot_runtime_worker", None)
+        running_portfolio_allocator_worker: PortfolioAllocatorWorker | None = getattr(app.state, "portfolio_allocator_worker", None)
         if running_bot_copy_worker is not None:
             with contextlib.suppress(asyncio.CancelledError):
                 await running_bot_copy_worker.stop()
         if running_bot_runtime_worker is not None:
             with contextlib.suppress(asyncio.CancelledError):
                 await running_bot_runtime_worker.stop()
+        if running_portfolio_allocator_worker is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await running_portfolio_allocator_worker.stop()
         await market_data_service.stop()
 
     @app.get("/healthz", tags=["ops"])
     async def healthz() -> dict[str, object]:
         workers: dict[str, object] = {}
-        for key in ("bot_runtime_worker", "bot_copy_worker"):
+        for key in ("bot_runtime_worker", "bot_copy_worker", "portfolio_allocator_worker"):
             worker_ref = getattr(app.state, key, None)
             if worker_ref is None:
                 workers[key] = {"enabled": False}

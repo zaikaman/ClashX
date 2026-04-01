@@ -167,13 +167,13 @@ description: "Task list for implementing and upgrading ClashX Bot Builder Platfo
 
 **Purpose**: Expand ClashX from one-bot copying into multi-bot allocation and portfolio automation.
 
-- [ ] T064 [P] Define portfolio basket, allocation member, and portfolio risk policy models in `services/trading-backend/src/models/`
-- [ ] T065 Implement portfolio allocator service for weights, caps, and bot-basket lifecycle in `services/trading-backend/src/services/portfolio_allocator_service.py`
-- [ ] T066 Implement portfolio-level drawdown controls, rebalance logic, and kill switch handling in `services/trading-backend/src/services/portfolio_risk_service.py`
-- [ ] T067 Implement portfolio allocation and basket management APIs in `services/trading-backend/src/api/`
-- [ ] T068 Implement portfolio monitoring/rebalancing worker in `services/trading-backend/src/workers/portfolio_allocator_worker.py`
-- [ ] T069 Build bot-basket creation, allocation controls, and portfolio kill switch UI in `apps/web/src/app/(app)/copy/page.tsx` and new portfolio allocation surfaces in `apps/web/src/components/copy/`
-- [ ] T070 Build portfolio health, rebalance history, and allocation insights panels in `apps/web/src/components/copy/` and related operating views
+- [X] T064 [P] Define portfolio basket, allocation member, and portfolio risk policy models in `services/trading-backend/src/models/`
+- [X] T065 Implement portfolio allocator service for weights, caps, and bot-basket lifecycle in `services/trading-backend/src/services/portfolio_allocator_service.py`
+- [X] T066 Implement portfolio-level drawdown controls, rebalance logic, and kill switch handling in `services/trading-backend/src/services/portfolio_risk_service.py`
+- [X] T067 Implement portfolio allocation and basket management APIs in `services/trading-backend/src/api/`
+- [X] T068 Implement portfolio monitoring/rebalancing worker in `services/trading-backend/src/workers/portfolio_allocator_worker.py`
+- [X] T069 Build bot-basket creation, allocation controls, and portfolio kill switch UI in `apps/web/src/app/(app)/copy/page.tsx` and new portfolio allocation surfaces in `apps/web/src/components/copy/`
+- [X] T070 Build portfolio health, rebalance history, and allocation insights panels in `apps/web/src/components/copy/` and related operating views
 
 **Checkpoint**: Users can allocate capital across multiple bots and manage risk at the portfolio level instead of one mirror at a time.
 
