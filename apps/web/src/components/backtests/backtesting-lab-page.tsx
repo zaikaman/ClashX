@@ -8,6 +8,7 @@ import { ArrowUpRight, FlaskConical, History, LoaderCircle, Play, RefreshCcw } f
 
 import { useClashxAuth } from "@/lib/clashx-auth";
 import type {
+  BacktestAssumptionConfig,
   BacktestRunDetail,
   BacktestRunRequestPayload,
   BacktestRunSummary,
@@ -64,6 +65,15 @@ function formatMoney(value: number) {
 
 function formatPercent(value: number) {
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+function formatBasisPoints(value: number) {
+  return `${value.toFixed(2)} bps`;
+}
+
+function readNumericInput(value: string) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function toTimestampBounds(startDate: string, endDate: string) {
@@ -144,6 +154,9 @@ export function BacktestingLabPage() {
   const [startDate, setStartDate] = useState(initialRange.start);
   const [endDate, setEndDate] = useState(initialRange.end);
   const [initialCapitalUsd, setInitialCapitalUsd] = useState("10000");
+  const [feeBps, setFeeBps] = useState("4");
+  const [slippageBps, setSlippageBps] = useState("5");
+  const [fundingBpsPerInterval, setFundingBpsPerInterval] = useState("0");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [inspectorView, setInspectorView] = useState<"trades" | "journal">("trades");
@@ -387,7 +400,12 @@ export function BacktestingLabPage() {
       interval,
       start_time: start,
       end_time: end,
-      initial_capital_usd: Number(initialCapitalUsd),
+      initial_capital_usd: readNumericInput(initialCapitalUsd),
+      assumptions: {
+        fee_bps: readNumericInput(feeBps),
+        slippage_bps: readNumericInput(slippageBps),
+        funding_bps_per_interval: readNumericInput(fundingBpsPerInterval),
+      },
     };
 
     setRunning(true);
@@ -438,6 +456,11 @@ export function BacktestingLabPage() {
   }
 
   const summary = currentRun?.result_json.summary ?? null;
+  const assumptionConfig: BacktestAssumptionConfig = currentRun?.result_json.assumption_config ?? {
+    fee_bps: readNumericInput(feeBps),
+    slippage_bps: readNumericInput(slippageBps),
+    funding_bps_per_interval: readNumericInput(fundingBpsPerInterval),
+  };
   const preflightIssues = useMemo(() => currentRun?.result_json.preflight_issues ?? [], [currentRun]);
   const trades = useMemo(() => currentRun?.result_json.trades ?? [], [currentRun]);
   const triggerEvents = useMemo(() => currentRun?.result_json.trigger_events ?? [], [currentRun]);
@@ -662,6 +685,35 @@ export function BacktestingLabPage() {
                 />
               </label>
             </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              <label className="grid min-w-0 gap-1.5 text-sm text-neutral-400">
+                Fees (bps)
+                <input
+                  value={feeBps}
+                  onChange={(event) => setFeeBps(event.target.value)}
+                  inputMode="decimal"
+                  className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3.5 py-3 text-sm text-neutral-50 outline-none transition w-full focus:border-[#dce85d]"
+                />
+              </label>
+              <label className="grid min-w-0 gap-1.5 text-sm text-neutral-400">
+                Slippage (bps)
+                <input
+                  value={slippageBps}
+                  onChange={(event) => setSlippageBps(event.target.value)}
+                  inputMode="decimal"
+                  className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3.5 py-3 text-sm text-neutral-50 outline-none transition w-full focus:border-[#dce85d]"
+                />
+              </label>
+              <label className="grid min-w-0 gap-1.5 text-sm text-neutral-400">
+                Funding / bar (bps)
+                <input
+                  value={fundingBpsPerInterval}
+                  onChange={(event) => setFundingBpsPerInterval(event.target.value)}
+                  inputMode="decimal"
+                  className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3.5 py-3 text-sm text-neutral-50 outline-none transition w-full focus:border-[#dce85d]"
+                />
+              </label>
+            </div>
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[rgba(255,255,255,0.06)] pt-4">
               <div className="text-sm text-neutral-500">
                 {selectedBot ? `${selectedBot.strategy_type} / ${selectedBot.market_scope}` : "Pick a bot to unlock the replay settings."}
@@ -681,10 +733,13 @@ export function BacktestingLabPage() {
           </section>
 
           {summary ? (
-            <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+            <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
               {[
+                { label: "Gross PnL", value: formatMoney(summary.gross_pnl_total), tone: summary.gross_pnl_total >= 0 ? "text-[#8ec5ff]" : "text-[#e06c6e]" },
                 { label: "Net PnL", value: formatMoney(summary.pnl_total), tone: summary.pnl_total >= 0 ? "text-[#74b97f]" : "text-[#e06c6e]" },
                 { label: "Net PnL %", value: formatPercent(summary.pnl_total_pct), tone: summary.pnl_total_pct >= 0 ? "text-[#74b97f]" : "text-[#e06c6e]" },
+                { label: "Fees paid", value: formatMoney(summary.fees_paid_usd), tone: "text-neutral-50" },
+                { label: "Funding", value: formatMoney(summary.funding_pnl_usd), tone: summary.funding_pnl_usd >= 0 ? "text-[#74b97f]" : "text-[#e06c6e]" },
                 { label: "Drawdown", value: `${summary.max_drawdown_pct.toFixed(2)}%`, tone: "text-neutral-50" },
                 { label: "Win rate", value: `${summary.win_rate.toFixed(1)}%`, tone: "text-neutral-50" },
                 { label: "Trades", value: String(summary.trade_count), tone: "text-neutral-50" },
@@ -861,6 +916,9 @@ export function BacktestingLabPage() {
                               <div>{trade.exit_time ? `Closed ${formatDateTime(trade.exit_time)}` : "Still open"}</div>
                               <div>Size {formatMoney(trade.notional_usd)}</div>
                               <div>{trade.duration_seconds !== null ? formatDuration(trade.duration_seconds) : "Open"}</div>
+                              <div className="text-xs leading-5 text-neutral-500">
+                                Gross {formatMoney(trade.gross_pnl_usd)} · Fees {formatMoney(trade.fees_paid_usd)} · Funding {formatMoney(trade.funding_pnl_usd)}
+                              </div>
                             </div>
                           </div>
 
@@ -885,7 +943,10 @@ export function BacktestingLabPage() {
                                 trade.pnl_usd !== null && trade.pnl_usd < 0 ? "text-[#e06c6e]" : "text-[#74b97f]"
                               }`}
                             >
-                              {trade.pnl_usd !== null ? formatMoney(trade.pnl_usd) : formatMoney(trade.unrealized_pnl ?? 0)}
+                              <div>{trade.pnl_usd !== null ? formatMoney(trade.pnl_usd) : formatMoney(trade.unrealized_pnl ?? 0)}</div>
+                              <div className="mt-1 text-[0.62rem] font-medium uppercase tracking-[0.12em] text-neutral-500">
+                                Gross {formatMoney(trade.gross_pnl_usd)} · Fees {formatMoney(trade.fees_paid_usd)} · Funding {formatMoney(trade.funding_pnl_usd)}
+                              </div>
                             </div>
                             <div className="text-sm text-neutral-300">
                               {trade.duration_seconds !== null ? formatDuration(trade.duration_seconds) : "Open"}
@@ -1123,6 +1184,18 @@ export function BacktestingLabPage() {
             <div className="flex items-center gap-2 text-neutral-400">
               <FlaskConical className="h-4 w-4 text-[#74b97f]" />
               <span className="label text-[#74b97f]">Replay assumptions</span>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {[
+                { label: "Fees", value: formatBasisPoints(assumptionConfig.fee_bps) },
+                { label: "Slippage", value: formatBasisPoints(assumptionConfig.slippage_bps) },
+                { label: "Funding", value: formatBasisPoints(assumptionConfig.funding_bps_per_interval) },
+              ].map((item) => (
+                <div key={item.label} className="rounded-[1.3rem] border border-[rgba(255,255,255,0.05)] bg-[#090a0a] p-3">
+                  <div className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">{item.label}</div>
+                  <div className="mt-1 font-mono text-sm font-bold uppercase text-neutral-50">{item.value}</div>
+                </div>
+              ))}
             </div>
             <div className="grid gap-2 text-sm leading-6 text-neutral-400">
               {(currentRun?.result_json.assumptions ?? [

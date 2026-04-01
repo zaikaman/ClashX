@@ -1,5 +1,5 @@
 ---
-description: "Task list for implementing ClashX Bot Builder Platform"
+description: "Task list for implementing and upgrading ClashX Bot Builder Platform"
 ---
 
 # Tasks: ClashX Bot Builder Platform
@@ -131,6 +131,83 @@ description: "Task list for implementing ClashX Bot Builder Platform"
 
 ---
 
+## Phase 8: Stress Lab + Explainability
+
+**Purpose**: Turn ClashX into a serious strategy research terminal with clearer reasoning behind every trade.
+
+- [x] T050 [P] Extend backtest assumptions for fees, funding, slippage, and scenario toggles in `services/trading-backend/src/services/bot_backtest_service.py` and `services/trading-backend/src/api/backtests.py`
+- [x] T051 [P] Add market-regime slicing and compare-run summary generation in `services/trading-backend/src/services/bot_backtest_service.py` and `apps/web/src/lib/backtests.ts`
+- [x] T052 Implement parameter sweep and variant testing services plus persisted run groups in `services/trading-backend/src/services/bot_backtest_service.py` and `services/trading-backend/src/models/`
+- [x] T053 Implement backtest optimization and compare APIs in `services/trading-backend/src/api/backtests.py`
+- [x] T054 Implement runtime/backtest explainability service for condition traces, trigger reasons, and action rationale in `services/trading-backend/src/services/runtime_explainability_service.py`
+- [x] T055 Expose explainability payloads for live events and backtest trades in `services/trading-backend/src/api/bots.py` and `services/trading-backend/src/api/backtests.py`
+- [x] T056 Build Stress Lab controls for assumptions, regime filters, and compare views in `apps/web/src/components/backtests/backtesting-lab-page.tsx` and `apps/web/src/components/backtests/backtest-chart.tsx`
+- [x] T057 Build a "Why this trade happened" timeline for runtime and replayed events in `apps/web/src/components/bots/execution-log.tsx` and `apps/web/src/components/backtests/backtesting-lab-page.tsx`
+
+**Checkpoint**: A judge can inspect why a bot acted, pressure-test assumptions, and compare variants without leaving the product.
+
+---
+
+## Phase 9: Strategy Passport + Trust Layer
+
+**Purpose**: Make every public bot feel verifiable, investable, and easier to compare.
+
+- [ ] T058 [P] Implement trust metrics service for uptime, failure rate, drift, and risk grading in `services/trading-backend/src/services/bot_trust_service.py`
+- [ ] T059 [P] Add strategy version history and publish snapshots in `services/trading-backend/src/models/` and `services/trading-backend/src/services/bot_builder_service.py`
+- [ ] T060 Implement creator profile aggregation and reputation summaries in `services/trading-backend/src/services/bot_trust_service.py` and `services/trading-backend/src/services/bot_copy_engine.py`
+- [ ] T061 Expand leaderboard and public bot profile APIs with passport, drift, and creator metadata in `services/trading-backend/src/api/bot_copy.py`
+- [ ] T062 Build public strategy passport sections, trust badges, and drift visuals in `apps/web/src/app/(app)/leaderboard/page.tsx`, `apps/web/src/app/(app)/leaderboard/[runtimeId]/page.tsx`, and `apps/web/src/components/leaderboard/`
+- [ ] T063 Build creator profile surfaces and public reputation modules in `apps/web/src/components/leaderboard/` and related public app routes
+
+**Checkpoint**: Every public bot profile clearly communicates risk, trust, history, and live-vs-backtest behavior.
+
+---
+
+## Phase 10: Portfolio Allocator / Bot Baskets
+
+**Purpose**: Expand ClashX from one-bot copying into multi-bot allocation and portfolio automation.
+
+- [ ] T064 [P] Define portfolio basket, allocation member, and portfolio risk policy models in `services/trading-backend/src/models/`
+- [ ] T065 Implement portfolio allocator service for weights, caps, and bot-basket lifecycle in `services/trading-backend/src/services/portfolio_allocator_service.py`
+- [ ] T066 Implement portfolio-level drawdown controls, rebalance logic, and kill switch handling in `services/trading-backend/src/services/portfolio_risk_service.py`
+- [ ] T067 Implement portfolio allocation and basket management APIs in `services/trading-backend/src/api/`
+- [ ] T068 Implement portfolio monitoring/rebalancing worker in `services/trading-backend/src/workers/portfolio_allocator_worker.py`
+- [ ] T069 Build bot-basket creation, allocation controls, and portfolio kill switch UI in `apps/web/src/app/(app)/copy/page.tsx` and new portfolio allocation surfaces in `apps/web/src/components/copy/`
+- [ ] T070 Build portfolio health, rebalance history, and allocation insights panels in `apps/web/src/components/copy/` and related operating views
+
+**Checkpoint**: Users can allocate capital across multiple bots and manage risk at the portfolio level instead of one mirror at a time.
+
+---
+
+## Phase 11: AI Copilot Expansion
+
+**Purpose**: Use AI to critique, explain, and improve strategies based on real performance and runtime signals.
+
+- [ ] T071 [P] Expand builder AI support for bot critique, safer parameter suggestions, and setup guidance in `services/trading-backend/src/services/builder_ai_service.py`
+- [ ] T072 [P] Implement AI summaries for backtests, runtime failures, and performance drift in `services/trading-backend/src/services/ai_copilot_service.py`
+- [ ] T073 Implement copilot APIs for critique, explanation, optimization, and summaries in `services/trading-backend/src/api/builder.py`, `services/trading-backend/src/api/backtests.py`, and related AI endpoints
+- [ ] T074 Build copilot UX in builder, backtests, and bot detail pages in `apps/web/src/components/builder/`, `apps/web/src/components/backtests/`, and `apps/web/src/components/bots/`
+- [ ] T075 Connect copilot recommendations to trust, drift, and allocation signals so suggestions stay grounded in real bot behavior in `services/trading-backend/src/services/`
+
+**Checkpoint**: AI becomes a product copilot for understanding and improving bots, not just a draft generator.
+
+---
+
+## Phase 12: Creator Marketplace Layer
+
+**Purpose**: Turn ClashX into a creator-driven bot marketplace with stronger publishing and discovery loops.
+
+- [ ] T076 [P] Define creator profile, publishing, featured bot, and invite-access models in `services/trading-backend/src/models/`
+- [ ] T077 Implement creator marketplace service for discoverability, featured collections, copy stats, and publishing controls in `services/trading-backend/src/services/creator_marketplace_service.py`
+- [ ] T078 Implement creator, featured, and publishing APIs in `services/trading-backend/src/api/`
+- [ ] T079 Build creator pages, featured shelves, and public discovery modules in `apps/web/src/app/(app)/leaderboard/page.tsx`, new creator routes, and `apps/web/src/components/leaderboard/`
+- [ ] T080 Build publishing controls for public, private, unlisted, and invite-only bot access in `apps/web/src/components/builder/` and `apps/web/src/components/bots/`
+- [ ] T081 Build creator-facing stats surfaces for followers, copies, and marketplace reach in `apps/web/src/components/leaderboard/` and related creator pages
+
+**Checkpoint**: ClashX supports a real creator and discovery loop around high-quality public bots.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -142,14 +219,24 @@ description: "Task list for implementing ClashX Bot Builder Platform"
 - **Phase 5 (US3)**: depends on live runtimes from Phase 3
 - **Phase 6**: can begin after Phase 3 and continue in parallel
 - **Phase 7**: after target stories are stable
+- **Phase 8**: depends on Phases 3 and 5, and benefits from Phase 7 hardening
+- **Phase 9**: depends on Phases 4, 5, and 8 for trustworthy public metrics
+- **Phase 10**: depends on Phases 4-5 and should consume trust signals from Phase 9 where possible
+- **Phase 11**: depends on Phases 8-10 so AI recommendations are grounded in real strategy and portfolio data
+- **Phase 12**: depends on Phases 9-11 for creator trust, richer discovery, and stronger product differentiation
 
 ### User Story Dependency Graph
 
 - **US1 (P1)** → bot creation and deployment
 - **US2 (P2)** → depends on deployed/ranked bots from US1
 - **US3 (P3)** → depends on active runtime data from US1
+- **Stress Lab + Explainability** → depends on runtime and backtest data from US1/US3
+- **Strategy Passport + Trust Layer** → depends on public bot data from US2 and explainability/research data from Phase 8
+- **Portfolio Allocator / Bot Baskets** → depends on copy/runtime foundations from US2/US3
+- **AI Copilot Expansion** → depends on research, trust, and allocator signals
+- **Creator Marketplace Layer** → depends on trust and public profile systems
 
-Suggested order: **US1 → US2 → US3**, with cleanup tasks running alongside.
+Suggested order: **US1 → US2 → US3 → Stress Lab + Explainability → Strategy Passport + Trust Layer → Portfolio Allocator / Bot Baskets → AI Copilot Expansion → Creator Marketplace Layer**, with cleanup tasks running alongside.
 
 ### Parallel Opportunities
 
@@ -158,6 +245,11 @@ Suggested order: **US1 → US2 → US3**, with cleanup tasks running alongside.
 - US2: T025 and T029 can run in parallel; T030/T031 can proceed after preview contract agreement
 - US3: T034 and T037 can run in parallel after runtime detail endpoints are defined
 - Polish: T044, T045, T047, T048 can run in parallel
+- Stress Lab: T050/T051/T054 can run in parallel before frontend integration
+- Trust Layer: T058/T059/T060 can run in parallel before public UI wiring
+- Portfolio Allocator: T064/T065/T066 can run in parallel before basket UI
+- AI Copilot: T071/T072 can run in parallel after Phase 8 and 9 contracts stabilize
+- Marketplace: T076/T077 can run in parallel before creator-facing pages
 
 ---
 
@@ -165,21 +257,21 @@ Suggested order: **US1 → US2 → US3**, with cleanup tasks running alongside.
 
 ### MVP First
 
-1. Finish bot domain foundation
-2. Deliver visual builder + SDK registration path + deployable runtime
-3. Show bot execution and operator control
-4. Add leaderboard and one copy path if necessary for staged delivery
+1. Keep bot domain, runtime, leaderboard, and copy foundations stable
+2. Prioritize Stress Lab + Explainability to strengthen technical credibility
+3. Ship Strategy Passport + Trust Layer so public bots feel trustworthy
+4. Expand into Portfolio Allocator / Bot Baskets for platform-scale scope
 
 ### Incremental Delivery
 
-1. Deployable bots on delegated wallets
-2. Public leaderboard and bot profiles
-3. Mirror copy flow
-4. Clone flow
-5. Advanced runtime health and hardening
+1. Stress Lab + Explainability
+2. Strategy Passport + Trust Layer
+3. Portfolio Allocator / Bot Baskets
+4. AI Copilot Expansion
+5. Creator Marketplace Layer
 
 ### Notes
 
 - Manual trading is not the target experience anymore.
-- The SDK/library is now part of the product, but it must compile into the same normalized runtime model as visually built bots.
-- If scope pressure appears, prioritize **T016-T024**, then **T025-T030**, then the remaining copy and hardening tasks.
+- SDK-specific expansion is not part of the current upgrade roadmap and should remain deferred unless reprioritized later.
+- If scope pressure appears, prioritize **Phase 8**, then **Phase 9**, then **Phase 10** before taking on AI and marketplace work.

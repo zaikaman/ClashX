@@ -16,6 +16,12 @@ bot_backtest_service = BotBacktestService()
 bot_builder_service = BotBuilderService()
 
 
+class BacktestAssumptionConfigRequest(BaseModel):
+    fee_bps: float = Field(default=0.0, ge=0)
+    slippage_bps: float = Field(default=0.0, ge=0)
+    funding_bps_per_interval: float = Field(default=0.0)
+
+
 class BacktestRunRequest(BaseModel):
     wallet_address: str | None = Field(default=None, min_length=8)
     bot_id: str = Field(min_length=2)
@@ -23,6 +29,7 @@ class BacktestRunRequest(BaseModel):
     start_time: int = Field(ge=0)
     end_time: int = Field(ge=0)
     initial_capital_usd: float = Field(default=10_000, gt=0)
+    assumptions: BacktestAssumptionConfigRequest | None = None
 
 
 class BacktestRunSummaryResponse(BaseModel):
@@ -91,6 +98,7 @@ async def create_backtest_run(
             start_time=payload.start_time,
             end_time=payload.end_time,
             initial_capital_usd=payload.initial_capital_usd,
+            assumptions=payload.assumptions.model_dump() if payload.assumptions is not None else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

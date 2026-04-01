@@ -368,6 +368,66 @@ def test_backtest_records_trade_timing_and_realized_equity_exactly() -> None:
     assert run["result_json"]["summary"]["ending_equity"] == 10_030.0
 
 
+def test_backtest_models_fees_slippage_and_funding() -> None:
+    rules_json = _graph_rules(
+        nodes=[
+            {"id": "condition-open", "kind": "condition", "position": {"x": 120, "y": 80}, "config": {"type": "price_above", "symbol": "BTC", "value": 90}},
+            {"id": "action-open", "kind": "action", "position": {"x": 320, "y": 80}, "config": {"type": "open_long", "symbol": "BTC", "size_usd": 100, "leverage": 1}},
+            {"id": "condition-close", "kind": "condition", "position": {"x": 120, "y": 220}, "config": {"type": "position_pnl_above", "symbol": "BTC", "value": 20}},
+            {"id": "action-close", "kind": "action", "position": {"x": 320, "y": 220}, "config": {"type": "close_position", "symbol": "BTC"}},
+        ],
+        edges=[
+            {"id": "edge-open-1", "source": "builder-entry", "target": "condition-open"},
+            {"id": "edge-open-2", "source": "condition-open", "target": "action-open"},
+            {"id": "edge-close-1", "source": "builder-entry", "target": "condition-close"},
+            {"id": "edge-close-2", "source": "condition-close", "target": "action-close"},
+        ],
+    )
+    candles = [
+        _candle(0, 99, 101, 98, 100),
+        _candle(1, 100, 131, 100, 130),
+    ]
+    service, _ = _service(rules_json, candles)
+
+    run = asyncio.run(
+        service.run_backtest(
+            None,
+            bot_id="bot-a",
+            wallet_address="wallet-a",
+            user_id="user-a",
+            interval="15m",
+            start_time=BASE_TIME_MS,
+            end_time=BASE_TIME_MS + 3 * FIFTEEN_MINUTES_MS,
+            initial_capital_usd=10_000,
+            assumptions={"fee_bps": 10, "slippage_bps": 50, "funding_bps_per_interval": 10},
+        )
+    )
+
+    trade = run["result_json"]["trades"][0]
+    summary = run["result_json"]["summary"]
+
+    assert run["result_json"]["assumption_config"] == {
+        "fee_bps": 10.0,
+        "slippage_bps": 50.0,
+        "funding_bps_per_interval": 10.0,
+    }
+    assert trade["entry_price"] == pytest.approx(100.5)
+    assert trade["exit_price"] == pytest.approx(129.35)
+    assert trade["gross_pnl_usd"] == pytest.approx(28.70646766)
+    assert trade["fees_paid_usd"] == pytest.approx(0.22870647)
+    assert trade["funding_pnl_usd"] == pytest.approx(-0.12935323)
+    assert trade["pnl_usd"] == pytest.approx(28.34840797)
+    assert trade["pnl_usd"] < trade["gross_pnl_usd"]
+    assert summary["gross_pnl_total"] == pytest.approx(trade["gross_pnl_usd"])
+    assert summary["fees_paid_usd"] == pytest.approx(trade["fees_paid_usd"])
+    assert summary["funding_pnl_usd"] == pytest.approx(trade["funding_pnl_usd"])
+    assert summary["ending_equity"] == pytest.approx(10_028.34840797)
+    assert run["result_json"]["equity_curve"][0]["equity"] < 10_000
+    assert any("fees" in line.lower() for line in run["result_json"]["assumptions"])
+    assert any("slippage" in line.lower() for line in run["result_json"]["assumptions"])
+    assert any("funding" in line.lower() for line in run["result_json"]["assumptions"])
+
+
 def test_backtest_reversal_closes_existing_trade_and_carries_new_open_position() -> None:
     rules_json = _graph_rules(
         nodes=[

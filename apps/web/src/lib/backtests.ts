@@ -7,6 +7,12 @@ export type BacktestPriceCandle = {
   volume: number;
 };
 
+export type BacktestAssumptionConfig = {
+  fee_bps: number;
+  slippage_bps: number;
+  funding_bps_per_interval: number;
+};
+
 export type BacktestTrade = {
   trade_id: string;
   symbol: string;
@@ -19,6 +25,9 @@ export type BacktestTrade = {
   quantity: number;
   notional_usd: number;
   leverage: number;
+  gross_pnl_usd: number;
+  fees_paid_usd: number;
+  funding_pnl_usd: number;
   pnl_usd: number | null;
   pnl_pct: number | null;
   duration_seconds: number | null;
@@ -38,11 +47,14 @@ export type BacktestTriggerEvent = {
 export type BacktestResultSummary = {
   primary_symbol: string | null;
   symbols: string[];
+  requested_symbols?: string[];
+  skipped_symbols?: string[];
   interval: string;
   initial_capital_usd: number;
   ending_equity: number;
   realized_pnl: number;
   unrealized_pnl: number;
+  gross_pnl_total: number;
   pnl_total: number;
   pnl_total_pct: number;
   max_drawdown_pct: number;
@@ -51,6 +63,8 @@ export type BacktestResultSummary = {
   winning_trades: number;
   losing_trades: number;
   avg_trade_duration_seconds: number;
+  fees_paid_usd: number;
+  funding_pnl_usd: number;
 };
 
 export type BacktestResult = {
@@ -67,6 +81,7 @@ export type BacktestResult = {
   trades: BacktestTrade[];
   trigger_events: BacktestTriggerEvent[];
   summary: BacktestResultSummary;
+  assumption_config?: BacktestAssumptionConfig;
   assumptions: string[];
   preflight_issues?: string[];
   requested_range?: {
@@ -109,6 +124,7 @@ export type BacktestRunRequestPayload = {
   start_time: number;
   end_time: number;
   initial_capital_usd: number;
+  assumptions?: BacktestAssumptionConfig;
 };
 
 export type BacktestsBootstrapPayload = {

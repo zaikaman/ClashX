@@ -37,6 +37,11 @@ UNSUPPORTED_ACTION_TYPES = {
     "cancel_all_orders",
 }
 MARKET_UNIVERSE_SYMBOL = "__BOT_MARKET_UNIVERSE__"
+DEFAULT_BACKTEST_ASSUMPTIONS = {
+    "fee_bps": 0.0,
+    "slippage_bps": 0.0,
+    "funding_bps_per_interval": 0.0,
+}
 
 
 class BotBacktestService:
@@ -61,10 +66,12 @@ class BotBacktestService:
         start_time: int,
         end_time: int,
         initial_capital_usd: float,
+        assumptions: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         del db
         bot = self._resolve_bot(bot_id=bot_id, wallet_address=wallet_address, user_id=user_id)
         rules_snapshot = deepcopy(bot.get("rules_json") if isinstance(bot.get("rules_json"), dict) else {})
+        normalized_assumptions = self._normalize_assumptions(assumptions)
         placeholder_symbols = self._market_scope_symbols(str(bot.get("market_scope") or ""))
         preflight_issues = self._preflight_issues(
             bot=bot,
@@ -86,6 +93,7 @@ class BotBacktestService:
                     start_time=start_time,
                     end_time=end_time,
                     initial_capital_usd=initial_capital_usd,
+                    assumptions=normalized_assumptions,
                     issues=preflight_issues,
                 )
             else:
@@ -96,6 +104,7 @@ class BotBacktestService:
                     start_time=start_time,
                     end_time=end_time,
                     initial_capital_usd=initial_capital_usd,
+                    assumptions=normalized_assumptions,
                     placeholder_symbols=placeholder_symbols,
                 )
         except (PacificaClientError, ValueError) as exc:
@@ -106,6 +115,7 @@ class BotBacktestService:
                 start_time=start_time,
                 end_time=end_time,
                 initial_capital_usd=initial_capital_usd,
+                assumptions=normalized_assumptions,
                 issues=[str(exc)],
             )
 
@@ -124,7 +134,7 @@ class BotBacktestService:
                 "start_time": start_time,
                 "end_time": end_time,
                 "initial_capital_usd": initial_capital_usd,
-                "execution_model": "candle_close_v1",
+                "execution_model": "candle_close_v2",
                 "pnl_total": self._to_float(summary.get("pnl_total"), 0.0),
                 "pnl_total_pct": self._to_float(summary.get("pnl_total_pct"), 0.0),
                 "max_drawdown_pct": self._to_float(summary.get("max_drawdown_pct"), 0.0),
@@ -177,6 +187,7 @@ class BotBacktestService:
         start_time: int,
         end_time: int,
         initial_capital_usd: float,
+        assumptions: dict[str, float],
         placeholder_symbols: list[str],
     ) -> dict[str, Any]:
         evaluation_rulesets = self._build_evaluation_rulesets(rules_snapshot, placeholder_symbols)
@@ -270,6 +281,12 @@ class BotBacktestService:
                 if index >= 0:
                     current_candle_by_symbol[symbol] = symbol_candles[index]
 
+            self._accrue_funding(
+                positions=positions,
+                current_candle_by_symbol=current_candle_by_symbol,
+                assumptions=assumptions,
+            )
+
             for symbol, position in list(positions.items()):
                 current_candle = current_candle_by_symbol.get(symbol)
                 if current_candle is None:
@@ -279,9 +296,15 @@ class BotBacktestService:
                     continue
                 closed_trade = self._close_position(
                     position=position,
-                    exit_price=protection["exit_price"],
+                    exit_price=self._apply_execution_slippage(
+                        price=protection["exit_price"],
+                        side=str(position.get("side") or ""),
+                        intent="exit",
+                        slippage_bps=assumptions["slippage_bps"],
+                    ),
                     timestamp_ms=timestamp,
                     reason=protection["reason"],
+                    assumptions=assumptions,
                 )
                 cumulative_realized += self._to_float(closed_trade.get("pnl_usd"), 0.0)
                 closed_trades.append(closed_trade)
@@ -334,6 +357,7 @@ class BotBacktestService:
                         positions=positions,
                         position_lookup=position_lookup,
                         trade_counter=trade_counter,
+                        assumptions=assumptions,
                     )
                     trade_counter = action_result["trade_counter"]
                     if action_result.get("closed_trade") is not None:
@@ -384,9 +408,18 @@ class BotBacktestService:
             )
             for symbol, position in positions.items()
         ]
+        total_fees_paid = round(
+            sum(self._to_float(trade.get("fees_paid_usd"), 0.0) for trade in [*closed_trades, *open_trades]),
+            8,
+        )
+        total_funding_pnl = round(
+            sum(self._to_float(trade.get("funding_pnl_usd"), 0.0) for trade in [*closed_trades, *open_trades]),
+            8,
+        )
         primary_symbol = active_symbols[0]
         ending_equity = equity_curve[-1]["equity"] if equity_curve else initial_capital_usd
         pnl_total = ending_equity - initial_capital_usd
+        gross_pnl_total = round(pnl_total + total_fees_paid - total_funding_pnl, 8)
         trade_count = len(closed_trades)
         winning_trades = len([trade for trade in closed_trades if self._to_float(trade.get("pnl_usd"), 0.0) > 0])
         win_rate = (winning_trades / trade_count * 100.0) if trade_count else 0.0
@@ -403,6 +436,7 @@ class BotBacktestService:
             "ending_equity": round(ending_equity, 8),
             "realized_pnl": round(cumulative_realized, 8),
             "unrealized_pnl": round(sum(self._to_float(trade.get("unrealized_pnl"), 0.0) for trade in open_trades), 8),
+            "gross_pnl_total": gross_pnl_total,
             "pnl_total": round(pnl_total, 8),
             "pnl_total_pct": round((pnl_total / initial_capital_usd * 100.0) if initial_capital_usd > 0 else 0.0, 8),
             "max_drawdown_pct": round(self._max_drawdown_pct(equity_curve), 8),
@@ -411,6 +445,8 @@ class BotBacktestService:
             "winning_trades": winning_trades,
             "losing_trades": max(trade_count - winning_trades, 0),
             "avg_trade_duration_seconds": round(avg_duration_seconds, 8),
+            "fees_paid_usd": total_fees_paid,
+            "funding_pnl_usd": total_funding_pnl,
         }
         return {
             "equity_curve": equity_curve,
@@ -434,19 +470,11 @@ class BotBacktestService:
             "trades": [*closed_trades, *open_trades],
             "trigger_events": trigger_events,
             "summary": summary,
-            "assumptions": [
-                "Entries and exits execute on candle close.",
-                "Take-profit and stop-loss checks use candle high/low on later bars.",
-                "If both TP and SL are touched in one bar, the replay picks the less favorable exit.",
-                "No fees, funding, or slippage are modeled in v1.",
-                *(
-                    [
-                        "Symbols without main-interval history are skipped instead of failing the entire replay."
-                    ]
-                    if missing_main_symbols
-                    else []
-                ),
-            ],
+            "assumption_config": assumptions,
+            "assumptions": self._build_assumptions_text(
+                assumptions=assumptions,
+                missing_main_symbols=missing_main_symbols,
+            ),
         }
 
     def _preflight_issues(
@@ -492,6 +520,7 @@ class BotBacktestService:
         start_time: int,
         end_time: int,
         initial_capital_usd: float,
+        assumptions: dict[str, float],
         issues: list[str],
     ) -> dict[str, Any]:
         symbols = sorted(self._extract_symbols(bot.get("rules_json") if isinstance(bot.get("rules_json"), dict) else {}))
@@ -509,6 +538,7 @@ class BotBacktestService:
                 "ending_equity": round(initial_capital_usd, 8),
                 "realized_pnl": 0.0,
                 "unrealized_pnl": 0.0,
+                "gross_pnl_total": 0.0,
                 "pnl_total": 0.0,
                 "pnl_total_pct": 0.0,
                 "max_drawdown_pct": 0.0,
@@ -517,7 +547,10 @@ class BotBacktestService:
                 "winning_trades": 0,
                 "losing_trades": 0,
                 "avg_trade_duration_seconds": 0.0,
+                "fees_paid_usd": 0.0,
+                "funding_pnl_usd": 0.0,
             },
+            "assumption_config": assumptions,
             "assumptions": [
                 "This run failed during preflight and did not execute the replay engine.",
             ],
@@ -542,6 +575,7 @@ class BotBacktestService:
         positions: dict[str, dict[str, Any]],
         position_lookup: dict[str, dict[str, Any]],
         trade_counter: int,
+        assumptions: dict[str, float],
     ) -> dict[str, Any]:
         del position_lookup
         action_type = str(action.get("type") or "").strip()
@@ -576,14 +610,26 @@ class BotBacktestService:
             position = positions.get(symbol)
             if position is None or current_price <= 0:
                 return {"executed": False, "trade_counter": trade_counter, "symbol": symbol, "detail": f"No open {symbol} position to close."}
-            closed_trade = self._close_position(position=position, exit_price=current_price, timestamp_ms=timestamp_ms, reason="action_close")
+            execution_price = self._apply_execution_slippage(
+                price=current_price,
+                side=str(position.get("side") or ""),
+                intent="exit",
+                slippage_bps=assumptions["slippage_bps"],
+            )
+            closed_trade = self._close_position(
+                position=position,
+                exit_price=execution_price,
+                timestamp_ms=timestamp_ms,
+                reason="action_close",
+                assumptions=assumptions,
+            )
             return {
                 "executed": True,
                 "trade_counter": trade_counter,
                 "symbol": symbol,
                 "closed_trade": closed_trade,
                 "removed_symbols": [symbol],
-                "detail": f"Closed {symbol} at {current_price:.4f}.",
+                "detail": self._build_close_detail(symbol=symbol, closed_trade=closed_trade),
             }
 
         if action_type in {"open_long", "open_short", "place_market_order"}:
@@ -593,14 +639,26 @@ class BotBacktestService:
                 position = positions.get(symbol)
                 if position is None:
                     return {"executed": False, "trade_counter": trade_counter, "symbol": symbol, "detail": f"No open {symbol} position available for reduce-only execution."}
-                closed_trade = self._close_position(position=position, exit_price=current_price, timestamp_ms=timestamp_ms, reason="reduce_only_close")
+                execution_price = self._apply_execution_slippage(
+                    price=current_price,
+                    side=str(position.get("side") or ""),
+                    intent="exit",
+                    slippage_bps=assumptions["slippage_bps"],
+                )
+                closed_trade = self._close_position(
+                    position=position,
+                    exit_price=execution_price,
+                    timestamp_ms=timestamp_ms,
+                    reason="reduce_only_close",
+                    assumptions=assumptions,
+                )
                 return {
                     "executed": True,
                     "trade_counter": trade_counter,
                     "symbol": symbol,
                     "closed_trade": closed_trade,
                     "removed_symbols": [symbol],
-                    "detail": f"Closed {symbol} with a reduce-only market order at {current_price:.4f}.",
+                    "detail": self._build_close_detail(symbol=symbol, closed_trade=closed_trade),
                 }
             target_side = self._resolve_target_side(action)
             existing_position = positions.get(symbol)
@@ -614,16 +672,35 @@ class BotBacktestService:
                         "symbol": symbol,
                         "detail": f"{symbol} already has an open {target_side} position.",
                     }
-                closed_trade = self._close_position(position=existing_position, exit_price=current_price, timestamp_ms=timestamp_ms, reason="action_reverse")
+                reversal_exit_price = self._apply_execution_slippage(
+                    price=current_price,
+                    side=str(existing_position.get("side") or ""),
+                    intent="exit",
+                    slippage_bps=assumptions["slippage_bps"],
+                )
+                closed_trade = self._close_position(
+                    position=existing_position,
+                    exit_price=reversal_exit_price,
+                    timestamp_ms=timestamp_ms,
+                    reason="action_reverse",
+                    assumptions=assumptions,
+                )
                 removed_symbols.append(symbol)
             trade_counter += 1
+            execution_price = self._apply_execution_slippage(
+                price=current_price,
+                side=target_side,
+                intent="entry",
+                slippage_bps=assumptions["slippage_bps"],
+            )
             opened_position = self._open_position(
                 action=action,
                 symbol=symbol,
                 side=target_side,
-                entry_price=current_price,
+                entry_price=execution_price,
                 timestamp_ms=timestamp_ms,
                 trade_id=f"trade-{trade_counter}",
+                assumptions=assumptions,
             )
             detail_prefix = "Reversed" if closed_trade is not None else "Opened"
             return {
@@ -633,7 +710,7 @@ class BotBacktestService:
                 "closed_trade": closed_trade,
                 "opened_position": opened_position,
                 "removed_symbols": removed_symbols,
-                "detail": f"{detail_prefix} {target_side} on {symbol} at {current_price:.4f}.",
+                "detail": self._build_open_detail(symbol=symbol, side=target_side, position=opened_position, prefix=detail_prefix),
             }
 
         return {
@@ -652,6 +729,7 @@ class BotBacktestService:
         entry_price: float,
         timestamp_ms: int,
         trade_id: str,
+        assumptions: dict[str, float],
     ) -> dict[str, Any]:
         leverage = max(1.0, self._to_float(action.get("leverage"), 1.0))
         size_usd = self._to_float(action.get("size_usd"), 0.0)
@@ -660,6 +738,7 @@ class BotBacktestService:
         if notional_usd <= 0:
             notional_usd = entry_price
         amount = quantity if quantity > 0 else notional_usd / entry_price
+        entry_fee_usd = round(notional_usd * (assumptions["fee_bps"] / 10_000.0), 8)
         position = {
             "trade_id": trade_id,
             "symbol": symbol,
@@ -673,6 +752,8 @@ class BotBacktestService:
             "opened_at": self._iso_from_ms(timestamp_ms),
             "take_profit_price": None,
             "stop_loss_price": None,
+            "entry_fee_usd": entry_fee_usd,
+            "accrued_funding_pnl_usd": 0.0,
         }
         self._apply_tpsl(
             position,
@@ -698,13 +779,19 @@ class BotBacktestService:
         exit_price: float,
         timestamp_ms: int,
         reason: str,
+        assumptions: dict[str, float],
     ) -> dict[str, Any]:
         amount = self._to_float(position.get("amount"), 0.0)
         entry_price = self._to_float(position.get("entry_price"), 0.0)
         side = str(position.get("side") or "").strip()
         direction = 1.0 if side == "long" else -1.0
-        pnl_usd = (exit_price - entry_price) * amount * direction
+        gross_pnl_usd = (exit_price - entry_price) * amount * direction
         margin = self._to_float(position.get("margin"), 0.0)
+        entry_fee_usd = self._to_float(position.get("entry_fee_usd"), 0.0)
+        exit_fee_usd = abs(exit_price * amount) * (assumptions["fee_bps"] / 10_000.0)
+        funding_pnl_usd = self._to_float(position.get("accrued_funding_pnl_usd"), 0.0)
+        fees_paid_usd = entry_fee_usd + exit_fee_usd
+        pnl_usd = gross_pnl_usd + funding_pnl_usd - fees_paid_usd
         duration_seconds = max(0, (timestamp_ms - int(position.get("opened_at_ms") or timestamp_ms)) // 1000)
         return {
             "trade_id": position.get("trade_id"),
@@ -718,6 +805,9 @@ class BotBacktestService:
             "quantity": round(amount, 8),
             "notional_usd": round(self._to_float(position.get("notional_usd"), 0.0), 8),
             "leverage": round(self._to_float(position.get("leverage"), 1.0), 8),
+            "gross_pnl_usd": round(gross_pnl_usd, 8),
+            "fees_paid_usd": round(fees_paid_usd, 8),
+            "funding_pnl_usd": round(funding_pnl_usd, 8),
             "pnl_usd": round(pnl_usd, 8),
             "pnl_pct": round((pnl_usd / margin * 100.0) if margin > 0 else 0.0, 8),
             "duration_seconds": duration_seconds,
@@ -729,8 +819,11 @@ class BotBacktestService:
         entry_price = self._to_float(position.get("entry_price"), 0.0)
         side = str(position.get("side") or "").strip()
         direction = 1.0 if side == "long" else -1.0
-        unrealized_pnl = (mark_price - entry_price) * amount * direction
+        gross_unrealized_pnl = (mark_price - entry_price) * amount * direction
         margin = self._to_float(position.get("margin"), 0.0)
+        fees_paid_usd = self._to_float(position.get("entry_fee_usd"), 0.0)
+        funding_pnl_usd = self._to_float(position.get("accrued_funding_pnl_usd"), 0.0)
+        unrealized_pnl = gross_unrealized_pnl + funding_pnl_usd - fees_paid_usd
         return {
             "trade_id": position.get("trade_id"),
             "symbol": position.get("symbol"),
@@ -743,6 +836,9 @@ class BotBacktestService:
             "quantity": round(amount, 8),
             "notional_usd": round(self._to_float(position.get("notional_usd"), 0.0), 8),
             "leverage": round(self._to_float(position.get("leverage"), 1.0), 8),
+            "gross_pnl_usd": round(gross_unrealized_pnl, 8),
+            "fees_paid_usd": round(fees_paid_usd, 8),
+            "funding_pnl_usd": round(funding_pnl_usd, 8),
             "pnl_usd": None,
             "pnl_pct": None,
             "duration_seconds": None,
@@ -792,8 +888,11 @@ class BotBacktestService:
         entry_price = self._to_float(position.get("entry_price"), 0.0)
         side = str(position.get("side") or "").strip()
         direction = 1.0 if side == "long" else -1.0
-        unrealized_pnl = (mark_price - entry_price) * amount * direction
+        gross_unrealized_pnl = (mark_price - entry_price) * amount * direction
         margin = self._to_float(position.get("margin"), 0.0)
+        fees_paid_usd = self._to_float(position.get("entry_fee_usd"), 0.0)
+        funding_pnl_usd = self._to_float(position.get("accrued_funding_pnl_usd"), 0.0)
+        unrealized_pnl = gross_unrealized_pnl + funding_pnl_usd - fees_paid_usd
         return {
             "amount": amount,
             "side": side,
@@ -803,6 +902,93 @@ class BotBacktestService:
             "unrealized_pnl": unrealized_pnl,
             "unrealized_pnl_pct": (unrealized_pnl / margin * 100.0) if margin > 0 else 0.0,
         }
+
+    def _normalize_assumptions(self, assumptions: dict[str, Any] | None) -> dict[str, float]:
+        raw = assumptions if isinstance(assumptions, dict) else {}
+        return {
+            "fee_bps": max(0.0, self._to_float(raw.get("fee_bps"), DEFAULT_BACKTEST_ASSUMPTIONS["fee_bps"])),
+            "slippage_bps": max(0.0, self._to_float(raw.get("slippage_bps"), DEFAULT_BACKTEST_ASSUMPTIONS["slippage_bps"])),
+            "funding_bps_per_interval": self._to_float(
+                raw.get("funding_bps_per_interval"),
+                DEFAULT_BACKTEST_ASSUMPTIONS["funding_bps_per_interval"],
+            ),
+        }
+
+    def _build_assumptions_text(
+        self,
+        *,
+        assumptions: dict[str, float],
+        missing_main_symbols: set[str],
+    ) -> list[str]:
+        lines = [
+            "Entries and exits execute on candle close.",
+            "Take-profit and stop-loss checks use candle high/low on later bars.",
+            "If both TP and SL are touched in one bar, the replay picks the less favorable exit.",
+        ]
+        if assumptions["fee_bps"] > 0:
+            lines.append(f"Trading fees are modeled at {assumptions['fee_bps']:.2f} bps on entry and exit.")
+        else:
+            lines.append("Trading fees are disabled for this replay.")
+        if assumptions["slippage_bps"] > 0:
+            lines.append(f"Market fills include {assumptions['slippage_bps']:.2f} bps of adverse slippage.")
+        else:
+            lines.append("Market fills assume zero slippage.")
+        if assumptions["funding_bps_per_interval"] != 0:
+            lines.append(
+                f"Funding is applied every replay bar at {assumptions['funding_bps_per_interval']:.2f} bps; positive values charge longs and credit shorts."
+            )
+        else:
+            lines.append("Funding is disabled for this replay.")
+        if missing_main_symbols:
+            lines.append("Symbols without main-interval history are skipped instead of failing the entire replay.")
+        return lines
+
+    def _accrue_funding(
+        self,
+        *,
+        positions: dict[str, dict[str, Any]],
+        current_candle_by_symbol: dict[str, dict[str, Any]],
+        assumptions: dict[str, float],
+    ) -> None:
+        funding_rate = assumptions["funding_bps_per_interval"] / 10_000.0
+        if funding_rate == 0.0:
+            return
+        for symbol, position in positions.items():
+            candle = current_candle_by_symbol.get(symbol)
+            if candle is None:
+                continue
+            mark_price = self._to_float(candle.get("close"), 0.0)
+            amount = self._to_float(position.get("amount"), 0.0)
+            side = str(position.get("side") or "").strip().lower()
+            if mark_price <= 0 or amount <= 0 or side not in {"long", "short"}:
+                continue
+            notional_usd = abs(mark_price * amount)
+            direction = -1.0 if side == "long" else 1.0
+            position["accrued_funding_pnl_usd"] = self._to_float(position.get("accrued_funding_pnl_usd"), 0.0) + (
+                notional_usd * funding_rate * direction
+            )
+
+    def _apply_execution_slippage(self, *, price: float, side: str, intent: str, slippage_bps: float) -> float:
+        if price <= 0 or slippage_bps <= 0:
+            return price
+        slip = slippage_bps / 10_000.0
+        normalized_side = side.strip().lower()
+        if intent == "entry":
+            return price * (1.0 + slip) if normalized_side == "long" else price * (1.0 - slip)
+        return price * (1.0 - slip) if normalized_side == "long" else price * (1.0 + slip)
+
+    def _build_open_detail(self, *, symbol: str, side: str, position: dict[str, Any], prefix: str) -> str:
+        return (
+            f"{prefix} {side} on {symbol} at {self._to_float(position.get('entry_price'), 0.0):.4f}. "
+            f"Entry fee ${self._to_float(position.get('entry_fee_usd'), 0.0):.2f}."
+        )
+
+    def _build_close_detail(self, *, symbol: str, closed_trade: dict[str, Any]) -> str:
+        pnl_usd = self._to_float(closed_trade.get("pnl_usd"), 0.0)
+        return (
+            f"Closed {symbol} at {self._to_float(closed_trade.get('exit_price'), 0.0):.4f}. "
+            f"Net {pnl_usd:+.2f} after ${self._to_float(closed_trade.get('fees_paid_usd'), 0.0):.2f} fees."
+        )
 
     @staticmethod
     def _resolve_target_side(action: dict[str, Any]) -> str:
