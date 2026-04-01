@@ -81,6 +81,12 @@ def _seed_tables() -> dict[str, list[dict[str, Any]]]:
             }
         ],
         "bot_execution_events": [],
+        "bot_action_claims": [],
+        "bot_trade_sync_state": [],
+        "bot_trade_lots": [],
+        "bot_trade_closures": [],
+        "bot_leaderboard_snapshots": [],
+        "bot_copy_relationships": [],
     }
 
 
@@ -293,6 +299,89 @@ def test_delete_bot_removes_stopped_runtime_and_events() -> None:
             "created_at": "2026-03-16T01:00:00+00:00",
         }
     ]
+    tables["bot_action_claims"] = [
+        {
+            "id": "claim-1",
+            "runtime_id": "runtime-1",
+            "idempotency_key": "idem-1",
+            "claimed_by": "worker-1",
+            "created_at": "2026-03-16T01:00:00+00:00",
+        }
+    ]
+    tables["bot_trade_sync_state"] = [
+        {
+            "runtime_id": "runtime-1",
+            "synced_at": "2026-03-16T01:00:00+00:00",
+            "execution_events_count": 1,
+            "position_history_count": 1,
+            "last_execution_at": "2026-03-16T01:00:00+00:00",
+            "last_history_at": "2026-03-16T01:00:00+00:00",
+            "last_error": None,
+        }
+    ]
+    tables["bot_trade_lots"] = [
+        {
+            "id": "lot-1",
+            "runtime_id": "runtime-1",
+            "symbol": "BTC",
+            "side": "bid",
+            "opened_at": "2026-03-16T00:30:00+00:00",
+            "source": "bot",
+            "source_event_id": "event-1",
+            "source_order_id": "order-1",
+            "source_history_id": 11,
+            "entry_price": 100000.0,
+            "quantity_opened": 0.01,
+            "quantity_remaining": 0.0,
+            "created_at": "2026-03-16T00:30:00+00:00",
+            "updated_at": "2026-03-16T01:00:00+00:00",
+        }
+    ]
+    tables["bot_trade_closures"] = [
+        {
+            "id": "closure-1",
+            "runtime_id": "runtime-1",
+            "lot_id": "lot-1",
+            "symbol": "BTC",
+            "side": "bid",
+            "closed_at": "2026-03-16T01:00:00+00:00",
+            "source": "bot",
+            "source_event_id": "event-1",
+            "source_order_id": "order-1",
+            "source_history_id": 12,
+            "quantity_closed": 0.01,
+            "entry_price": 100000.0,
+            "exit_price": 101000.0,
+            "realized_pnl": 10.0,
+            "created_at": "2026-03-16T01:00:00+00:00",
+        }
+    ]
+    tables["bot_leaderboard_snapshots"] = [
+        {
+            "id": "snapshot-1",
+            "runtime_id": "runtime-1",
+            "rank": 1,
+            "pnl_total": 10.0,
+            "pnl_unrealized": 0.0,
+            "win_streak": 1,
+            "drawdown": 0.0,
+            "captured_at": "2026-03-16T01:00:00+00:00",
+        }
+    ]
+    tables["bot_copy_relationships"] = [
+        {
+            "id": "copy-1",
+            "source_runtime_id": "runtime-1",
+            "follower_user_id": "user-2",
+            "follower_wallet_address": "wallet-2",
+            "mode": "mirror",
+            "scale_bps": 10000,
+            "status": "stopped",
+            "risk_ack_version": "v1",
+            "confirmed_at": "2026-03-16T00:00:00+00:00",
+            "updated_at": "2026-03-16T01:00:00+00:00",
+        }
+    ]
     fake_supabase = FakeSupabaseRestClient(tables)
     service = BotBuilderService()
     service.supabase = fake_supabase
@@ -302,6 +391,12 @@ def test_delete_bot_removes_stopped_runtime_and_events() -> None:
     assert fake_supabase.tables["bot_definitions"] == []
     assert fake_supabase.tables["bot_runtimes"] == []
     assert fake_supabase.tables["bot_execution_events"] == []
+    assert fake_supabase.tables["bot_action_claims"] == []
+    assert fake_supabase.tables["bot_trade_sync_state"] == []
+    assert fake_supabase.tables["bot_trade_lots"] == []
+    assert fake_supabase.tables["bot_trade_closures"] == []
+    assert fake_supabase.tables["bot_leaderboard_snapshots"] == []
+    assert fake_supabase.tables["bot_copy_relationships"] == []
 
 
 def test_delete_bot_rejects_active_runtime() -> None:

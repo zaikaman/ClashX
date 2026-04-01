@@ -11,6 +11,15 @@ from src.services.supabase_rest import SupabaseRestClient
 class BotBuilderService:
     VALID_AUTHORING_MODES = {"visual"}
     VALID_VISIBILITY = {"private", "public", "unlisted"}
+    RUNTIME_DEPENDENT_TABLES = (
+        "bot_execution_events",
+        "bot_action_claims",
+        "bot_trade_sync_state",
+        "bot_trade_closures",
+        "bot_trade_lots",
+        "bot_leaderboard_snapshots",
+        "bot_copy_relationships",
+    )
 
     def __init__(self, rules_engine: RulesEngine | None = None) -> None:
         self.supabase = SupabaseRestClient()
@@ -144,14 +153,17 @@ class BotBuilderService:
         bot = self.supabase.maybe_one("bot_definitions", filters={"id": bot_id, "wallet_address": wallet_address})
         if bot is None:
             raise ValueError("Bot not found")
-        runtime = self.supabase.maybe_one("bot_runtimes", filters={"bot_definition_id": bot_id, "wallet_address": wallet_address})
-        if runtime is not None and runtime.get("status") in {"active", "paused"}:
+        runtimes = self.supabase.select("bot_runtimes", filters={"bot_definition_id": bot_id, "wallet_address": wallet_address})
+        if any(runtime.get("status") in {"active", "paused"} for runtime in runtimes):
             raise ValueError("Stop the runtime before deleting this bot.")
-        if runtime is not None:
-            self.supabase.delete("bot_execution_events", filters={"runtime_id": runtime["id"]})
-            self.supabase.delete("bot_action_claims", filters={"runtime_id": runtime["id"]})
+        for runtime in runtimes:
+            self._delete_runtime_dependencies(runtime_id=runtime["id"])
             self.supabase.delete("bot_runtimes", filters={"id": runtime["id"]})
         self.supabase.delete("bot_definitions", filters={"id": bot_id, "wallet_address": wallet_address})
+
+    def _delete_runtime_dependencies(self, *, runtime_id: str) -> None:
+        for table in self.RUNTIME_DEPENDENT_TABLES:
+            self.supabase.delete(table, filters={"runtime_id" if table != "bot_copy_relationships" else "source_runtime_id": runtime_id})
 
     def validate_definition(self, *, authoring_mode: str, visibility: str, rules_version: int, rules_json: dict) -> list[str]:
         issues: list[str] = []
