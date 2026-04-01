@@ -121,6 +121,7 @@ class BotBacktestService:
 
         summary = result_json.get("summary") if isinstance(result_json.get("summary"), dict) else {}
         completed_at = self._now_iso()
+        failure_reason = self._extract_failure_reason(result_json=result_json, status=status)
         row = self._supabase.insert(
             "bot_backtest_runs",
             {
@@ -129,6 +130,8 @@ class BotBacktestService:
                 "user_id": bot["user_id"],
                 "wallet_address": wallet_address,
                 "bot_name_snapshot": bot["name"],
+                "market_scope_snapshot": str(bot.get("market_scope") or ""),
+                "strategy_type_snapshot": str(bot.get("strategy_type") or ""),
                 "rules_snapshot_json": rules_snapshot,
                 "interval": interval,
                 "start_time": start_time,
@@ -141,6 +144,8 @@ class BotBacktestService:
                 "win_rate": self._to_float(summary.get("win_rate"), 0.0),
                 "trade_count": int(self._to_float(summary.get("trade_count"), 0.0)),
                 "status": status,
+                "assumption_config_json": normalized_assumptions,
+                "failure_reason": failure_reason,
                 "result_json": result_json,
                 "created_at": now_iso,
                 "completed_at": completed_at,
@@ -990,6 +995,17 @@ class BotBacktestService:
             f"Net {pnl_usd:+.2f} after ${self._to_float(closed_trade.get('fees_paid_usd'), 0.0):.2f} fees."
         )
 
+    def _extract_failure_reason(self, *, result_json: dict[str, Any], status: str) -> str | None:
+        if status != "failed":
+            return None
+        issues = result_json.get("preflight_issues")
+        if isinstance(issues, list):
+            for issue in issues:
+                text = str(issue).strip()
+                if text:
+                    return text
+        return "Backtest failed."
+
     @staticmethod
     def _resolve_target_side(action: dict[str, Any]) -> str:
         action_type = str(action.get("type") or "").strip()
@@ -1036,6 +1052,8 @@ class BotBacktestService:
             "id": row["id"],
             "bot_definition_id": row["bot_definition_id"],
             "bot_name_snapshot": row["bot_name_snapshot"],
+            "market_scope_snapshot": row.get("market_scope_snapshot"),
+            "strategy_type_snapshot": row.get("strategy_type_snapshot"),
             "interval": row["interval"],
             "start_time": row["start_time"],
             "end_time": row["end_time"],
@@ -1047,6 +1065,8 @@ class BotBacktestService:
             "win_rate": row["win_rate"],
             "trade_count": row["trade_count"],
             "status": row["status"],
+            "assumption_config_json": row.get("assumption_config_json") if isinstance(row.get("assumption_config_json"), dict) else {},
+            "failure_reason": row.get("failure_reason"),
             "created_at": row["created_at"],
             "completed_at": row.get("completed_at"),
             "updated_at": row["updated_at"],

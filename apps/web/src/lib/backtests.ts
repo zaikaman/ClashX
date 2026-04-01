@@ -94,6 +94,8 @@ export type BacktestRunSummary = {
   id: string;
   bot_definition_id: string;
   bot_name_snapshot: string;
+  market_scope_snapshot?: string | null;
+  strategy_type_snapshot?: string | null;
   interval: string;
   start_time: number;
   end_time: number;
@@ -105,6 +107,8 @@ export type BacktestRunSummary = {
   win_rate: number;
   trade_count: number;
   status: string;
+  assumption_config_json?: BacktestAssumptionConfig;
+  failure_reason?: string | null;
   created_at: string;
   completed_at: string | null;
   updated_at: string;

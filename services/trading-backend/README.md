@@ -12,6 +12,10 @@ Apply the Supabase SQL in:
 
 - `services/trading-backend/db/supabase_bot_tables.sql`
 
+For existing environments that already have the bot tables, apply any additive repair scripts in:
+
+- `services/trading-backend/db/migrations/versions`
+
 This includes the runtime tables plus:
 
 - `bot_action_claims`

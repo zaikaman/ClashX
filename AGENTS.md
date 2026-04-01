@@ -3,3 +3,4 @@
 - Next.js is only being used as the frontend app, routing, rendering, browser-side fetches, the backend layer is using FastAPI.
 - You can answer to me in Vietnamese and English, but always write your code and content in English.
 - ripgrep binary in this environment is unusable, just use Powershell.
+- services/trading-backend/db/current_schema.sql is the current database schema.

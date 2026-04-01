@@ -200,6 +200,46 @@ def test_backtest_profitable_long_then_close() -> None:
     assert run["result_json"]["trades"][0]["close_reason"] == "action_close"
 
 
+def test_backtest_persists_history_row_with_snapshots_and_inputs() -> None:
+    rules_json = _graph_rules(
+        nodes=[
+            {"id": "condition-open", "kind": "condition", "position": {"x": 120, "y": 80}, "config": {"type": "price_above", "symbol": "BTC", "value": 90}},
+            {"id": "action-open", "kind": "action", "position": {"x": 320, "y": 80}, "config": {"type": "open_long", "symbol": "BTC", "size_usd": 100, "leverage": 1}},
+        ],
+        edges=[
+            {"id": "edge-open-1", "source": "builder-entry", "target": "condition-open"},
+            {"id": "edge-open-2", "source": "condition-open", "target": "action-open"},
+        ],
+    )
+    candles = [_candle(0, 99, 101, 98, 100), _candle(1, 100, 106, 100, 105)]
+    service, supabase = _service(rules_json, candles)
+
+    run = asyncio.run(
+        service.run_backtest(
+            None,
+            bot_id="bot-a",
+            wallet_address="wallet-a",
+            user_id="user-a",
+            interval="15m",
+            start_time=BASE_TIME_MS,
+            end_time=BASE_TIME_MS + 3 * FIFTEEN_MINUTES_MS,
+            initial_capital_usd=10_000,
+            assumptions={"fee_bps": 4, "slippage_bps": 5, "funding_bps_per_interval": 0},
+        )
+    )
+
+    assert len(supabase.tables["bot_backtest_runs"]) == 1
+    persisted = supabase.tables["bot_backtest_runs"][0]
+    assert persisted["id"] == run["id"]
+    assert persisted["bot_name_snapshot"] == "Backtest Bot"
+    assert persisted["market_scope_snapshot"] == "Pacifica perpetuals / BTC"
+    assert persisted["strategy_type_snapshot"] == "rules"
+    assert persisted["assumption_config_json"] == {"fee_bps": 4.0, "slippage_bps": 5.0, "funding_bps_per_interval": 0.0}
+    assert persisted["failure_reason"] is None
+    assert persisted["result_json"]["summary"]["symbols"] == ["BTC"]
+    assert run["assumption_config_json"] == {"fee_bps": 4.0, "slippage_bps": 5.0, "funding_bps_per_interval": 0.0}
+
+
 def test_backtest_losing_trade_tracks_drawdown() -> None:
     rules_json = _graph_rules(
         nodes=[
@@ -554,7 +594,7 @@ def test_backtest_returns_failed_run_for_unsupported_actions() -> None:
         ],
     )
     candles = [_candle(0, 99, 101, 98, 100)]
-    service, _ = _service(rules_json, candles)
+    service, supabase = _service(rules_json, candles)
 
     run = asyncio.run(
         service.run_backtest(
@@ -571,6 +611,8 @@ def test_backtest_returns_failed_run_for_unsupported_actions() -> None:
 
     assert run["status"] == "failed"
     assert run["result_json"]["preflight_issues"]
+    assert run["failure_reason"] == run["result_json"]["preflight_issues"][0]
+    assert supabase.tables["bot_backtest_runs"][0]["failure_reason"] == run["failure_reason"]
 
 
 def test_backtest_allows_ranges_longer_than_two_thousand_bars() -> None:

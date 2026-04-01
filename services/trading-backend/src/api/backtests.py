@@ -36,6 +36,8 @@ class BacktestRunSummaryResponse(BaseModel):
     id: str
     bot_definition_id: str
     bot_name_snapshot: str
+    market_scope_snapshot: str | None = None
+    strategy_type_snapshot: str | None = None
     interval: str
     start_time: int
     end_time: int
@@ -47,6 +49,8 @@ class BacktestRunSummaryResponse(BaseModel):
     win_rate: float
     trade_count: int
     status: str
+    assumption_config_json: dict[str, Any] = Field(default_factory=dict)
+    failure_reason: str | None = None
     created_at: str
     completed_at: str | None = None
     updated_at: str
