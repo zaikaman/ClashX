@@ -34,6 +34,10 @@ class BotLeaderboardRow(BaseModel):
     win_streak: int
     drawdown: float
     captured_at: datetime
+    trust: "TrustMetricsResponse"
+    drift: "DriftMetricsResponse"
+    passport: "StrategyPassportResponse"
+    creator: "CreatorSummaryResponse"
 
 
 class RuntimeEventSummary(BaseModel):
@@ -60,6 +64,115 @@ class BotRuntimeProfileResponse(BaseModel):
     win_streak: int
     drawdown: float
     recent_events: list[RuntimeEventSummary]
+    trust: "TrustMetricsResponse"
+    drift: "DriftMetricsResponse"
+    passport: "StrategyPassportResponse"
+    creator: "CreatorProfileResponse"
+
+
+class TrustBadgeResponse(BaseModel):
+    label: str
+    tone: str
+    detail: str
+
+
+class TrustMetricsResponse(BaseModel):
+    trust_score: int
+    uptime_pct: float
+    failure_rate_pct: float
+    health: str
+    heartbeat_age_seconds: int
+    risk_grade: str
+    risk_score: int
+    summary: str
+    badges: list[TrustBadgeResponse]
+
+
+class DriftMetricsResponse(BaseModel):
+    status: str
+    score: int
+    summary: str
+    live_pnl_pct: float | None = None
+    benchmark_pnl_pct: float | None = None
+    return_gap_pct: float | None = None
+    live_drawdown_pct: float
+    benchmark_drawdown_pct: float | None = None
+    drawdown_gap_pct: float | None = None
+    benchmark_run_id: str | None = None
+    benchmark_completed_at: datetime | None = None
+
+
+class StrategyVersionSummaryResponse(BaseModel):
+    id: str
+    bot_definition_id: str
+    version_number: int
+    change_kind: str
+    visibility_snapshot: str
+    name_snapshot: str
+    is_public_release: bool
+    created_at: datetime
+    label: str
+
+
+class PublishSnapshotResponse(BaseModel):
+    id: str
+    bot_definition_id: str
+    strategy_version_id: str | None = None
+    runtime_id: str | None = None
+    visibility_snapshot: str
+    publish_state: str
+    summary_json: dict
+    created_at: datetime
+
+
+class StrategyPassportResponse(BaseModel):
+    market_scope: str
+    strategy_type: str
+    authoring_mode: str
+    rules_version: int
+    current_version: int
+    release_count: int
+    public_since: datetime | None = None
+    last_published_at: datetime | None = None
+    latest_backtest_at: datetime | None = None
+    latest_backtest_run_id: str | None = None
+    version_history: list[StrategyVersionSummaryResponse]
+    publish_history: list[PublishSnapshotResponse]
+
+
+class CreatorSummaryResponse(BaseModel):
+    creator_id: str
+    wallet_address: str
+    display_name: str
+    public_bot_count: int
+    active_runtime_count: int
+    mirror_count: int
+    active_mirror_count: int
+    clone_count: int
+    average_trust_score: int
+    best_rank: int | None = None
+    reputation_score: int
+    reputation_label: str
+    summary: str
+    tags: list[str]
+
+
+class CreatorBotSummaryResponse(BaseModel):
+    runtime_id: str
+    bot_definition_id: str
+    bot_name: str
+    strategy_type: str
+    rank: int | None = None
+    pnl_total: float
+    drawdown: float
+    trust_score: int
+    risk_grade: str
+    drift_status: str
+    captured_at: datetime | None = None
+
+
+class CreatorProfileResponse(CreatorSummaryResponse):
+    bots: list[CreatorBotSummaryResponse] = Field(default_factory=list)
 
 
 class MirrorPosition(BaseModel):
@@ -139,6 +252,18 @@ class BotCopyRelationshipResponse(BaseModel):
     confirmed_at: datetime
     updated_at: datetime
     follower_display_name: str | None = None
+
+
+@router.get("/creators/{creator_id}", response_model=CreatorProfileResponse)
+def get_creator_profile(
+    creator_id: str,
+    db: Session = Depends(get_db),
+) -> CreatorProfileResponse:
+    try:
+        payload = bot_copy_engine.creator_profile(db, creator_id=creator_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return CreatorProfileResponse.model_validate(payload)
 
 
 @router.get("/leaderboard", response_model=list[BotLeaderboardRow])

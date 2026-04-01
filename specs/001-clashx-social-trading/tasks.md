@@ -152,12 +152,12 @@ description: "Task list for implementing and upgrading ClashX Bot Builder Platfo
 
 **Purpose**: Make every public bot feel verifiable, investable, and easier to compare.
 
-- [ ] T058 [P] Implement trust metrics service for uptime, failure rate, drift, and risk grading in `services/trading-backend/src/services/bot_trust_service.py`
-- [ ] T059 [P] Add strategy version history and publish snapshots in `services/trading-backend/src/models/` and `services/trading-backend/src/services/bot_builder_service.py`
-- [ ] T060 Implement creator profile aggregation and reputation summaries in `services/trading-backend/src/services/bot_trust_service.py` and `services/trading-backend/src/services/bot_copy_engine.py`
-- [ ] T061 Expand leaderboard and public bot profile APIs with passport, drift, and creator metadata in `services/trading-backend/src/api/bot_copy.py`
-- [ ] T062 Build public strategy passport sections, trust badges, and drift visuals in `apps/web/src/app/(app)/leaderboard/page.tsx`, `apps/web/src/app/(app)/leaderboard/[runtimeId]/page.tsx`, and `apps/web/src/components/leaderboard/`
-- [ ] T063 Build creator profile surfaces and public reputation modules in `apps/web/src/components/leaderboard/` and related public app routes
+- [X] T058 [P] Implement trust metrics service for uptime, failure rate, drift, and risk grading in `services/trading-backend/src/services/bot_trust_service.py`
+- [X] T059 [P] Add strategy version history and publish snapshots in `services/trading-backend/src/models/` and `services/trading-backend/src/services/bot_builder_service.py`
+- [X] T060 Implement creator profile aggregation and reputation summaries in `services/trading-backend/src/services/bot_trust_service.py` and `services/trading-backend/src/services/bot_copy_engine.py`
+- [X] T061 Expand leaderboard and public bot profile APIs with passport, drift, and creator metadata in `services/trading-backend/src/api/bot_copy.py`
+- [X] T062 Build public strategy passport sections, trust badges, and drift visuals in `apps/web/src/app/(app)/leaderboard/page.tsx`, `apps/web/src/app/(app)/leaderboard/[runtimeId]/page.tsx`, and `apps/web/src/components/leaderboard/`
+- [X] T063 Build creator profile surfaces and public reputation modules in `apps/web/src/components/leaderboard/` and related public app routes
 
 **Checkpoint**: Every public bot profile clearly communicates risk, trust, history, and live-vs-backtest behavior.
 

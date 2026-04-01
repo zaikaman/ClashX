@@ -7,6 +7,7 @@ from typing import Any
 from src.services.bot_builder_service import BotBuilderService
 from src.services.bot_leaderboard_engine import BotLeaderboardEngine
 from src.services.bot_performance_service import BotPerformanceService
+from src.services.bot_trust_service import BotTrustService
 from src.services.event_broadcaster import broadcaster
 from src.services.pacifica_auth_service import PacificaAuthService
 from src.services.pacifica_client import PacificaClient, get_pacifica_client
@@ -25,12 +26,14 @@ class BotCopyEngine:
         self.performance_service = BotPerformanceService(pacifica_client=self.pacifica_client, supabase=self.supabase)
         self.auth_service = PacificaAuthService()
         self.builder_service = BotBuilderService()
+        self.trust_service = BotTrustService()
 
     async def get_or_refresh_leaderboard(self, db: Any, *, limit: int) -> list[dict]:
         del db
         latest = self.supabase.maybe_one("bot_leaderboard_snapshots", order="captured_at.desc")
         if latest is None or self._snapshot_is_stale(latest.get("captured_at")):
-            return await self.leaderboard_engine.refresh_public_leaderboard(None, limit=limit)
+            rows = await self.leaderboard_engine.refresh_public_leaderboard(None, limit=limit)
+            return self._augment_public_rows(rows)
         snapshots = self.supabase.select("bot_leaderboard_snapshots", filters={"captured_at": latest["captured_at"]}, order="rank.asc", limit=limit)
         runtime_ids = [row["runtime_id"] for row in snapshots]
         runtimes = {row["id"]: row for row in self.supabase.select("bot_runtimes", filters={"id": ("in", runtime_ids)})} if runtime_ids else {}
@@ -45,7 +48,7 @@ class BotCopyEngine:
             if definition is None or definition["visibility"] != "public":
                 continue
             rows.append({"runtime_id": runtime["id"], "bot_definition_id": definition["id"], "bot_name": definition["name"], "strategy_type": definition["strategy_type"], "authoring_mode": definition["authoring_mode"], "rank": snapshot["rank"], "pnl_total": snapshot["pnl_total"], "pnl_unrealized": snapshot["pnl_unrealized"], "win_streak": snapshot["win_streak"], "drawdown": snapshot["drawdown"], "captured_at": snapshot["captured_at"]})
-        return rows
+        return self._augment_public_rows(rows)
 
     async def runtime_profile(self, db: Any, *, runtime_id: str) -> dict:
         del db
@@ -60,6 +63,13 @@ class BotCopyEngine:
             await self.leaderboard_engine.refresh_public_leaderboard(None, limit=100)
             latest_snapshot = self.supabase.maybe_one("bot_leaderboard_snapshots", filters={"runtime_id": runtime_id}, order="captured_at.desc")
         recent_events = self.supabase.select("bot_execution_events", filters={"runtime_id": runtime_id}, order="created_at.desc", limit=12)
+        latest_snapshot_row = latest_snapshot or {}
+        public_context = self.trust_service.build_public_runtime_context(
+            runtime=runtime,
+            definition=definition,
+            latest_snapshot=latest_snapshot_row if latest_snapshot else None,
+        )
+        creator = self.trust_service.get_creator_profile(creator_id=str(definition["user_id"]), include_bots=True)
         return {
             "runtime_id": runtime["id"],
             "bot_definition_id": definition["id"],
@@ -76,7 +86,15 @@ class BotCopyEngine:
             "win_streak": latest_snapshot["win_streak"] if latest_snapshot else 0,
             "drawdown": latest_snapshot["drawdown"] if latest_snapshot else 0.0,
             "recent_events": [{"id": event["id"], "event_type": event["event_type"], "decision_summary": event["decision_summary"], "status": event["status"], "created_at": event["created_at"]} for event in recent_events],
+            "trust": public_context["trust"],
+            "drift": public_context["drift"],
+            "passport": public_context["passport"],
+            "creator": creator,
         }
+
+    def creator_profile(self, db: Any, *, creator_id: str) -> dict[str, Any]:
+        del db
+        return self.trust_service.get_creator_profile(creator_id=creator_id, include_bots=True)
 
     async def preview_mirror(self, db: Any, *, runtime_id: str, follower_wallet_address: str, scale_bps: int) -> dict:
         del db
@@ -227,3 +245,39 @@ class BotCopyEngine:
         if captured_at.tzinfo is None:
             captured_at = captured_at.replace(tzinfo=UTC)
         return datetime.now(tz=UTC) - captured_at > timedelta(seconds=SNAPSHOT_TTL_SECONDS)
+
+    def _augment_public_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not rows:
+            return []
+        runtime_ids = [row["runtime_id"] for row in rows]
+        definition_ids = [row["bot_definition_id"] for row in rows]
+        runtimes = {row["id"]: row for row in self.supabase.select("bot_runtimes", filters={"id": ("in", runtime_ids)})} if runtime_ids else {}
+        definitions = {row["id"]: row for row in self.supabase.select("bot_definitions", filters={"id": ("in", definition_ids)})} if definition_ids else {}
+        creator_cache: dict[str, dict[str, Any]] = {}
+        enriched: list[dict[str, Any]] = []
+        for row in rows:
+            runtime = runtimes.get(row["runtime_id"])
+            definition = definitions.get(row["bot_definition_id"])
+            if runtime is None or definition is None:
+                continue
+            snapshot = {
+                "runtime_id": row["runtime_id"],
+                "rank": row["rank"],
+                "pnl_total": row["pnl_total"],
+                "pnl_unrealized": row["pnl_unrealized"],
+                "win_streak": row["win_streak"],
+                "drawdown": row["drawdown"],
+                "captured_at": row["captured_at"],
+            }
+            public_context = self.trust_service.build_public_runtime_context(
+                runtime=runtime,
+                definition=definition,
+                latest_snapshot=snapshot,
+            )
+            creator_id = str(definition["user_id"])
+            creator = creator_cache.get(creator_id)
+            if creator is None:
+                creator = self.trust_service.get_creator_profile(creator_id=creator_id, include_bots=False)
+                creator_cache[creator_id] = creator
+            enriched.append({**row, "trust": public_context["trust"], "drift": public_context["drift"], "passport": public_context["passport"], "creator": creator})
+        return enriched

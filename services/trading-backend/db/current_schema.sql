@@ -118,6 +118,20 @@ CREATE TABLE public.bot_leaderboard_snapshots (
   CONSTRAINT bot_leaderboard_snapshots_pkey PRIMARY KEY (id),
   CONSTRAINT bot_leaderboard_snapshots_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id)
 );
+CREATE TABLE public.bot_publish_snapshots (
+  id uuid NOT NULL,
+  bot_definition_id uuid NOT NULL,
+  strategy_version_id uuid NOT NULL,
+  runtime_id uuid,
+  visibility_snapshot character varying NOT NULL DEFAULT 'public'::character varying,
+  publish_state character varying NOT NULL DEFAULT 'published'::character varying,
+  summary_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT bot_publish_snapshots_pkey PRIMARY KEY (id),
+  CONSTRAINT bot_publish_snapshots_bot_definition_id_fkey FOREIGN KEY (bot_definition_id) REFERENCES public.bot_definitions(id),
+  CONSTRAINT bot_publish_snapshots_strategy_version_id_fkey FOREIGN KEY (strategy_version_id) REFERENCES public.bot_strategy_versions(id),
+  CONSTRAINT bot_publish_snapshots_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id)
+);
 CREATE TABLE public.bot_runtimes (
   id uuid NOT NULL,
   bot_definition_id uuid NOT NULL,
@@ -132,6 +146,26 @@ CREATE TABLE public.bot_runtimes (
   CONSTRAINT bot_runtimes_pkey PRIMARY KEY (id),
   CONSTRAINT bot_runtimes_bot_definition_id_fkey FOREIGN KEY (bot_definition_id) REFERENCES public.bot_definitions(id),
   CONSTRAINT bot_runtimes_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
+);
+CREATE TABLE public.bot_strategy_versions (
+  id uuid NOT NULL,
+  bot_definition_id uuid NOT NULL,
+  created_by_user_id uuid NOT NULL,
+  version_number integer NOT NULL DEFAULT 1,
+  change_kind character varying NOT NULL DEFAULT 'revision'::character varying,
+  visibility_snapshot character varying NOT NULL DEFAULT 'private'::character varying,
+  name_snapshot character varying NOT NULL,
+  description_snapshot text NOT NULL DEFAULT ''::text,
+  market_scope_snapshot character varying NOT NULL DEFAULT 'Pacifica perpetuals'::character varying,
+  strategy_type_snapshot character varying NOT NULL DEFAULT 'rules'::character varying,
+  authoring_mode_snapshot character varying NOT NULL DEFAULT 'visual'::character varying,
+  rules_version_snapshot integer NOT NULL DEFAULT 1,
+  rules_json_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+  is_public_release boolean NOT NULL DEFAULT false,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT bot_strategy_versions_pkey PRIMARY KEY (id),
+  CONSTRAINT bot_strategy_versions_bot_definition_id_fkey FOREIGN KEY (bot_definition_id) REFERENCES public.bot_definitions(id),
+  CONSTRAINT bot_strategy_versions_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id)
 );
 CREATE TABLE public.bot_trade_closures (
   id uuid NOT NULL,

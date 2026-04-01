@@ -4,13 +4,24 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from src.models import BotPublishSnapshotRecord, BotStrategyVersionRecord
 from src.services.rules_engine import RulesEngine
-from src.services.supabase_rest import SupabaseRestClient
+from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
 
 
 class BotBuilderService:
     VALID_AUTHORING_MODES = {"visual"}
     VALID_VISIBILITY = {"private", "public", "unlisted"}
+    STRATEGY_VERSION_FIELDS = (
+        "name",
+        "description",
+        "visibility",
+        "market_scope",
+        "strategy_type",
+        "authoring_mode",
+        "rules_version",
+        "rules_json",
+    )
     RUNTIME_DEPENDENT_TABLES = (
         "bot_execution_events",
         "bot_action_claims",
@@ -85,6 +96,7 @@ class BotBuilderService:
                 "updated_at": now,
             },
         )[0]
+        self._record_strategy_history(bot=row, created_by_user_id=user["id"], previous_bot=None)
         return self.serialize(row)
 
     def update_bot(
@@ -146,6 +158,7 @@ class BotBuilderService:
             },
             filters={"id": bot_id},
         )[0]
+        self._record_strategy_history(bot=row, created_by_user_id=str(bot["user_id"]), previous_bot=bot)
         return self.serialize(row)
 
     def delete_bot(self, db: Any, *, bot_id: str, wallet_address: str) -> None:
@@ -178,6 +191,116 @@ class BotBuilderService:
         if authoring_mode == "visual" and isinstance(rules_json, dict):
             issues.extend(self.rules_engine.validation_issues(rules_json=rules_json))
         return issues
+
+    def list_strategy_versions(self, *, bot_id: str, limit: int = 8) -> list[dict[str, Any]]:
+        try:
+            rows = self.supabase.select(
+                "bot_strategy_versions",
+                filters={"bot_definition_id": bot_id},
+                order="version_number.desc",
+                limit=limit,
+            )
+        except SupabaseRestError:
+            rows = []
+        if rows:
+            return [self.serialize_strategy_version(row) for row in rows]
+
+        bot = self.supabase.maybe_one("bot_definitions", filters={"id": bot_id})
+        if bot is None:
+            return []
+        synthesized = BotStrategyVersionRecord.from_bot(
+            bot,
+            created_by_user_id=str(bot.get("user_id") or ""),
+            version_number=max(1, int(bot.get("rules_version") or 1)),
+            change_kind="bootstrap",
+            created_at=str(bot.get("updated_at") or bot.get("created_at") or datetime.now(tz=UTC).isoformat()),
+        )
+        return [synthesized.to_summary()]
+
+    def list_publish_snapshots(self, *, bot_id: str, limit: int = 8) -> list[dict[str, Any]]:
+        try:
+            rows = self.supabase.select(
+                "bot_publish_snapshots",
+                filters={"bot_definition_id": bot_id},
+                order="created_at.desc",
+                limit=limit,
+            )
+        except SupabaseRestError:
+            rows = []
+        if rows:
+            return [self.serialize_publish_snapshot(row) for row in rows]
+
+        bot = self.supabase.maybe_one("bot_definitions", filters={"id": bot_id})
+        if bot is None or str(bot.get("visibility") or "private") == "private":
+            return []
+        synthesized = BotPublishSnapshotRecord.from_version(
+            bot=bot,
+            strategy_version_id="bootstrap",
+            created_at=str(bot.get("updated_at") or bot.get("created_at") or datetime.now(tz=UTC).isoformat()),
+        )
+        return [self.serialize_publish_snapshot(synthesized.to_row())]
+
+    def _record_strategy_history(
+        self,
+        *,
+        bot: dict[str, Any],
+        created_by_user_id: str,
+        previous_bot: dict[str, Any] | None,
+    ) -> None:
+        if previous_bot is not None and not self._strategy_history_changed(previous_bot=previous_bot, next_bot=bot):
+            return
+
+        try:
+            latest = self.supabase.maybe_one(
+                "bot_strategy_versions",
+                columns="version_number",
+                filters={"bot_definition_id": bot["id"]},
+                order="version_number.desc",
+            )
+        except SupabaseRestError:
+            return
+
+        version_number = int(latest["version_number"]) + 1 if latest is not None else 1
+        created_at = str(bot.get("updated_at") or bot.get("created_at") or datetime.now(tz=UTC).isoformat())
+        record = BotStrategyVersionRecord.from_bot(
+            bot,
+            created_by_user_id=created_by_user_id,
+            version_number=version_number,
+            change_kind=self._resolve_change_kind(previous_bot=previous_bot, next_bot=bot),
+            created_at=created_at,
+        )
+        try:
+            inserted = self.supabase.insert("bot_strategy_versions", record.to_row())[0]
+        except SupabaseRestError:
+            return
+        if not record.is_public_release:
+            return
+        publish_record = BotPublishSnapshotRecord.from_version(
+            bot=bot,
+            strategy_version_id=str(inserted["id"]),
+            created_at=created_at,
+        )
+        try:
+            self.supabase.insert("bot_publish_snapshots", publish_record.to_row())
+        except SupabaseRestError:
+            return
+
+    def _strategy_history_changed(self, *, previous_bot: dict[str, Any], next_bot: dict[str, Any]) -> bool:
+        return any(previous_bot.get(field) != next_bot.get(field) for field in self.STRATEGY_VERSION_FIELDS)
+
+    @staticmethod
+    def _resolve_change_kind(*, previous_bot: dict[str, Any] | None, next_bot: dict[str, Any]) -> str:
+        if previous_bot is None:
+            return "created"
+        if previous_bot.get("visibility") != next_bot.get("visibility"):
+            return "visibility"
+        if previous_bot.get("rules_json") != next_bot.get("rules_json"):
+            return "logic"
+        if previous_bot.get("market_scope") != next_bot.get("market_scope"):
+            return "market_scope"
+        if previous_bot.get("strategy_type") != next_bot.get("strategy_type"):
+            return "strategy_type"
+        return "revision"
 
     def _find_or_create_user(self, *, wallet_address: str) -> dict[str, Any]:
         user = self.supabase.maybe_one("users", filters={"wallet_address": wallet_address})
@@ -226,4 +349,32 @@ class BotBuilderService:
             "strategy_type": bot["strategy_type"],
             "authoring_mode": bot["authoring_mode"],
             "updated_at": bot["updated_at"],
+        }
+
+    @staticmethod
+    def serialize_strategy_version(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "bot_definition_id": row["bot_definition_id"],
+            "version_number": int(row.get("version_number") or 1),
+            "change_kind": row.get("change_kind") or "revision",
+            "visibility_snapshot": row.get("visibility_snapshot") or "private",
+            "name_snapshot": row.get("name_snapshot") or "",
+            "is_public_release": bool(row.get("is_public_release")),
+            "created_at": row["created_at"],
+            "label": f"v{int(row.get('version_number') or 1)}",
+        }
+
+    @staticmethod
+    def serialize_publish_snapshot(row: dict[str, Any]) -> dict[str, Any]:
+        summary = row.get("summary_json") if isinstance(row.get("summary_json"), dict) else {}
+        return {
+            "id": row["id"],
+            "bot_definition_id": row["bot_definition_id"],
+            "strategy_version_id": row.get("strategy_version_id"),
+            "runtime_id": row.get("runtime_id"),
+            "visibility_snapshot": row.get("visibility_snapshot") or "private",
+            "publish_state": row.get("publish_state") or "published",
+            "summary_json": summary,
+            "created_at": row["created_at"],
         }

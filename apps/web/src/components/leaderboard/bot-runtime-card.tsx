@@ -1,40 +1,32 @@
 import Link from "next/link";
 
-type BotLeaderboardRow = {
-  runtime_id: string;
-  bot_definition_id: string;
-  bot_name: string;
-  strategy_type: string;
-  authoring_mode: string;
-  rank: number;
-  pnl_total: number;
-  pnl_unrealized: number;
-  win_streak: number;
-  drawdown: number;
-};
+import { driftTone, type LeaderboardRow } from "@/lib/public-bots";
+
+import { TrustBadgeStrip } from "./trust-badge-strip";
 
 export function BotRuntimeCard({
   row,
   onMirror,
   onClone,
 }: {
-  row: BotLeaderboardRow;
+  row: LeaderboardRow;
   onMirror?: () => void;
   onClone?: () => void;
 }) {
   return (
-    <article className="grid gap-4 rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5 transition-colors duration-200 hover:border-[rgba(255,255,255,0.12)] hover:bg-neutral-900">
+    <article className="grid gap-5 rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5 transition-colors duration-200 hover:border-[rgba(255,255,255,0.12)]">
       <div className="flex items-start justify-between gap-4">
-        <div className="flex items-baseline gap-4">
-          <span className="font-mono text-3xl font-extrabold text-[#dce85d]">#{row.rank}</span>
-          <div className="grid gap-0.5">
-            <h3 className="font-mono text-xl font-bold uppercase tracking-tight text-neutral-50">
-              {row.bot_name}
-            </h3>
-            <p className="text-xs text-neutral-500">
-              Builder / {row.strategy_type}
-            </p>
+        <div className="grid gap-2">
+          <div className="flex items-baseline gap-4">
+            <span className="font-mono text-3xl font-extrabold text-[#dce85d]">#{row.rank}</span>
+            <div className="grid gap-0.5">
+              <h3 className="font-mono text-xl font-bold uppercase tracking-tight text-neutral-50">{row.bot_name}</h3>
+              <p className="text-xs text-neutral-500">
+                {row.creator.display_name} / {row.strategy_type}
+              </p>
+            </div>
           </div>
+          <TrustBadgeStrip trust={row.trust} />
         </div>
         <Link
           href={`/leaderboard/${row.runtime_id}`}
@@ -44,31 +36,21 @@ export function BotRuntimeCard({
         </Link>
       </div>
 
-      <div className="flex flex-wrap gap-8">
-        <div>
-          <div className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Total PnL</div>
-          <div className={`mt-1 font-mono text-2xl font-bold ${row.pnl_total >= 0 ? "text-[#74b97f]" : "text-[#dce85d]"}`}>
-            {row.pnl_total >= 0 ? "+" : ""}
-            {row.pnl_total.toFixed(2)}
-          </div>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Metric label="Total PnL" value={`${row.pnl_total >= 0 ? "+" : ""}${row.pnl_total.toFixed(2)}`} accent={row.pnl_total >= 0 ? "text-[#74b97f]" : "text-[#ff8a9b]"} />
+        <Metric label="Trust" value={`${row.trust.trust_score}`} accent="text-neutral-50" />
+        <Metric label="Risk grade" value={row.trust.risk_grade} accent="text-[#dce85d]" />
+        <Metric label="Drift" value={row.drift.status} accent={driftTone(row.drift.status)} />
+      </div>
+
+      <div className="grid gap-2 rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-4">
+        <div className="flex items-center justify-between gap-3 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
+          <span>Creator</span>
+          <Link href={`/leaderboard/creators/${row.creator.creator_id}`} className="text-neutral-300 transition hover:text-[#dce85d]">
+            {row.creator.reputation_label}
+          </Link>
         </div>
-        <div>
-          <div className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Live PnL</div>
-          <div className={`mt-1 font-mono text-2xl font-bold ${row.pnl_unrealized >= 0 ? "text-[#74b97f]" : "text-[#dce85d]"}`}>
-            {row.pnl_unrealized >= 0 ? "+" : ""}
-            {row.pnl_unrealized.toFixed(2)}
-          </div>
-        </div>
-        <div>
-          <div className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Streak</div>
-          <div className="mt-1 font-mono text-2xl font-bold text-neutral-50">{row.win_streak}</div>
-        </div>
-        <div>
-          <div className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Drawdown</div>
-          <div className="mt-1 font-mono text-2xl font-bold text-neutral-400">
-            {row.drawdown.toFixed(2)}%
-          </div>
-        </div>
+        <p className="text-sm leading-7 text-neutral-400">{row.creator.summary}</p>
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -88,5 +70,14 @@ export function BotRuntimeCard({
         </button>
       </div>
     </article>
+  );
+}
+
+function Metric({ label, value, accent }: { label: string; value: string; accent: string }) {
+  return (
+    <div className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-3">
+      <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">{label}</div>
+      <div className={`mt-1 font-mono text-xl font-bold ${accent}`}>{value}</div>
+    </div>
   );
 }
