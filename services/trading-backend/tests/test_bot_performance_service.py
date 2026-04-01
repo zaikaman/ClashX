@@ -138,6 +138,27 @@ class NoDeleteSupabaseRestClient(FakeSupabaseRestClient):
         del table, filters
 
 
+class RuntimeFkSupabaseRestClient(FakeSupabaseRestClient):
+    def insert(
+        self,
+        table: str,
+        payload: dict[str, Any] | list[dict[str, Any]],
+        *,
+        upsert: bool = False,
+        on_conflict: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if table in {"bot_trade_lots", "bot_trade_closures", "bot_trade_sync_state"}:
+            items = payload if isinstance(payload, list) else [payload]
+            runtime_ids = {str(item.get("runtime_id") or "") for item in items}
+            known_runtime_ids = {str(row.get("id") or "") for row in self.tables.get("bot_runtimes", [])}
+            if any(runtime_id and runtime_id not in known_runtime_ids for runtime_id in runtime_ids):
+                raise SupabaseRestError(
+                    'insert or update on table "bot_trade_sync_state" violates foreign key constraint "bot_trade_sync_state_runtime_id_fkey"',
+                    status_code=409,
+                )
+        return super().insert(table, payload, upsert=upsert, on_conflict=on_conflict)
+
+
 class FakePacificaClient:
     def __init__(self) -> None:
         self.order_history_requests: list[int] = []
@@ -844,6 +865,30 @@ def test_runtime_performance_persists_ledger_idempotently_when_same_rows_already
     assert performance["pnl_total"] == 10.0
     assert len(racey_supabase.tables["bot_trade_lots"]) == 1
     assert len(racey_supabase.tables["bot_trade_sync_state"]) == 1
+
+
+def test_runtime_performance_skips_ledger_persistence_when_runtime_is_deleted_midflight() -> None:
+    fake_supabase = RuntimeFkSupabaseRestClient(_tables())
+    fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = [
+        {
+            "symbol": "BTC",
+            "side": "bid",
+            "amount": 1.0,
+            "entry_price": 100.0,
+            "mark_price": 110.0,
+        }
+    ]
+    runtime_a = fake_supabase.maybe_one("bot_runtimes", filters={"id": "runtime-a"})
+    fake_supabase.delete("bot_runtimes", filters={"id": "runtime-a"})
+
+    service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=fake_supabase)
+    performance = asyncio.run(service.calculate_runtime_performance(runtime_a))
+
+    assert performance["pnl_total"] == 10.0
+    assert fake_supabase.tables.get("bot_trade_lots", []) == []
+    assert fake_supabase.tables.get("bot_trade_closures", []) == []
+    assert fake_supabase.tables.get("bot_trade_sync_state", []) == []
 
 
 def test_runtime_performance_reuses_persisted_ledger_without_reloading_order_history() -> None:

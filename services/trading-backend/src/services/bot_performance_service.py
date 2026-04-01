@@ -6,7 +6,7 @@ from typing import Any
 
 from src.services.bot_risk_service import BotRiskService
 from src.services.pacifica_client import PacificaClient, PacificaClientError, get_pacifica_client
-from src.services.supabase_rest import SupabaseRestClient
+from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
 
 
 class BotPerformanceService:
@@ -274,7 +274,7 @@ class BotPerformanceService:
         if not runtimes:
             return [runtime]
         if runtime_id and not any(str(item.get("id") or "").strip() == runtime_id for item in runtimes):
-            return [runtime, *runtimes]
+            return runtimes if not self._runtime_exists(runtime_id) else [runtime, *runtimes]
         return runtimes
 
     def _wallet_requires_joint_reconciliation(self, runtimes: list[dict[str, Any]]) -> bool:
@@ -667,35 +667,52 @@ class BotPerformanceService:
         lots: list[dict[str, Any]],
         closures: list[dict[str, Any]],
     ) -> None:
-        runtime_id = runtime["id"]
-        self._supabase.delete("bot_trade_closures", filters={"runtime_id": runtime_id})
-        self._supabase.delete("bot_trade_lots", filters={"runtime_id": runtime_id})
-        self._supabase.delete("bot_trade_sync_state", filters={"runtime_id": runtime_id})
-        if lots:
-            self._supabase.insert("bot_trade_lots", self._dedupe_rows(lots, key="id"), upsert=True, on_conflict="id")
-        if closures:
+        runtime_id = str(runtime.get("id") or "").strip()
+        if not runtime_id or not self._runtime_exists(runtime_id):
+            return
+        try:
+            self._supabase.delete("bot_trade_closures", filters={"runtime_id": runtime_id})
+            self._supabase.delete("bot_trade_lots", filters={"runtime_id": runtime_id})
+            self._supabase.delete("bot_trade_sync_state", filters={"runtime_id": runtime_id})
+            if lots:
+                self._supabase.insert("bot_trade_lots", self._dedupe_rows(lots, key="id"), upsert=True, on_conflict="id")
+            if closures:
+                self._supabase.insert(
+                    "bot_trade_closures",
+                    self._dedupe_rows(closures, key="id"),
+                    upsert=True,
+                    on_conflict="id",
+                )
+            last_execution_at = events[-1].get("created_at") if events else None
+            last_history_at = max((item.get("closed_at") for item in closures), default=None)
             self._supabase.insert(
-                "bot_trade_closures",
-                self._dedupe_rows(closures, key="id"),
+                "bot_trade_sync_state",
+                {
+                    "runtime_id": runtime_id,
+                    "synced_at": datetime.now(tz=UTC).isoformat(),
+                    "execution_events_count": len(events),
+                    "position_history_count": len(closures),
+                    "last_execution_at": last_execution_at,
+                    "last_history_at": last_history_at,
+                    "last_error": None,
+                },
                 upsert=True,
-                on_conflict="id",
+                on_conflict="runtime_id",
             )
-        last_execution_at = events[-1].get("created_at") if events else None
-        last_history_at = max((item.get("closed_at") for item in closures), default=None)
-        self._supabase.insert(
-            "bot_trade_sync_state",
-            {
-                "runtime_id": runtime_id,
-                "synced_at": datetime.now(tz=UTC).isoformat(),
-                "execution_events_count": len(events),
-                "position_history_count": len(closures),
-                "last_execution_at": last_execution_at,
-                "last_history_at": last_history_at,
-                "last_error": None,
-            },
-            upsert=True,
-            on_conflict="runtime_id",
-        )
+        except SupabaseRestError as exc:
+            if self._is_missing_runtime_fk_violation(exc):
+                return
+            raise
+
+    def _runtime_exists(self, runtime_id: str) -> bool:
+        return self._supabase.maybe_one("bot_runtimes", columns="id", filters={"id": runtime_id}) is not None
+
+    @staticmethod
+    def _is_missing_runtime_fk_violation(exc: SupabaseRestError) -> bool:
+        if exc.status_code != 409:
+            return False
+        detail = str(exc).lower()
+        return "bot_trade_" in detail and "runtime_id_fkey" in detail
 
     def _summarize_open_lots(self, lots: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
         states: dict[str, dict[str, float]] = {}
