@@ -39,7 +39,7 @@ class BotPublishSnapshotRecord:
             strategy_version_id=strategy_version_id,
             runtime_id=runtime_id,
             visibility_snapshot=visibility,
-            publish_state="published" if visibility == "public" else "preview",
+            publish_state="published" if visibility == "public" else "invite_only" if visibility == "invite_only" else "preview",
             summary_json={
                 "name": str(bot.get("name") or "").strip(),
                 "description": str(bot.get("description") or "").strip(),

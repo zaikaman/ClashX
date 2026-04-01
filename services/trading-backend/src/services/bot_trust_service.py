@@ -53,7 +53,7 @@ class BotTrustService:
 
         definitions = self.supabase.select(
             "bot_definitions",
-            filters={"user_id": creator_id, "visibility": ("in", ["public", "unlisted"])},
+            filters={"user_id": creator_id, "visibility": "public"},
             order="updated_at.desc",
         )
         definition_ids = [row["id"] for row in definitions]

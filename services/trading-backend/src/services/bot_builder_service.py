@@ -11,7 +11,7 @@ from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
 
 class BotBuilderService:
     VALID_AUTHORING_MODES = {"visual"}
-    VALID_VISIBILITY = {"private", "public", "unlisted"}
+    VALID_VISIBILITY = {"private", "public", "unlisted", "invite_only"}
     STRATEGY_VERSION_FIELDS = (
         "name",
         "description",
@@ -183,7 +183,7 @@ class BotBuilderService:
         if authoring_mode not in self.VALID_AUTHORING_MODES:
             issues.append("authoring_mode must be visual")
         if visibility not in self.VALID_VISIBILITY:
-            issues.append("visibility must be one of private|public|unlisted")
+            issues.append("visibility must be one of private|public|unlisted|invite_only")
         if rules_version < 1:
             issues.append("rules_version must be >= 1")
         if not isinstance(rules_json, dict):

@@ -4,11 +4,15 @@ import Link from "next/link";
 import { use, useEffect, useState } from "react";
 
 import { CreatorReputationCard } from "@/components/leaderboard/creator-reputation-card";
-import { fetchCreatorProfile, type CreatorProfile } from "@/lib/public-bots";
+import { FeaturedBotShelf } from "@/components/leaderboard/featured-bot-shelf";
+import {
+  fetchMarketplaceCreatorProfile,
+  type MarketplaceCreatorProfile,
+} from "@/lib/public-bots";
 
 export default function LeaderboardCreatorPage({ params: paramsPromise }: { params: Promise<{ creatorId: string }> }) {
   const params = use(paramsPromise);
-  const [profile, setProfile] = useState<CreatorProfile | null>(null);
+  const [profile, setProfile] = useState<MarketplaceCreatorProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -17,12 +21,11 @@ export default function LeaderboardCreatorPage({ params: paramsPromise }: { para
 
     async function loadCreator() {
       try {
-        setProfile(await fetchCreatorProfile(params.creatorId, controller.signal));
+        setProfile(await fetchMarketplaceCreatorProfile(params.creatorId, controller.signal));
       } catch (loadError) {
-        if (controller.signal.aborted) {
-          return;
+        if (!controller.signal.aborted) {
+          setError(loadError instanceof Error ? loadError.message : "Could not load creator profile");
         }
-        setError(loadError instanceof Error ? loadError.message : "Could not load creator profile");
       } finally {
         if (!controller.signal.aborted) {
           setLoading(false);
@@ -48,7 +51,7 @@ export default function LeaderboardCreatorPage({ params: paramsPromise }: { para
             href="/leaderboard"
             className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-neutral-50 hover:text-neutral-50"
           >
-            Back to leaderboard
+            Back to marketplace
           </Link>
           <span className="label text-[#dce85d]">Creator profile</span>
         </div>
@@ -59,7 +62,7 @@ export default function LeaderboardCreatorPage({ params: paramsPromise }: { para
               {profile?.display_name ?? "Loading creator"}
             </h1>
             <p className="max-w-3xl text-sm leading-7 text-neutral-400 md:text-base">
-              {profile?.summary ?? "Loading public reputation, audience signals, and strategy shelf."}
+              {profile?.headline ?? "Loading creator publishing profile and live catalogue."}
             </p>
 
             <div className="flex flex-wrap gap-2">
@@ -75,25 +78,38 @@ export default function LeaderboardCreatorPage({ params: paramsPromise }: { para
           </div>
 
           <div className="grid gap-3 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-5">
-            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Public footprint</span>
+            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Marketplace footprint</span>
             <span className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
-              {profile ? `${profile.public_bot_count} public bots` : "Loading"}
+              {profile ? `${profile.marketplace_reach_score} reach` : "Loading"}
             </span>
             <p className="text-sm leading-7 text-neutral-400">
-              {profile ? `${profile.active_mirror_count} active mirrors and ${profile.clone_count} clone events so far.` : "Loading creator footprint."}
+              {profile ? `${profile.follower_count} followers, ${profile.active_mirror_count} live mirrors, and ${profile.featured_bot_count} featured bots.` : "Loading creator footprint."}
             </p>
           </div>
         </div>
       </section>
 
       <section className="grid gap-4 md:grid-cols-4">
-          <HeroStat label="Reputation" value={profile ? `${profile.reputation_score}` : loading ? "..." : "--"} accent="text-[#dce85d]" />
-          <HeroStat label="Trust avg" value={profile ? `${profile.average_trust_score}` : "--"} accent="text-[#74b97f]" />
-          <HeroStat label="Active mirrors" value={profile ? `${profile.active_mirror_count}` : "--"} accent="text-neutral-50" />
-          <HeroStat label="Best rank" value={profile?.best_rank ? `#${profile.best_rank}` : loading ? "..." : "Unranked"} accent="text-neutral-50" />
+        <HeroStat label="Reach" value={profile ? `${profile.marketplace_reach_score}` : loading ? "..." : "--"} accent="text-[#dce85d]" />
+        <HeroStat label="Trust avg" value={profile ? `${profile.average_trust_score}` : "--"} accent="text-[#74b97f]" />
+        <HeroStat label="Followers" value={profile ? `${profile.follower_count}` : "--"} accent="text-neutral-50" />
+        <HeroStat label="Best rank" value={profile?.best_rank ? `#${profile.best_rank}` : loading ? "..." : "Unranked"} accent="text-neutral-50" />
       </section>
 
-      {profile ? <CreatorReputationCard creator={profile} showBots /> : (
+      {profile?.featured_bots.length ? (
+        <FeaturedBotShelf
+          shelf={{
+            collection_key: profile.slug || profile.creator_id,
+            title: profile.featured_collection_title,
+            subtitle: profile.bio || profile.summary,
+            bots: profile.featured_bots,
+          }}
+        />
+      ) : null}
+
+      {profile ? (
+        <CreatorReputationCard creator={profile} showBots />
+      ) : (
         <article className="rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-5 py-6 text-sm text-neutral-400">
           Loading creator strategies...
         </article>

@@ -55,7 +55,7 @@ class BotStrategyVersionRecord:
             authoring_mode_snapshot=str(bot.get("authoring_mode") or "").strip(),
             rules_version_snapshot=max(1, int(bot.get("rules_version") or 1)),
             rules_json_snapshot=bot.get("rules_json") if isinstance(bot.get("rules_json"), dict) else {},
-            is_public_release=visibility in {"public", "unlisted"},
+            is_public_release=visibility in {"public", "unlisted", "invite_only"},
             created_at=_resolve_created_at(created_at),
         )
 

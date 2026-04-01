@@ -1,14 +1,23 @@
 import Link from "next/link";
 
-import type { CreatorProfile, CreatorSummary } from "@/lib/public-bots";
+import type {
+  CreatorHighlight,
+  CreatorProfile,
+  CreatorSummary,
+  MarketplaceCreatorProfile,
+} from "@/lib/public-bots";
 
 type CreatorProps = {
-  creator: CreatorSummary | CreatorProfile;
+  creator: CreatorSummary | CreatorProfile | MarketplaceCreatorProfile | CreatorHighlight;
   showBots?: boolean;
 };
 
 export function CreatorReputationCard({ creator, showBots = false }: CreatorProps) {
   const bots = "bots" in creator ? creator.bots : [];
+  const followerCount = "follower_count" in creator ? creator.follower_count : 0;
+  const featuredBotCount = "featured_bot_count" in creator ? creator.featured_bot_count : 0;
+  const reachScore = "marketplace_reach_score" in creator ? creator.marketplace_reach_score : creator.reputation_score;
+  const headline = "headline" in creator ? creator.headline : creator.summary;
 
   return (
     <article className="grid gap-5 rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
@@ -17,7 +26,7 @@ export function CreatorReputationCard({ creator, showBots = false }: CreatorProp
           <div className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Creator reputation</div>
           <div>
             <h3 className="font-mono text-2xl font-bold uppercase tracking-[-0.03em] text-neutral-50">{creator.display_name}</h3>
-            <p className="mt-2 max-w-2xl text-sm leading-7 text-neutral-400">{creator.summary}</p>
+            <p className="mt-2 max-w-2xl text-sm leading-7 text-neutral-400">{headline}</p>
           </div>
         </div>
         <Link
@@ -29,10 +38,10 @@ export function CreatorReputationCard({ creator, showBots = false }: CreatorProp
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Metric label="Reputation" value={`${creator.reputation_score}`} accent="text-[#dce85d]" />
+        <Metric label="Reach" value={`${reachScore}`} accent="text-[#dce85d]" />
         <Metric label="Trust avg" value={`${creator.average_trust_score}`} accent="text-[#74b97f]" />
-        <Metric label="Live mirrors" value={`${creator.active_mirror_count}`} accent="text-neutral-50" />
-        <Metric label="Public bots" value={`${creator.public_bot_count}`} accent="text-neutral-50" />
+        <Metric label="Followers" value={`${followerCount || creator.active_mirror_count}`} accent="text-neutral-50" />
+        <Metric label="Published bots" value={`${featuredBotCount || creator.public_bot_count}`} accent="text-neutral-50" />
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -60,8 +69,12 @@ export function CreatorReputationCard({ creator, showBots = false }: CreatorProp
                   <div className="text-xs text-neutral-500">{bot.strategy_type}</div>
                 </div>
                 <div className="text-sm font-semibold text-neutral-50">{bot.rank ? `#${bot.rank}` : "Unranked"}</div>
-                <div className="text-sm font-semibold text-[#74b97f]">{bot.trust_score} trust</div>
-                <div className="text-sm text-neutral-400">{bot.drift_status}</div>
+                <div className="text-sm font-semibold text-[#74b97f]">
+                  {"trust" in bot ? `${bot.trust.trust_score} trust` : `${bot.trust_score} trust`}
+                </div>
+                <div className="text-sm text-neutral-400">
+                  {"drift" in bot ? bot.drift.status : bot.drift_status}
+                </div>
               </Link>
             ))
           ) : (

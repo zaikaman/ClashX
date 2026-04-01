@@ -197,12 +197,12 @@ description: "Task list for implementing and upgrading ClashX Bot Builder Platfo
 
 **Purpose**: Turn ClashX into a creator-driven bot marketplace with stronger publishing and discovery loops.
 
-- [ ] T076 [P] Define creator profile, publishing, featured bot, and invite-access models in `services/trading-backend/src/models/`
-- [ ] T077 Implement creator marketplace service for discoverability, featured collections, copy stats, and publishing controls in `services/trading-backend/src/services/creator_marketplace_service.py`
-- [ ] T078 Implement creator, featured, and publishing APIs in `services/trading-backend/src/api/`
-- [ ] T079 Build creator pages, featured shelves, and public discovery modules in `apps/web/src/app/(app)/leaderboard/page.tsx`, new creator routes, and `apps/web/src/components/leaderboard/`
-- [ ] T080 Build publishing controls for public, private, unlisted, and invite-only bot access in `apps/web/src/components/builder/` and `apps/web/src/components/bots/`
-- [ ] T081 Build creator-facing stats surfaces for followers, copies, and marketplace reach in `apps/web/src/components/leaderboard/` and related creator pages
+- [X] T076 [P] Define creator profile, publishing, featured bot, and invite-access models in `services/trading-backend/src/models/`
+- [X] T077 Implement creator marketplace service for discoverability, featured collections, copy stats, and publishing controls in `services/trading-backend/src/services/creator_marketplace_service.py`
+- [X] T078 Implement creator, featured, and publishing APIs in `services/trading-backend/src/api/`
+- [X] T079 Build creator pages, featured shelves, and public discovery modules in `apps/web/src/app/(app)/leaderboard/page.tsx`, new creator routes, and `apps/web/src/components/leaderboard/`
+- [X] T080 Build publishing controls for public, private, unlisted, and invite-only bot access in `apps/web/src/components/builder/` and `apps/web/src/components/bots/`
+- [X] T081 Build creator-facing stats surfaces for followers, copies, and marketplace reach in `apps/web/src/components/leaderboard/` and related creator pages
 
 **Checkpoint**: ClashX supports a real creator and discovery loop around high-quality public bots.
 

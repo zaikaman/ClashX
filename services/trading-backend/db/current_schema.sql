@@ -108,6 +108,19 @@ CREATE TABLE public.bot_execution_events (
   CONSTRAINT bot_execution_events_pkey PRIMARY KEY (id),
   CONSTRAINT bot_execution_events_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id)
 );
+CREATE TABLE public.bot_invite_access (
+  id uuid NOT NULL,
+  bot_definition_id uuid NOT NULL,
+  invited_wallet_address character varying NOT NULL,
+  invited_by_user_id uuid NOT NULL,
+  status character varying NOT NULL DEFAULT 'active'::character varying,
+  note text NOT NULL DEFAULT ''::text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT bot_invite_access_pkey PRIMARY KEY (id),
+  CONSTRAINT bot_invite_access_bot_definition_id_fkey FOREIGN KEY (bot_definition_id) REFERENCES public.bot_definitions(id),
+  CONSTRAINT bot_invite_access_invited_by_user_id_fkey FOREIGN KEY (invited_by_user_id) REFERENCES public.users(id)
+);
 CREATE TABLE public.bot_leaderboard_snapshots (
   id uuid NOT NULL,
   runtime_id uuid NOT NULL,
@@ -133,6 +146,25 @@ CREATE TABLE public.bot_publish_snapshots (
   CONSTRAINT bot_publish_snapshots_bot_definition_id_fkey FOREIGN KEY (bot_definition_id) REFERENCES public.bot_definitions(id),
   CONSTRAINT bot_publish_snapshots_strategy_version_id_fkey FOREIGN KEY (strategy_version_id) REFERENCES public.bot_strategy_versions(id),
   CONSTRAINT bot_publish_snapshots_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id)
+);
+CREATE TABLE public.bot_publishing_settings (
+  id uuid NOT NULL,
+  bot_definition_id uuid NOT NULL UNIQUE,
+  user_id uuid NOT NULL,
+  visibility character varying NOT NULL DEFAULT 'private'::character varying,
+  access_mode character varying NOT NULL DEFAULT 'private'::character varying,
+  publish_state character varying NOT NULL DEFAULT 'draft'::character varying,
+  listed_at timestamp with time zone,
+  hero_headline text NOT NULL DEFAULT ''::text,
+  access_note text NOT NULL DEFAULT ''::text,
+  featured_collection_key character varying,
+  featured_collection_title character varying,
+  featured_rank integer NOT NULL DEFAULT 0,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT bot_publishing_settings_pkey PRIMARY KEY (id),
+  CONSTRAINT bot_publishing_settings_bot_definition_id_fkey FOREIGN KEY (bot_definition_id) REFERENCES public.bot_definitions(id),
+  CONSTRAINT bot_publishing_settings_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
 CREATE TABLE public.bot_runtimes (
   id uuid NOT NULL,
@@ -246,6 +278,35 @@ CREATE TABLE public.copy_relationships (
   CONSTRAINT copy_relationships_pkey PRIMARY KEY (id),
   CONSTRAINT copy_relationships_follower_user_id_fkey FOREIGN KEY (follower_user_id) REFERENCES public.users(id),
   CONSTRAINT copy_relationships_source_user_id_fkey FOREIGN KEY (source_user_id) REFERENCES public.users(id)
+);
+CREATE TABLE public.creator_marketplace_profiles (
+  id uuid NOT NULL,
+  user_id uuid NOT NULL UNIQUE,
+  display_name character varying NOT NULL,
+  slug character varying NOT NULL UNIQUE,
+  headline text NOT NULL DEFAULT ''::text,
+  bio text NOT NULL DEFAULT ''::text,
+  social_links_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  featured_collection_title character varying NOT NULL DEFAULT 'Featured strategies'::character varying,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT creator_marketplace_profiles_pkey PRIMARY KEY (id),
+  CONSTRAINT creator_marketplace_profiles_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
+);
+CREATE TABLE public.featured_bots (
+  id uuid NOT NULL,
+  creator_profile_id uuid NOT NULL,
+  bot_definition_id uuid NOT NULL,
+  collection_key character varying NOT NULL DEFAULT 'featured'::character varying,
+  collection_title character varying NOT NULL DEFAULT 'Featured strategies'::character varying,
+  shelf_rank integer NOT NULL DEFAULT 0,
+  featured_reason text NOT NULL DEFAULT ''::text,
+  active boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT featured_bots_pkey PRIMARY KEY (id),
+  CONSTRAINT featured_bots_creator_profile_id_fkey FOREIGN KEY (creator_profile_id) REFERENCES public.creator_marketplace_profiles(id),
+  CONSTRAINT featured_bots_bot_definition_id_fkey FOREIGN KEY (bot_definition_id) REFERENCES public.bot_definitions(id)
 );
 CREATE TABLE public.leaderboard_snapshots (
   id uuid NOT NULL,

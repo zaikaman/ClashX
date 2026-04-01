@@ -6,8 +6,17 @@ import { useEffect, useMemo, useState } from "react";
 import { BotCloneModal } from "@/components/copy/bot-clone-modal";
 import { BotMirrorModal } from "@/components/copy/bot-mirror-modal";
 import { BotRuntimeCard } from "@/components/leaderboard/bot-runtime-card";
+import { CreatorSpotlightCard } from "@/components/leaderboard/creator-spotlight-card";
+import { FeaturedBotShelf } from "@/components/leaderboard/featured-bot-shelf";
 import { TrustBadgeStrip } from "@/components/leaderboard/trust-badge-strip";
-import { fetchLeaderboard, type LeaderboardRow } from "@/lib/public-bots";
+import {
+  fetchCreatorHighlights,
+  fetchFeaturedShelves,
+  fetchMarketplaceDiscover,
+  type CreatorHighlight,
+  type FeaturedShelf,
+  type MarketplaceDiscoveryRow,
+} from "@/lib/public-bots";
 
 const SEASON_ZERO_YEAR = 2026;
 
@@ -27,23 +36,35 @@ function getSeasonContext(now = new Date()) {
 }
 
 export default function BotLeaderboardPage() {
-  const [rows, setRows] = useState<LeaderboardRow[]>([]);
+  const [rows, setRows] = useState<MarketplaceDiscoveryRow[]>([]);
+  const [featuredShelves, setFeaturedShelves] = useState<FeaturedShelf[]>([]);
+  const [creators, setCreators] = useState<CreatorHighlight[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selectedForMirror, setSelectedForMirror] = useState<LeaderboardRow | null>(null);
-  const [selectedForClone, setSelectedForClone] = useState<LeaderboardRow | null>(null);
+  const [selectedForMirror, setSelectedForMirror] = useState<MarketplaceDiscoveryRow | null>(null);
+  const [selectedForClone, setSelectedForClone] = useState<MarketplaceDiscoveryRow | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
 
-    async function loadLeaderboard() {
+    async function loadMarketplace() {
       try {
-        setRows(await fetchLeaderboard(50, controller.signal));
-      } catch (loadError) {
+        const [discoverRows, shelves, creatorRows] = await Promise.all([
+          fetchMarketplaceDiscover(36, { signal: controller.signal }),
+          fetchFeaturedShelves(4, controller.signal),
+          fetchCreatorHighlights(6, controller.signal),
+        ]);
         if (controller.signal.aborted) {
           return;
         }
-        setError(loadError instanceof Error ? loadError.message : "Could not load leaderboard");
+        setRows(discoverRows);
+        setFeaturedShelves(shelves);
+        setCreators(creatorRows);
+        setError(null);
+      } catch (loadError) {
+        if (!controller.signal.aborted) {
+          setError(loadError instanceof Error ? loadError.message : "Could not load marketplace");
+        }
       } finally {
         if (!controller.signal.aborted) {
           setLoading(false);
@@ -51,14 +72,21 @@ export default function BotLeaderboardPage() {
       }
     }
 
-    void loadLeaderboard();
+    void loadMarketplace();
     return () => controller.abort();
   }, []);
 
   const season = useMemo(() => getSeasonContext(), []);
   const topThree = useMemo(() => rows.slice(0, 3), [rows]);
-  const mostTrusted = useMemo(() => [...rows].sort((a, b) => b.trust.trust_score - a.trust.trust_score)[0] ?? null, [rows]);
-  const lowestDrift = useMemo(() => [...rows].sort((a, b) => b.drift.score - a.drift.score)[0] ?? null, [rows]);
+  const liveCopies = useMemo(
+    () => rows.reduce((sum, row) => sum + row.copy_stats.active_mirror_count, 0),
+    [rows],
+  );
+  const mostFollowedCreator = useMemo(
+    () => [...creators].sort((left, right) => right.follower_count - left.follower_count)[0] ?? null,
+    [creators],
+  );
+  const strongestShelf = featuredShelves[0] ?? null;
 
   return (
     <main className="shell grid gap-8 pb-10 md:pb-12">
@@ -69,14 +97,14 @@ export default function BotLeaderboardPage() {
       ) : null}
 
       <section className="grid gap-5 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[radial-gradient(circle_at_top_left,rgba(220,232,93,0.14),transparent_32%),linear-gradient(135deg,#16181a,#0d0f10)] p-6 md:p-8">
-        <span className="label text-[#dce85d]">Leaderboard</span>
+        <span className="label text-[#dce85d]">Creator marketplace</span>
         <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr] lg:items-end">
           <div className="grid gap-3">
             <h1 className="font-mono text-[clamp(2.2rem,5vw,4.25rem)] font-extrabold uppercase leading-[0.92] tracking-[-0.05em] text-neutral-50">
-              Compare live strategies with trust, drift, and release history.
+              Discover creator shelves, trust signals, and copy-ready live bots.
             </h1>
             <p className="max-w-3xl text-sm leading-7 text-neutral-400 md:text-base">
-              Public bots are ranked here with live runtime health, replay alignment, creator reputation, and a version trail you can inspect before you copy anything.
+              The board now blends live rank, creator reach, featured collections, and publishing access so you can find the right strategy faster.
             </p>
           </div>
 
@@ -106,25 +134,44 @@ export default function BotLeaderboardPage() {
       </section>
 
       <section className="grid gap-4 md:grid-cols-4">
-        <HeroMetric label="Ranked bots" value={loading ? "..." : `${rows.length}`} copy="Public active runtimes on the board." />
-        <HeroMetric label="Last snapshot" value={rows[0]?.captured_at ? new Date(rows[0].captured_at).toLocaleDateString() : "Updating"} copy="Scores refresh automatically." />
-        <HeroMetric label="Most trusted" value={mostTrusted ? `${mostTrusted.trust.trust_score}` : "--"} copy={mostTrusted?.bot_name ?? "Scanning live trust signals."} />
-        <HeroMetric label="Closest to replay" value={lowestDrift ? `${lowestDrift.drift.score}` : "--"} copy={lowestDrift?.bot_name ?? "Comparing replay drift."} />
+        <HeroMetric label="Published bots" value={loading ? "..." : `${rows.length}`} copy="Live public strategies on the board." />
+        <HeroMetric label="Live copies" value={loading ? "..." : `${liveCopies}`} copy="Active mirror relationships right now." />
+        <HeroMetric
+          label="Top shelf"
+          value={strongestShelf ? `${strongestShelf.bots.length}` : "--"}
+          copy={strongestShelf?.title ?? "Loading featured collections."}
+        />
+        <HeroMetric
+          label="Most followed"
+          value={mostFollowedCreator ? `${mostFollowedCreator.follower_count}` : "--"}
+          copy={mostFollowedCreator?.display_name ?? "Scanning creator reach."}
+        />
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[0.82fr_1.18fr]">
+      {featuredShelves.length > 0 ? (
+        <section className="grid gap-5">
+          {featuredShelves.map((shelf) => (
+            <FeaturedBotShelf
+              key={shelf.collection_key}
+              shelf={shelf}
+              onMirror={(runtimeId) => {
+                const row = rows.find((item) => item.runtime_id === runtimeId) ?? null;
+                setSelectedForMirror(row);
+              }}
+              onClone={(runtimeId) => {
+                const row = rows.find((item) => item.runtime_id === runtimeId) ?? null;
+                setSelectedForClone(row);
+              }}
+            />
+          ))}
+        </section>
+      ) : null}
+
+      <section className="grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
         <div className="grid gap-4">
-          <div className="flex items-center justify-between gap-3">
-            <div className="grid gap-1">
-              <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Front row</span>
-              <span className="text-sm text-neutral-400">Start with the highest-signal public strategies.</span>
-            </div>
-            <Link
-              href="/copy"
-              className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#74b97f] hover:text-[#74b97f]"
-            >
-              Manage copied bots
-            </Link>
+          <div className="grid gap-1">
+            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Front row</span>
+            <span className="text-sm text-neutral-400">Start with the public strategies carrying the strongest live signal.</span>
           </div>
 
           {topThree.length > 0 ? (
@@ -138,87 +185,110 @@ export default function BotLeaderboardPage() {
             ))
           ) : (
             <article className="rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-5 py-6 text-sm leading-7 text-neutral-400">
-              {loading ? "Loading public strategy passports..." : "No active public bots are ranked right now."}
+              {loading ? "Loading public marketplace..." : "No public bots are available right now."}
             </article>
           )}
         </div>
 
-        <section className="grid gap-3 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4 md:p-5">
-          <div className="flex items-center justify-between gap-3 px-1">
+        <div className="grid gap-4">
+          <div className="flex items-center justify-between gap-3">
             <div className="grid gap-1">
-              <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Full board</span>
-              <span className="text-sm text-neutral-400">Scan trust, drift, and creator strength before you open a profile.</span>
+              <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Creator radar</span>
+              <span className="text-sm text-neutral-400">Follow the creators building sustained trust and audience pull.</span>
             </div>
           </div>
 
-          <div className="grid grid-cols-[minmax(0,0.1fr)_minmax(0,1fr)_minmax(0,0.38fr)_minmax(0,0.38fr)_minmax(0,0.34fr)] gap-3 border-b border-[rgba(255,255,255,0.06)] px-4 pb-3">
-            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Rank</span>
-            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Strategy</span>
-            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Trust</span>
-            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Drift</span>
-            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500 text-right">Actions</span>
-          </div>
-
-          {rows.length > 0 ? (
-            rows.map((row, index) => (
-              <article
-                key={row.runtime_id}
-                className="stagger-in grid grid-cols-[minmax(0,0.1fr)_minmax(0,1fr)_minmax(0,0.38fr)_minmax(0,0.38fr)_minmax(0,0.34fr)] items-center gap-3 rounded-[1.5rem] border border-transparent bg-[#0d0f10] px-4 py-3.5 transition hover:border-[#dce85d]/15 hover:bg-[#121416]"
-                style={{ animationDelay: `${index * 24}ms` }}
-              >
-                <span className="font-mono text-lg font-extrabold text-[#dce85d]">{row.rank}</span>
-
-                <div className="grid gap-2">
-                  <div className="grid gap-0.5">
-                    <Link
-                      href={`/leaderboard/${row.runtime_id}`}
-                      className="font-mono text-base font-bold uppercase tracking-tight text-neutral-50 transition hover:text-[#dce85d]"
-                    >
-                      {row.bot_name}
-                    </Link>
-                    <span className="text-xs text-neutral-500">
-                      {row.creator.display_name} / {row.strategy_type}
-                    </span>
-                  </div>
-                  <TrustBadgeStrip trust={row.trust} />
-                </div>
-
-                <div className="grid gap-0.5">
-                  <span className="font-mono text-xl font-bold text-neutral-50">{row.trust.trust_score}</span>
-                  <span className="text-xs text-neutral-500">
-                    {row.trust.health} / risk {row.trust.risk_grade}
-                  </span>
-                </div>
-
-                <div className="grid gap-0.5">
-                  <span className="font-mono text-xl font-bold text-neutral-50">{row.drift.score}</span>
-                  <span className="text-xs text-neutral-500">{row.drift.status}</span>
-                </div>
-
-                <div className="flex items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedForMirror(row)}
-                    className="rounded-full border border-[rgba(255,255,255,0.12)] px-3 py-1 text-[0.56rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#dce85d] hover:text-[#dce85d]"
-                  >
-                    Follow
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedForClone(row)}
-                    className="rounded-full border border-[rgba(255,255,255,0.12)] px-3 py-1 text-[0.56rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#74b97f] hover:text-[#74b97f]"
-                  >
-                    Clone
-                  </button>
-                </div>
-              </article>
-            ))
+          {creators.length > 0 ? (
+            creators.map((creator) => <CreatorSpotlightCard key={creator.creator_id} creator={creator} />)
           ) : (
-            <article className="rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-5 py-6 text-sm leading-7 text-neutral-400">
-              {loading ? "Loading leaderboard..." : "No active public bots are available."}
+            <article className="rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-5 py-6 text-sm leading-7 text-neutral-400">
+              {loading ? "Loading creator spotlights..." : "No creator spotlights are ready yet."}
             </article>
           )}
-        </section>
+        </div>
+      </section>
+
+      <section className="grid gap-3 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4 md:p-5">
+        <div className="flex items-center justify-between gap-3 px-1">
+          <div className="grid gap-1">
+            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Full board</span>
+            <span className="text-sm text-neutral-400">Scan trust, creator reach, and copy demand before opening a profile.</span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-[minmax(0,0.1fr)_minmax(0,1fr)_minmax(0,0.28fr)_minmax(0,0.28fr)_minmax(0,0.28fr)_minmax(0,0.26fr)] gap-3 border-b border-[rgba(255,255,255,0.06)] px-4 pb-3">
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Rank</span>
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Strategy</span>
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Trust</span>
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Copies</span>
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Creator</span>
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500 text-right">Actions</span>
+        </div>
+
+        {rows.length > 0 ? (
+          rows.map((row, index) => (
+            <article
+              key={row.runtime_id}
+              className="stagger-in grid grid-cols-[minmax(0,0.1fr)_minmax(0,1fr)_minmax(0,0.28fr)_minmax(0,0.28fr)_minmax(0,0.28fr)_minmax(0,0.26fr)] items-center gap-3 rounded-[1.5rem] border border-transparent bg-[#0d0f10] px-4 py-3.5 transition hover:border-[#dce85d]/15 hover:bg-[#121416]"
+              style={{ animationDelay: `${index * 24}ms` }}
+            >
+              <span className="font-mono text-lg font-extrabold text-[#dce85d]">{row.rank}</span>
+
+              <div className="grid gap-2">
+                <div className="grid gap-0.5">
+                  <Link
+                    href={`/leaderboard/${row.runtime_id}`}
+                    className="font-mono text-base font-bold uppercase tracking-tight text-neutral-50 transition hover:text-[#dce85d]"
+                  >
+                    {row.bot_name}
+                  </Link>
+                  <span className="text-xs text-neutral-500">
+                    {row.creator.display_name} / {row.strategy_type} / {row.publishing.visibility}
+                  </span>
+                </div>
+                <TrustBadgeStrip trust={row.trust} />
+              </div>
+
+              <div className="grid gap-0.5">
+                <span className="font-mono text-xl font-bold text-neutral-50">{row.trust.trust_score}</span>
+                <span className="text-xs text-neutral-500">
+                  {row.trust.health} / risk {row.trust.risk_grade}
+                </span>
+              </div>
+
+              <div className="grid gap-0.5">
+                <span className="font-mono text-xl font-bold text-neutral-50">{row.copy_stats.active_mirror_count}</span>
+                <span className="text-xs text-neutral-500">{row.copy_stats.clone_count} clones</span>
+              </div>
+
+              <div className="grid gap-0.5">
+                <span className="font-mono text-xl font-bold text-neutral-50">{row.creator.marketplace_reach_score}</span>
+                <span className="text-xs text-neutral-500">{row.creator.reputation_label}</span>
+              </div>
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedForMirror(row)}
+                  className="rounded-full border border-[rgba(255,255,255,0.12)] px-3 py-1 text-[0.56rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#dce85d] hover:text-[#dce85d]"
+                >
+                  Follow
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedForClone(row)}
+                  className="rounded-full border border-[rgba(255,255,255,0.12)] px-3 py-1 text-[0.56rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#74b97f] hover:text-[#74b97f]"
+                >
+                  Clone
+                </button>
+              </div>
+            </article>
+          ))
+        ) : (
+          <article className="rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-5 py-6 text-sm leading-7 text-neutral-400">
+            {loading ? "Loading board..." : "No active public bots are available."}
+          </article>
+        )}
       </section>
 
       <BotMirrorModal

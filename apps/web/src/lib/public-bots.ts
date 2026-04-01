@@ -105,6 +105,85 @@ export type CreatorProfile = CreatorSummary & {
   bots: CreatorBotSummary[];
 };
 
+export type MarketplaceCopyStats = {
+  mirror_count: number;
+  active_mirror_count: number;
+  clone_count: number;
+};
+
+export type MarketplacePublishingSummary = {
+  visibility: string;
+  access_mode: string;
+  publish_state: string;
+  hero_headline: string;
+  access_note: string;
+  featured_collection_title: string | null;
+  featured_rank: number;
+  is_featured: boolean;
+  invite_count: number;
+};
+
+export type MarketplaceCreatorSummary = CreatorSummary & {
+  headline: string;
+  bio: string;
+  slug: string;
+  featured_collection_title: string;
+  follower_count: number;
+  featured_bot_count: number;
+  marketplace_reach_score: number;
+};
+
+export type MarketplaceDiscoveryRow = Omit<LeaderboardRow, "creator"> & {
+  creator: MarketplaceCreatorSummary;
+  copy_stats: MarketplaceCopyStats;
+  publishing: MarketplacePublishingSummary;
+};
+
+export type FeaturedShelf = {
+  collection_key: string;
+  title: string;
+  subtitle: string;
+  bots: MarketplaceDiscoveryRow[];
+};
+
+export type CreatorHighlight = MarketplaceCreatorSummary & {
+  spotlight_bot: {
+    runtime_id: string;
+    bot_definition_id: string;
+    bot_name: string;
+    rank: number;
+    trust_score: number;
+    copy_stats: MarketplaceCopyStats;
+  };
+};
+
+export type MarketplaceCreatorProfile = MarketplaceCreatorSummary & {
+  social_links_json: Record<string, unknown>;
+  bots: MarketplaceDiscoveryRow[];
+  featured_bots: MarketplaceDiscoveryRow[];
+};
+
+export type PublishingSettings = {
+  bot_definition_id: string;
+  visibility: string;
+  access_mode: string;
+  publish_state: string;
+  hero_headline: string;
+  access_note: string;
+  featured_collection_title: string | null;
+  featured_rank: number;
+  is_featured: boolean;
+  invite_wallet_addresses: string[];
+  invite_count: number;
+  creator_profile: {
+    display_name: string;
+    headline: string;
+    bio: string;
+    slug: string;
+    featured_collection_title: string;
+  };
+};
+
 export type LeaderboardRow = {
   runtime_id: string;
   bot_definition_id: string;
@@ -174,6 +253,94 @@ export function fetchRuntimeProfile(runtimeId: string, signal?: AbortSignal) {
 
 export function fetchCreatorProfile(creatorId: string, signal?: AbortSignal) {
   return fetchJson<CreatorProfile>(`/api/bot-copy/creators/${creatorId}`, signal);
+}
+
+export function fetchMarketplaceDiscover(
+  limit = 24,
+  options?: { strategyType?: string; creatorId?: string; signal?: AbortSignal },
+) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (options?.strategyType) {
+    params.set("strategy_type", options.strategyType);
+  }
+  if (options?.creatorId) {
+    params.set("creator_id", options.creatorId);
+  }
+  return fetchJson<MarketplaceDiscoveryRow[]>(`/api/marketplace/discover?${params.toString()}`, options?.signal);
+}
+
+export function fetchFeaturedShelves(limit = 4, signal?: AbortSignal) {
+  return fetchJson<FeaturedShelf[]>(`/api/marketplace/featured?limit=${limit}`, signal);
+}
+
+export function fetchCreatorHighlights(limit = 6, signal?: AbortSignal) {
+  return fetchJson<CreatorHighlight[]>(`/api/marketplace/creators?limit=${limit}`, signal);
+}
+
+export function fetchMarketplaceCreatorProfile(creatorId: string, signal?: AbortSignal) {
+  return fetchJson<MarketplaceCreatorProfile>(`/api/marketplace/creators/${creatorId}`, signal);
+}
+
+export async function fetchPublishingSettings(
+  botId: string,
+  walletAddress: string,
+  headers: HeadersInit,
+  signal?: AbortSignal,
+) {
+  const response = await fetch(
+    `${API_BASE_URL}/api/marketplace/publishing/${botId}?wallet_address=${encodeURIComponent(walletAddress)}`,
+    {
+      cache: "no-store",
+      headers,
+      signal,
+    },
+  );
+  const payload = (await response.json()) as unknown;
+  if (!response.ok) {
+    const detail =
+      typeof payload === "object" && payload !== null && "detail" in payload && typeof payload.detail === "string"
+        ? payload.detail
+        : undefined;
+    throw new Error(detail ?? "Request failed");
+  }
+  return payload as PublishingSettings;
+}
+
+export async function updatePublishingSettings(
+  botId: string,
+  headers: HeadersInit,
+  payload: {
+    wallet_address: string;
+    visibility: string;
+    hero_headline?: string;
+    access_note?: string;
+    is_featured: boolean;
+    featured_collection_title?: string;
+    featured_rank: number;
+    invite_wallet_addresses: string[];
+    creator_display_name?: string;
+    creator_headline?: string;
+    creator_bio?: string;
+  },
+) {
+  const response = await fetch(`${API_BASE_URL}/api/marketplace/publishing/${botId}`, {
+    method: "PATCH",
+    cache: "no-store",
+    headers: {
+      "Content-Type": "application/json",
+      ...Object.fromEntries(new Headers(headers).entries()),
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = (await response.json()) as unknown;
+  if (!response.ok) {
+    const detail =
+      typeof data === "object" && data !== null && "detail" in data && typeof data.detail === "string"
+        ? data.detail
+        : undefined;
+    throw new Error(detail ?? "Request failed");
+  }
+  return data as PublishingSettings;
 }
 
 export function toneToClasses(tone: string) {

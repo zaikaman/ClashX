@@ -19,6 +19,7 @@ import { Box, Sparkles, Grid3x3, Activity, Play, Search, ChevronDown, ChevronRig
 import { clsx } from "clsx";
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 
+import { BotPublishingPanel } from "@/components/bots/bot-publishing-panel";
 import { BuilderFlowNodeCard } from "@/components/builder/builder-flow-node";
 import {
   ACTION_OPTIONS,
@@ -90,7 +91,7 @@ type BuilderBotDefinition = {
   name: string;
   description: string;
   wallet_address: string;
-  visibility: "private" | "public" | "unlisted";
+  visibility: "private" | "public" | "unlisted" | "invite_only";
   authoring_mode: string;
   strategy_type: string;
   market_scope: string;
@@ -122,7 +123,7 @@ type PortableBuilderDraft = {
   draft: {
     name: string;
     description: string;
-    visibility: "private" | "public" | "unlisted";
+    visibility: "private" | "public" | "unlisted" | "invite_only";
     selected_market_symbols: string[];
     active_template_id?: string;
     builder_mode?: BuilderChatMode;
@@ -598,7 +599,7 @@ export function BuilderGraphStudio({
   const [walletAddress, setWalletAddress] = useState("");
   const [name, setName] = useState(initialTemplate.name);
   const [description, setDescription] = useState(initialTemplate.description);
-  const [visibility, setVisibility] = useState<"private" | "public" | "unlisted">("private");
+  const [visibility, setVisibility] = useState<"private" | "public" | "unlisted" | "invite_only">("private");
   const [selectedMarketSymbols, setSelectedMarketSymbols] = useState<string[]>(
     parseMarketScopeSelection(initialTemplate.marketScope).length
       ? parseMarketScopeSelection(initialTemplate.marketScope)
@@ -1319,7 +1320,12 @@ export function BuilderGraphStudio({
     }
 
     const visibilityValue = draft.visibility;
-    if (visibilityValue !== "private" && visibilityValue !== "public" && visibilityValue !== "unlisted") {
+    if (
+      visibilityValue !== "private" &&
+      visibilityValue !== "public" &&
+      visibilityValue !== "unlisted" &&
+      visibilityValue !== "invite_only"
+    ) {
       throw new Error("The draft visibility is invalid.");
     }
 
@@ -3228,12 +3234,15 @@ export function BuilderGraphStudio({
                   <label className="block text-xs font-medium text-neutral-400 mb-1.5">Visibility</label>
                   <select
                     value={visibility}
-                    onChange={(e) => setVisibility(e.target.value as "private" | "public" | "unlisted")}
+                    onChange={(e) =>
+                      setVisibility(e.target.value as "private" | "public" | "unlisted" | "invite_only")
+                    }
                     className="w-full px-3 py-2 bg-neutral-800 border border-[rgba(255,255,255,0.06)] rounded-md text-neutral-50 text-xs focus:outline-none focus:border-[#dce85d] transition-colors"
                   >
                     <option value="private">Private</option>
                     <option value="public">Public (Leaderboard)</option>
                     <option value="unlisted">Unlisted (Link only)</option>
+                    <option value="invite_only">Invite-only</option>
                   </select>
                 </div>
 
@@ -3269,6 +3278,27 @@ export function BuilderGraphStudio({
                   {status === "creating" ? "Saving..." : createdBotId ? "Update Draft" : "Save Sandbox Draft"}
                 </button>
               </div>
+
+              {createdBotId && walletAddress.trim() ? (
+                <div className="mt-6 pt-4 border-t border-[rgba(255,255,255,0.06)]">
+                  <BotPublishingPanel
+                    botId={createdBotId}
+                    walletAddress={walletAddress.trim()}
+                    getAuthHeaders={getAuthHeaders}
+                    compact
+                    onSaved={(nextSettings) => {
+                      if (
+                        nextSettings.visibility === "private" ||
+                        nextSettings.visibility === "public" ||
+                        nextSettings.visibility === "unlisted" ||
+                        nextSettings.visibility === "invite_only"
+                      ) {
+                        setVisibility(nextSettings.visibility);
+                      }
+                    }}
+                  />
+                </div>
+              ) : null}
             </div>
           </div>
         </div>

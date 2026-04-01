@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { driftTone, type LeaderboardRow } from "@/lib/public-bots";
+import { driftTone, type LeaderboardRow, type MarketplaceDiscoveryRow } from "@/lib/public-bots";
 
 import { TrustBadgeStrip } from "./trust-badge-strip";
 
@@ -9,10 +9,12 @@ export function BotRuntimeCard({
   onMirror,
   onClone,
 }: {
-  row: LeaderboardRow;
+  row: LeaderboardRow | MarketplaceDiscoveryRow;
   onMirror?: () => void;
   onClone?: () => void;
 }) {
+  const marketplaceRow = "copy_stats" in row ? row : null;
+
   return (
     <article className="grid gap-5 rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5 transition-colors duration-200 hover:border-[rgba(255,255,255,0.12)]">
       <div className="flex items-start justify-between gap-4">
@@ -40,7 +42,11 @@ export function BotRuntimeCard({
         <Metric label="Total PnL" value={`${row.pnl_total >= 0 ? "+" : ""}${row.pnl_total.toFixed(2)}`} accent={row.pnl_total >= 0 ? "text-[#74b97f]" : "text-[#ff8a9b]"} />
         <Metric label="Trust" value={`${row.trust.trust_score}`} accent="text-neutral-50" />
         <Metric label="Risk grade" value={row.trust.risk_grade} accent="text-[#dce85d]" />
-        <Metric label="Drift" value={row.drift.status} accent={driftTone(row.drift.status)} />
+        <Metric
+          label={marketplaceRow ? "Live mirrors" : "Drift"}
+          value={marketplaceRow ? `${marketplaceRow.copy_stats.active_mirror_count}` : row.drift.status}
+          accent={marketplaceRow ? "text-[#74b97f]" : driftTone(row.drift.status)}
+        />
       </div>
 
       <div className="grid gap-2 rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-4">
@@ -51,6 +57,9 @@ export function BotRuntimeCard({
           </Link>
         </div>
         <p className="text-sm leading-7 text-neutral-400">{row.creator.summary}</p>
+        {marketplaceRow?.publishing.hero_headline ? (
+          <p className="text-xs uppercase tracking-[0.12em] text-neutral-500">{marketplaceRow.publishing.hero_headline}</p>
+        ) : null}
       </div>
 
       <div className="flex flex-wrap gap-2">

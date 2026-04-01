@@ -58,6 +58,8 @@ class BotCopyEngine:
         definition = self.supabase.maybe_one("bot_definitions", filters={"id": runtime["bot_definition_id"]})
         if definition is None:
             raise ValueError("Bot definition not found")
+        if str(definition.get("visibility") or "private") != "public":
+            raise ValueError("Runtime not found")
         latest_snapshot = self.supabase.maybe_one("bot_leaderboard_snapshots", filters={"runtime_id": runtime_id}, order="captured_at.desc")
         if latest_snapshot is None or self._snapshot_is_stale(latest_snapshot.get("captured_at")):
             await self.leaderboard_engine.refresh_public_leaderboard(None, limit=100)
@@ -103,7 +105,11 @@ class BotCopyEngine:
         if runtime is None:
             raise ValueError("Source runtime not found")
         source_definition = self.supabase.maybe_one("bot_definitions", filters={"id": runtime["bot_definition_id"]})
-        if source_definition is None or source_definition["visibility"] != "public":
+        if source_definition is None or not self._can_access_source_definition(
+            source_definition=source_definition,
+            viewer_wallet_address=follower_wallet_address,
+            allow_public_only=False,
+        ):
             raise ValueError("Source bot is not available for mirroring")
         if runtime["wallet_address"] == follower_wallet_address:
             raise ValueError("You cannot mirror your own runtime")
@@ -174,7 +180,11 @@ class BotCopyEngine:
         source_definition = self.supabase.maybe_one("bot_definitions", filters={"id": runtime["bot_definition_id"]})
         if source_definition is None:
             raise ValueError("Source bot definition not found")
-        if source_definition["visibility"] not in {"public", "unlisted"}:
+        if not self._can_access_source_definition(
+            source_definition=source_definition,
+            viewer_wallet_address=wallet_address,
+            allow_public_only=False,
+        ):
             raise ValueError("Source bot is not cloneable")
         clone_name = (name or f"{source_definition['name']} Clone").strip()
         clone_description = (description or source_definition["description"] or "Cloned bot draft").strip()
@@ -264,6 +274,34 @@ class BotCopyEngine:
         if display_name:
             return self.supabase.update("users", {"display_name": display_name.strip()}, filters={"id": follower["id"]})[0]
         return follower
+
+    def _can_access_source_definition(
+        self,
+        *,
+        source_definition: dict[str, Any],
+        viewer_wallet_address: str,
+        allow_public_only: bool,
+    ) -> bool:
+        visibility = str(source_definition.get("visibility") or "private")
+        if visibility == "public":
+            return True
+        if allow_public_only:
+            return False
+        if visibility == "unlisted":
+            return True
+        if visibility == "invite_only":
+            if str(source_definition.get("wallet_address") or "") == viewer_wallet_address:
+                return True
+            invite = self.supabase.maybe_one(
+                "bot_invite_access",
+                filters={
+                    "bot_definition_id": source_definition["id"],
+                    "invited_wallet_address": viewer_wallet_address,
+                    "status": "active",
+                },
+            )
+            return invite is not None
+        return False
 
     @staticmethod
     def _snapshot_is_stale(value: Any) -> bool:

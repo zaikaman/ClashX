@@ -5,6 +5,7 @@ import { use, useEffect, useMemo, useState } from "react";
 
 import { AdvancedSettingsPanel } from "@/components/bots/advanced-settings-panel";
 import { BotPerformancePanel } from "@/components/bots/bot-performance-panel";
+import { BotPublishingPanel } from "@/components/bots/bot-publishing-panel";
 import { ExecutionLog } from "@/components/bots/execution-log";
 import { RuntimeFailurePanel } from "@/components/bots/runtime-failure-panel";
 import { RuntimeHealthCard } from "@/components/bots/runtime-health-card";
@@ -256,6 +257,20 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
           </article>
         )}
       </section>
+
+      {walletAddress && visibleBot ? (
+        <section className="grid gap-3">
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Publishing</span>
+          <BotPublishingPanel
+            botId={visibleBot.id}
+            walletAddress={walletAddress}
+            getAuthHeaders={getAuthHeaders}
+            onSaved={(nextSettings) => {
+              setBot((current) => (current ? { ...current, visibility: nextSettings.visibility } : current));
+            }}
+          />
+        </section>
+      ) : null}
 
       {walletAddress ? (
         <section className="grid gap-6 xl:grid-cols-2">
