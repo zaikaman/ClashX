@@ -18,7 +18,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   const navItems = [
-    { href: '/leaderboard', label: 'Leaderboard', icon: Trophy },
+    { href: '/leaderboard', label: 'Marketplace', icon: Trophy },
     { href: '/build', label: 'Builder Studio', icon: Box },
     { href: '/bots', label: 'My Bots', icon: LayoutDashboard },
     { href: '/backtests', label: 'Backtests', icon: FlaskConical },

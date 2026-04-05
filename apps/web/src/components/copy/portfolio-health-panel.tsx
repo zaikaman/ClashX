@@ -76,11 +76,11 @@ export function PortfolioHealthPanel({
         </article>
       </div>
 
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-col items-start gap-3 sm:flex-row sm:flex-wrap sm:items-center">
         <button
           type="button"
           onClick={onEdit}
-          className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-neutral-50 hover:text-neutral-50"
+          className="inline-flex min-h-11 self-start items-center justify-center rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-neutral-50 hover:text-neutral-50"
         >
           Edit mix
         </button>
@@ -88,7 +88,7 @@ export function PortfolioHealthPanel({
           type="button"
           onClick={onRebalance}
           disabled={busyAction !== null}
-          className="rounded-full bg-[#dce85d] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d] disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex min-h-11 self-start items-center justify-center rounded-full bg-[#dce85d] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busyAction === "rebalance" ? "Rebalancing..." : "Rebalance now"}
         </button>
@@ -96,7 +96,7 @@ export function PortfolioHealthPanel({
           type="button"
           onClick={() => onKillSwitch(!killSwitchEngaged)}
           disabled={busyAction !== null}
-          className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#ff8a9b] hover:text-[#ff8a9b] disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex min-h-11 self-start items-center justify-center rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#ff8a9b] hover:text-[#ff8a9b] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {killSwitchEngaged
             ? busyAction === "resume"

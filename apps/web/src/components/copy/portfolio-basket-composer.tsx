@@ -253,7 +253,7 @@ export function PortfolioBasketComposer({
                 <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Selected members</span>
                 <span className="text-sm text-neutral-400">Target weight currently totals {totalWeight.toFixed(1)}%.</span>
               </div>
-              <label className="inline-flex items-center gap-2 text-xs uppercase tracking-[0.16em] text-neutral-400">
+              <label className="inline-flex w-fit shrink-0 items-center gap-2 self-start rounded-full border border-[rgba(255,255,255,0.08)] bg-[#16181a] px-3 py-2 text-xs uppercase tracking-[0.16em] text-neutral-400">
                 <input
                   type="checkbox"
                   checked={draft.activate_on_create}
@@ -354,16 +354,16 @@ export function PortfolioBasketComposer({
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-col items-start gap-3 sm:flex-row sm:flex-wrap sm:items-center">
             <button
               type="button"
               onClick={onSubmit}
               disabled={submitting || draft.members.length === 0 || draft.name.trim().length < 2}
-              className="rounded-full bg-[#dce85d] px-5 py-3 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex min-h-12 self-start items-center justify-center rounded-full bg-[#dce85d] px-5 py-3 text-center text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {submitting ? "Saving..." : editingLabel ? "Update basket" : "Create basket"}
             </button>
-            <div className="rounded-full border border-[rgba(255,255,255,0.08)] px-4 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
+            <div className="inline-flex min-h-12 self-start items-center rounded-full border border-[rgba(255,255,255,0.08)] bg-[#111315] px-4 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
               {draft.members.length} member{draft.members.length === 1 ? "" : "s"} · ${draft.target_notional_usd.toLocaleString()}
             </div>
           </div>

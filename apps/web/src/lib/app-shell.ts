@@ -31,8 +31,8 @@ export const appNavGroups: AppNavGroup[] = [
     items: [
       {
         href: "/leaderboard",
-        label: "Leaderboard",
-        description: "Track the live seasonal ladder and inspect winners.",
+        label: "Marketplace",
+        description: "Discover public bots, creator shelves, and live winners.",
       },
     ],
   },
@@ -64,7 +64,7 @@ export const appNavGroups: AppNavGroup[] = [
 ];
 
 export const appWorkflow = [
-  { href: "/leaderboard", label: "Study the live ladder" },
+  { href: "/leaderboard", label: "Browse the marketplace" },
   { href: "/build", label: "Draft a strategy" },
   { href: "/bots", label: "Deploy and monitor" },
   { href: "/copy", label: "Follow or clone a winner" },
@@ -99,7 +99,7 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
 
   if (normalizedPathname.startsWith("/leaderboard/")) {
     return {
-      eyebrow: "Public runtime profile",
+      eyebrow: "Marketplace profile",
       title: "Review one live bot in detail",
       description: "Check performance, inspect recent decisions, and decide whether to follow this runtime or clone it into your own account.",
       guidanceTitle: "Use this profile",
@@ -109,7 +109,7 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
         "Use clone when you want a draft you can edit. Use follow when you want live copying.",
       ],
       actions: [
-        { href: "/leaderboard", label: "Back to public board", tone: "secondary" },
+        { href: "/leaderboard", label: "Back to marketplace", tone: "secondary" },
         { href: "/copy", label: "Open copy center", tone: "ghost" },
       ],
     };
@@ -135,12 +135,12 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
 
   if (normalizedPathname === "/leaderboard") {
     return {
-      eyebrow: "Seasonal leaderboard",
-      title: "Track the best-performing live bots",
-      description: "Compare ranked runtimes, see the current season window, and decide whether to follow, clone, or outbuild the leaders.",
+      eyebrow: "Creator marketplace",
+      title: "Discover the strongest live bots",
+      description: "Compare ranked runtimes, creator shelves, and trust signals so you can follow, clone, or outbuild the leaders.",
       guidanceTitle: "How this page helps",
       guidance: [
-        "Use the season panel to see when the current ladder resets.",
+        "Use featured shelves when you want curated strategy groupings instead of a raw list.",
         "Use the front runner cards when you want quick context on the strongest current bots.",
         "Open a runtime profile before you mirror anything so you can inspect recent behavior.",
       ],
@@ -164,7 +164,7 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
       ],
       actions: [
         { href: "/bots", label: "Open my bots", tone: "primary" },
-        { href: "/leaderboard", label: "Open leaderboard", tone: "secondary" },
+        { href: "/leaderboard", label: "Open marketplace", tone: "secondary" },
       ],
     };
   }
@@ -182,7 +182,7 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
       ],
       actions: [
         { href: "/build", label: "New bot draft", tone: "primary" },
-        { href: "/leaderboard", label: "Browse live bots", tone: "secondary" },
+        { href: "/leaderboard", label: "Browse marketplace", tone: "secondary" },
       ],
     };
   }
@@ -194,12 +194,12 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
       description: "Keep track of the bots you follow live, stop a follow when needed, and reopen cloned bots for editing.",
       guidanceTitle: "Use this desk",
       guidance: [
-        "Open the public board if you need new bots to evaluate or follow.",
+        "Open the marketplace if you need new bots to evaluate or follow.",
         "Use cloned drafts when you want to customize a successful idea instead of mirroring it directly.",
         "Review active follows regularly so your risk stays intentional.",
       ],
       actions: [
-        { href: "/leaderboard", label: "Browse the public board", tone: "primary" },
+        { href: "/leaderboard", label: "Browse marketplace", tone: "primary" },
         { href: "/bots", label: "Open my bots", tone: "secondary" },
       ],
     };

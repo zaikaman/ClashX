@@ -7,7 +7,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "ClashX",
-  description: "Build, deploy, and copy Pacifica-powered trading bots with live leaderboards and transparent automation.",
+  description: "Build, deploy, and copy Pacifica-powered trading bots with a creator marketplace and transparent automation.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

@@ -718,12 +718,12 @@ const Home = () => {
                         </div>
                       </div>
                       <div>
-                        <h3 className="text-xl font-semibold text-white tracking-tight mb-2 group-hover:text-white transition-colors">Public Leaderboards</h3>
+                        <h3 className="text-xl font-semibold text-white tracking-tight mb-2 group-hover:text-white transition-colors">Creator Marketplace</h3>
                         <p className="text-[#a1a1aa] leading-relaxed">
-                          Discover top-performing bots. Analyze their historical performance and transparent on-chain execution with verifiable metrics, then mirror them live.
+                          Discover top-performing bots, creator shelves, and transparent on-chain execution with verifiable metrics, then mirror them live.
                         </p>
                         <Link href="/leaderboard" className="inline-flex items-center gap-2 mt-4 text-sm font-medium text-[#a8c93a] hover:text-[#dce85d] transition-colors group/link">
-                          View Leaderboards
+                          Open Marketplace
                           <ArrowRight className="w-3.5 h-3.5 group-hover/link:translate-x-1 transition-transform" />
                         </Link>
                       </div>

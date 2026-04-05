@@ -24,6 +24,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             "/api/builder",
             "/api/stream",
             "/api/bot-copy",
+            "/api/marketplace",
             "/api/pacifica",
         )
         public_trading_paths = {"/api/trading/markets", "/api/trading/chart"}
