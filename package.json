@@ -3,11 +3,14 @@
     "version": "0.1.0",
     "private": true,
     "scripts": {
-        "db:migrate": "cd services/trading-backend && alembic upgrade head",
-        "db:migration:new": "cd services/trading-backend && alembic revision --autogenerate -m \"describe change\"",
-        "frontend": "npm run dev --prefix apps/web",
-        "backend": "cd services/trading-backend && uvicorn src.main:app --reload --host 0.0.0.0 --port 8000",
-        "install:frontend": "npm install --prefix apps/web",
-        "install:backend": "cd services/trading-backend && pip install -e ."
-    }
+    "db:migrate": "cd services/trading-backend && alembic upgrade head",
+    "db:migration:new": "cd services/trading-backend && alembic revision --autogenerate -m \"describe change\"",
+    "dev": "npm run dev --prefix apps/web",
+    "build": "npm run build --prefix apps/web",
+    "start": "npm run start --prefix apps/web",
+    "frontend": "npm run dev --prefix apps/web",
+    "backend": "cd services/trading-backend && uvicorn src.main:app --reload --host 0.0.0.0 --port 8000",
+    "install:frontend": "npm install --prefix apps/web",
+    "install:backend": "cd services/trading-backend && pip install -e ."
+  }
 }
