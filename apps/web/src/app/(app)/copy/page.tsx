@@ -92,6 +92,98 @@ function LoadingCard() {
   );
 }
 
+function BasketComposerSkeleton() {
+  return (
+    <article className="grid gap-5 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="grid gap-3">
+          <div className="skeleton h-4 w-28 rounded-sm" />
+          <div className="skeleton h-12 w-80 rounded-lg" />
+          <div className="skeleton h-4 w-full max-w-3xl rounded-sm" />
+          <div className="skeleton h-4 w-72 rounded-sm" />
+        </div>
+        <div className="skeleton h-10 w-32 rounded-full" />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+        <div className="grid gap-4">
+          <div className="grid gap-2">
+            <div className="skeleton h-4 w-24 rounded-sm" />
+            <div className="skeleton h-12 w-full rounded-2xl" />
+          </div>
+          <div className="grid gap-2">
+            <div className="skeleton h-4 w-40 rounded-sm" />
+            <div className="skeleton h-28 w-full rounded-2xl" />
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            {Array.from({ length: 4 }).map((_, index) => (
+              <div key={`basket-input-skeleton-${index}`} className="grid gap-2">
+                <div className="skeleton h-4 w-28 rounded-sm" />
+                <div className="skeleton h-12 w-full rounded-2xl" />
+              </div>
+            ))}
+          </div>
+          <div className="grid gap-3 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-4">
+            <div className="grid gap-2">
+              <div className="skeleton h-4 w-24 rounded-sm" />
+              <div className="skeleton h-4 w-full rounded-sm" />
+              <div className="skeleton h-4 w-4/5 rounded-sm" />
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              {Array.from({ length: 4 }).map((_, index) => (
+                <div key={`basket-risk-skeleton-${index}`} className="grid gap-2">
+                  <div className="skeleton h-4 w-28 rounded-sm" />
+                  <div className="skeleton h-12 w-full rounded-2xl" />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-4">
+          <div className="grid gap-3 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="grid gap-2">
+                <div className="skeleton h-4 w-32 rounded-sm" />
+                <div className="skeleton h-4 w-56 rounded-sm" />
+              </div>
+              <div className="skeleton h-8 w-28 rounded-full" />
+            </div>
+            <div className="skeleton h-28 w-full rounded-[1.5rem]" />
+          </div>
+
+          <div className="grid gap-3 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-4">
+            <div className="grid gap-2">
+              <div className="skeleton h-4 w-28 rounded-sm" />
+              <div className="skeleton h-4 w-full rounded-sm" />
+              <div className="skeleton h-4 w-5/6 rounded-sm" />
+            </div>
+            <div className="grid gap-3">
+              {Array.from({ length: 2 }).map((_, index) => (
+                <div
+                  key={`basket-candidate-skeleton-${index}`}
+                  className="grid gap-3 rounded-[1.25rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4 md:grid-cols-[1fr_auto]"
+                >
+                  <div className="grid gap-2">
+                    <div className="skeleton h-5 w-40 rounded-md" />
+                    <div className="skeleton h-4 w-56 rounded-sm" />
+                  </div>
+                  <div className="skeleton h-10 w-32 rounded-full" />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
+            <div className="skeleton h-12 w-40 rounded-full" />
+            <div className="skeleton h-12 w-36 rounded-full" />
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 function serializePortfolioDraft(draft: PortfolioDraft) {
   return {
     name: draft.name,
@@ -545,15 +637,19 @@ export default function CopyPage() {
         </article>
       </section>
 
-      <PortfolioBasketComposer
-        draft={portfolioDraft}
-        candidates={candidateBots}
-        editingLabel={editingPortfolioId ? "Editing basket" : null}
-        submitting={savingPortfolio}
-        onDraftChange={setPortfolioDraft}
-        onSubmit={() => void savePortfolio()}
-        onCancelEdit={editingPortfolioId ? resetPortfolioEditor : undefined}
-      />
+      {loading ? (
+        <BasketComposerSkeleton />
+      ) : (
+        <PortfolioBasketComposer
+          draft={portfolioDraft}
+          candidates={candidateBots}
+          editingLabel={editingPortfolioId ? "Editing basket" : null}
+          submitting={savingPortfolio}
+          onDraftChange={setPortfolioDraft}
+          onSubmit={() => void savePortfolio()}
+          onCancelEdit={editingPortfolioId ? resetPortfolioEditor : undefined}
+        />
+      )}
 
       <section className="grid gap-4">
         {loading ? (
