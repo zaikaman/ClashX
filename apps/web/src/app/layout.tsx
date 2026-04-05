@@ -11,10 +11,12 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  const privyAppId = process.env.NEXT_PUBLIC_PRIVY_APP_ID ?? process.env.PRIVY_APP_ID ?? "";
+
   return (
     <html lang="en">
       <body>
-        <ClashxPrivyProvider appId={process.env.PRIVY_APP_ID ?? ""}>{children}</ClashxPrivyProvider>
+        <ClashxPrivyProvider appId={privyAppId}>{children}</ClashxPrivyProvider>
       </body>
     </html>
   );

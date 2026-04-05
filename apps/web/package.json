@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "dotenv -e ../../.env -- next dev",
-    "build": "dotenv -e ../../.env -- next build",
-    "start": "dotenv -e ../../.env -- next start",
+    "dev": "node ./scripts/run-next.mjs dev",
+    "build": "node ./scripts/run-next.mjs build",
+    "start": "node ./scripts/run-next.mjs start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },
@@ -27,6 +27,7 @@
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "autoprefixer": "^10.4.21",
+    "dotenv": "^16.6.1",
     "dotenv-cli": "^7.4.4",
     "eslint": "^9.22.0",
     "eslint-config-next": "16.1.6",

@@ -38,6 +38,7 @@ class Settings:
     app_env: str
     background_workers_enabled: bool
     worker_instance_id: str
+    cors_allowed_origins: tuple[str, ...]
     supabase_url: str
     supabase_anon_key: str
     supabase_service_role_key: str
@@ -89,11 +90,17 @@ def get_settings() -> Settings:
         raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required")
     workers_enabled = os.getenv("BACKGROUND_WORKERS_ENABLED", "true").strip().lower() in {"1", "true", "yes", "y"}
     worker_instance_id = os.getenv("WORKER_INSTANCE_ID", "").strip() or f"{os.getpid()}"
+    cors_allowed_origins_raw = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
+    if cors_allowed_origins_raw:
+        cors_allowed_origins = tuple(origin.strip() for origin in cors_allowed_origins_raw.split(",") if origin.strip())
+    else:
+        cors_allowed_origins = ("http://localhost:3000",)
     return Settings(
         app_name=os.getenv("APP_NAME", "ClashX Trading Backend"),
         app_env=os.getenv("APP_ENV", "development"),
         background_workers_enabled=workers_enabled,
         worker_instance_id=worker_instance_id,
+        cors_allowed_origins=cors_allowed_origins,
         supabase_url=supabase_url,
         supabase_anon_key=os.getenv("SUPABASE_ANON_KEY", ""),
         supabase_service_role_key=supabase_service_role_key,
