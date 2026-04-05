@@ -19,7 +19,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const navItems = [
     { href: '/leaderboard', label: 'Marketplace', icon: Trophy },
-    { href: '/build', label: 'Builder Studio', icon: Box },
+    { href: '/builder', label: 'Builder Studio', icon: Box },
     { href: '/bots', label: 'My Bots', icon: LayoutDashboard },
     { href: '/backtests', label: 'Backtests', icon: FlaskConical },
     { href: '/copy', label: 'Copy Trading', icon: ShoppingBag },

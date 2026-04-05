@@ -369,7 +369,7 @@ export function AgentAuthorizationPanel() {
         ) : null}
         {runtimeReady ? (
           <Link
-            href="/build"
+            href="/builder"
             className="inline-flex items-center gap-2 bg-[#74b97f] px-5 py-2.5 font-mono text-xs font-semibold uppercase tracking-wider text-[#090a0a] transition-all duration-200 hover:brightness-110"
           >
             go to builder <span>→</span>

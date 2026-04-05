@@ -698,7 +698,7 @@ export function BotsFleetPage() {
           </button>
         ) : null}
         <Link
-          href="/build"
+          href="/builder"
           className="rounded-full bg-[#dce85d] px-5 py-2.5 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d]"
         >
           New bot draft
@@ -1131,7 +1131,7 @@ export function BotsFleetPage() {
                         <ArrowUpRight className="h-3 w-3" />
                       </Link>
                       <Link
-                        href={`/build?botId=${encodeURIComponent(bot.id)}`}
+                        href={`/builder?botId=${encodeURIComponent(bot.id)}`}
                         className="inline-flex items-center gap-2 border border-[rgba(255,255,255,0.15)] bg-transparent px-4 py-2 text-[0.6rem] font-bold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d]"
                       >
                         Edit

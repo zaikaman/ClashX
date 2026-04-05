@@ -49,7 +49,7 @@ export default function DocsPage() {
             <Link href="/leaderboard" className="rounded-full bg-[#dce85d] px-4 py-2 text-sm font-medium text-[#090a0a]">
               Marketplace
             </Link>
-            <Link href="/build" className="rounded-full border border-white/15 px-4 py-2 text-sm font-medium text-neutral-50">
+            <Link href="/builder" className="rounded-full border border-white/15 px-4 py-2 text-sm font-medium text-neutral-50">
               Builder Studio
             </Link>
             <Link href="/bots" className="rounded-full border border-white/15 px-4 py-2 text-sm font-medium text-neutral-50">

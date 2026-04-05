@@ -96,7 +96,7 @@ const LandingHeader = () => {
           </nav>
 
           <div className="hidden md:flex items-center gap-2">
-            <Link href="/build" className="group relative inline-flex items-center justify-center h-[38px] px-5 gap-2 text-sm font-semibold text-[#090a0a] bg-[#dce85d] rounded-full overflow-hidden transition-all duration-300 ease-out hover:scale-105 hover:bg-[#e4ef6e] focus:outline-none focus:ring-2 focus:ring-[#dce85d] focus:ring-offset-2 focus:ring-offset-[#090a0a]">
+            <Link href="/builder" className="group relative inline-flex items-center justify-center h-[38px] px-5 gap-2 text-sm font-semibold text-[#090a0a] bg-[#dce85d] rounded-full overflow-hidden transition-all duration-300 ease-out hover:scale-105 hover:bg-[#e4ef6e] focus:outline-none focus:ring-2 focus:ring-[#dce85d] focus:ring-offset-2 focus:ring-offset-[#090a0a]">
               <span className="relative z-10 flex items-center gap-1.5 whitespace-nowrap">
                 Start Building
                 <ArrowRight className="w-3.5 h-3.5 transition-transform duration-300 group-hover:translate-x-0.5" />
@@ -183,7 +183,7 @@ const LandingHeader = () => {
                   className="space-y-4"
                 >
                   <div className="text-xs font-semibold text-white/40 uppercase tracking-wider px-2">Build</div>
-                  <Link href="/build" className="w-full group isolate inline-flex justify-center cursor-pointer overflow-hidden transition-all duration-300 hover:scale-[1.02] hover:shadow-[0_0_40px_8px_rgba(220,232,93,0.35)] rounded-full relative shadow-[0_8px_40px_rgba(220,232,93,0.25)] h-12">
+                  <Link href="/builder" className="w-full group isolate inline-flex justify-center cursor-pointer overflow-hidden transition-all duration-300 hover:scale-[1.02] hover:shadow-[0_0_40px_8px_rgba(220,232,93,0.35)] rounded-full relative shadow-[0_8px_40px_rgba(220,232,93,0.25)] h-12">
                     <div className="absolute inset-0">
                       <div className="absolute inset-[-200%] w-[400%] h-[400%] animate-[rotate-gradient_4s_linear_infinite]">
                         <div className="absolute inset-0" style={{ background: 'conic-gradient(from 225deg, transparent 0, rgba(255,255,255,0.6) 90deg, transparent 90deg)' }}></div>
@@ -454,7 +454,7 @@ const Home = () => {
                 className="flex flex-col sm:flex-row gap-3 justify-center mb-16"
               >
                 <div className="w-full sm:w-auto max-w-[360px] mx-auto">
-                  <Link href="/build" className="group isolate inline-flex cursor-pointer overflow-hidden transition-all duration-300 hover:scale-105 hover:shadow-[0_0_40px_8px_rgba(220,232,93,0.35)] rounded-full relative shadow-[0_8px_40px_rgba(220,232,93,0.25)]">
+                  <Link href="/builder" className="group isolate inline-flex cursor-pointer overflow-hidden transition-all duration-300 hover:scale-105 hover:shadow-[0_0_40px_8px_rgba(220,232,93,0.35)] rounded-full relative shadow-[0_8px_40px_rgba(220,232,93,0.25)]">
                     <div className="absolute inset-0">
                       <div className="absolute inset-[-200%] w-[400%] h-[400%] animate-[rotate-gradient_4s_linear_infinite]">
                         <div className="absolute inset-0" style={{ background: 'conic-gradient(from 225deg, transparent 0, rgba(255,255,255,0.6) 90deg, transparent 90deg)' }}></div>
@@ -879,7 +879,7 @@ const Home = () => {
                 <p className="text-lg text-[#a1a1aa] mb-8 max-w-2xl mx-auto">
                   Join thousands of users who are already earning with ClashX&apos;s automated trading bots
                 </p>
-                <Link href="/build" className="group isolate inline-flex cursor-pointer overflow-hidden transition-all duration-300 hover:scale-105 hover:shadow-[0_0_40px_8px_rgba(220,232,93,0.35)] rounded-full relative shadow-[0_8px_40px_rgba(220,232,93,0.25)]">
+                <Link href="/builder" className="group isolate inline-flex cursor-pointer overflow-hidden transition-all duration-300 hover:scale-105 hover:shadow-[0_0_40px_8px_rgba(220,232,93,0.35)] rounded-full relative shadow-[0_8px_40px_rgba(220,232,93,0.25)]">
                   <div className="absolute inset-0">
                     <div className="absolute inset-[-200%] w-[400%] h-[400%] animate-[rotate-gradient_4s_linear_infinite]">
                       <div className="absolute inset-0" style={{ background: 'conic-gradient(from 225deg, transparent 0, rgba(255,255,255,0.6) 90deg, transparent 90deg)' }}></div>

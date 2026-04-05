@@ -178,7 +178,7 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
             <span className="label text-[#74b97f]">Runtime snapshot</span>
             <div className="flex items-center gap-2">
               <Link
-                href={`/build?botId=${encodeURIComponent(params.botId)}`}
+                href={`/builder?botId=${encodeURIComponent(params.botId)}`}
                 className="rounded-full border border-[rgba(220,232,93,0.24)] px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#dce85d] transition hover:border-[#dce85d] hover:bg-[#dce85d]/8"
               >
                 Edit in builder

@@ -2,5 +2,12 @@
   "framework": "nextjs",
   "installCommand": "npm install",
   "buildCommand": "npm run build",
-  "devCommand": "npm run dev"
+  "devCommand": "npm run dev",
+  "redirects": [
+    {
+      "source": "/build",
+      "destination": "/builder",
+      "permanent": false
+    }
+  ]
 }

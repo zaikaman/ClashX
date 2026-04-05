@@ -40,7 +40,7 @@ export const appNavGroups: AppNavGroup[] = [
     label: "Build",
     items: [
       {
-        href: "/build",
+        href: "/builder",
         label: "Builder studio",
         description: "Create, validate, and deploy a bot from one flow.",
       },
@@ -65,7 +65,7 @@ export const appNavGroups: AppNavGroup[] = [
 
 export const appWorkflow = [
   { href: "/leaderboard", label: "Browse the marketplace" },
-  { href: "/build", label: "Draft a strategy" },
+  { href: "/builder", label: "Draft a strategy" },
   { href: "/bots", label: "Deploy and monitor" },
   { href: "/copy", label: "Follow or clone a winner" },
 ];
@@ -89,7 +89,7 @@ const fallbackMeta: AppPageMeta = {
     "Return to My bots whenever you want runtime health or controls.",
   ],
   actions: [
-    { href: "/build", label: "Open visual builder", tone: "primary" },
+    { href: "/builder", label: "Open visual builder", tone: "primary" },
     { href: "/bots", label: "Open my bots", tone: "secondary" },
   ],
 };
@@ -128,7 +128,7 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
       ],
       actions: [
         { href: "/bots", label: "Back to my bots", tone: "secondary" },
-        { href: "/build", label: "Open builder studio", tone: "ghost" },
+        { href: "/builder", label: "Open builder studio", tone: "ghost" },
       ],
     };
   }
@@ -146,12 +146,12 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
       ],
       actions: [
         { href: "/copy", label: "Open copy center", tone: "primary" },
-        { href: "/build", label: "Build your own bot", tone: "secondary" },
+        { href: "/builder", label: "Build your own bot", tone: "secondary" },
       ],
     };
   }
 
-  if (normalizedPathname === "/build") {
+  if (normalizedPathname === "/builder" || normalizedPathname === "/build") {
     return {
       eyebrow: "Builder studio",
       title: "Build a bot step by step",
@@ -181,7 +181,7 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
         "Create new bots from Builder studio, then return here to operate them.",
       ],
       actions: [
-        { href: "/build", label: "New bot draft", tone: "primary" },
+        { href: "/builder", label: "New bot draft", tone: "primary" },
         { href: "/leaderboard", label: "Browse marketplace", tone: "secondary" },
       ],
     };
