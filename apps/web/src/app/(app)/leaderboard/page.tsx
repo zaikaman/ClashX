@@ -1,22 +1,28 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
-import { BotCloneModal } from "@/components/copy/bot-clone-modal";
-import { BotMirrorModal } from "@/components/copy/bot-mirror-modal";
 import { BotRuntimeCard } from "@/components/leaderboard/bot-runtime-card";
 import { CreatorSpotlightCard } from "@/components/leaderboard/creator-spotlight-card";
 import { FeaturedBotShelf } from "@/components/leaderboard/featured-bot-shelf";
 import { TrustBadgeStrip } from "@/components/leaderboard/trust-badge-strip";
 import {
-  fetchCreatorHighlights,
-  fetchFeaturedShelves,
-  fetchMarketplaceDiscover,
+  fetchMarketplaceOverview,
   type CreatorHighlight,
   type FeaturedShelf,
   type MarketplaceDiscoveryRow,
 } from "@/lib/public-bots";
+
+const BotMirrorModal = dynamic(
+  () => import("@/components/copy/bot-mirror-modal").then((module) => module.BotMirrorModal),
+  { ssr: false },
+);
+const BotCloneModal = dynamic(
+  () => import("@/components/copy/bot-clone-modal").then((module) => module.BotCloneModal),
+  { ssr: false },
+);
 
 const SEASON_ZERO_YEAR = 2026;
 
@@ -49,17 +55,18 @@ export default function BotLeaderboardPage() {
 
     async function loadMarketplace() {
       try {
-        const [discoverRows, shelves, creatorRows] = await Promise.all([
-          fetchMarketplaceDiscover(36, { signal: controller.signal }),
-          fetchFeaturedShelves(4, controller.signal),
-          fetchCreatorHighlights(6, controller.signal),
-        ]);
+        const overview = await fetchMarketplaceOverview({
+          discoverLimit: 36,
+          featuredLimit: 4,
+          creatorLimit: 6,
+          signal: controller.signal,
+        });
         if (controller.signal.aborted) {
           return;
         }
-        setRows(discoverRows);
-        setFeaturedShelves(shelves);
-        setCreators(creatorRows);
+        setRows(overview.discover);
+        setFeaturedShelves(overview.featured);
+        setCreators(overview.creators);
         setError(null);
       } catch (loadError) {
         if (!controller.signal.aborted) {
@@ -78,6 +85,7 @@ export default function BotLeaderboardPage() {
 
   const season = useMemo(() => getSeasonContext(), []);
   const topThree = useMemo(() => rows.slice(0, 3), [rows]);
+  const rowsByRuntimeId = useMemo(() => new Map(rows.map((row) => [row.runtime_id, row])), [rows]);
   const liveCopies = useMemo(
     () => rows.reduce((sum, row) => sum + row.copy_stats.active_mirror_count, 0),
     [rows],
@@ -155,11 +163,11 @@ export default function BotLeaderboardPage() {
               key={shelf.collection_key}
               shelf={shelf}
               onMirror={(runtimeId) => {
-                const row = rows.find((item) => item.runtime_id === runtimeId) ?? null;
+                const row = rowsByRuntimeId.get(runtimeId) ?? null;
                 setSelectedForMirror(row);
               }}
               onClone={(runtimeId) => {
-                const row = rows.find((item) => item.runtime_id === runtimeId) ?? null;
+                const row = rowsByRuntimeId.get(runtimeId) ?? null;
                 setSelectedForClone(row);
               }}
             />

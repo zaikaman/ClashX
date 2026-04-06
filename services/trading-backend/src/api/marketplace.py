@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from typing import Any as Session
 
@@ -82,6 +82,12 @@ class CreatorHighlightResponse(BaseModel):
     spotlight_bot: dict[str, Any]
 
 
+class MarketplaceOverviewResponse(BaseModel):
+    discover: list[MarketplaceDiscoveryRowResponse]
+    featured: list[FeaturedShelfResponse]
+    creators: list[CreatorHighlightResponse]
+
+
 class CreatorMarketplaceProfileResponse(BaseModel):
     creator_id: str
     wallet_address: str
@@ -146,36 +152,64 @@ class PublishingSettingsUpdateRequest(BaseModel):
     creator_bio: str | None = Field(default=None, max_length=400)
 
 
+def _set_marketplace_cache_headers(response: Response) -> None:
+    response.headers["Cache-Control"] = "public, max-age=15, stale-while-revalidate=45"
+
+
+@router.get("/overview", response_model=MarketplaceOverviewResponse)
+async def get_marketplace_overview(
+    response: Response,
+    discover_limit: int = Query(default=36, ge=1, le=96),
+    featured_limit: int = Query(default=4, ge=1, le=12),
+    creator_limit: int = Query(default=6, ge=1, le=24),
+) -> MarketplaceOverviewResponse:
+    _set_marketplace_cache_headers(response)
+    payload = await marketplace_service.get_marketplace_overview(
+        discover_limit=discover_limit,
+        featured_limit=featured_limit,
+        creator_limit=creator_limit,
+    )
+    return MarketplaceOverviewResponse.model_validate(payload)
+
+
 @router.get("/discover", response_model=list[MarketplaceDiscoveryRowResponse])
 async def discover_public_bots(
+    response: Response,
     limit: int = Query(default=24, ge=1, le=96),
     strategy_type: str | None = Query(default=None),
     creator_id: str | None = Query(default=None),
 ) -> list[MarketplaceDiscoveryRowResponse]:
+    _set_marketplace_cache_headers(response)
     rows = await marketplace_service.discover_public_bots(limit=limit, strategy_type=strategy_type, creator_id=creator_id)
     return [MarketplaceDiscoveryRowResponse.model_validate(row) for row in rows]
 
 
 @router.get("/featured", response_model=list[FeaturedShelfResponse])
 async def list_featured_shelves(
+    response: Response,
     limit: int = Query(default=4, ge=1, le=12),
 ) -> list[FeaturedShelfResponse]:
+    _set_marketplace_cache_headers(response)
     rows = await marketplace_service.list_featured_shelves(limit=limit)
     return [FeaturedShelfResponse.model_validate(row) for row in rows]
 
 
 @router.get("/creators", response_model=list[CreatorHighlightResponse])
 async def list_creator_highlights(
+    response: Response,
     limit: int = Query(default=6, ge=1, le=24),
 ) -> list[CreatorHighlightResponse]:
+    _set_marketplace_cache_headers(response)
     rows = await marketplace_service.list_creator_highlights(limit=limit)
     return [CreatorHighlightResponse.model_validate(row) for row in rows]
 
 
 @router.get("/creators/{creator_id}", response_model=CreatorMarketplaceProfileResponse)
 async def get_creator_profile(
+    response: Response,
     creator_id: str,
 ) -> CreatorMarketplaceProfileResponse:
+    _set_marketplace_cache_headers(response)
     try:
         payload = await marketplace_service.get_creator_profile(creator_id=creator_id)
     except ValueError as exc:

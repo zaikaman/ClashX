@@ -157,6 +157,12 @@ export type CreatorHighlight = MarketplaceCreatorSummary & {
   };
 };
 
+export type MarketplaceOverview = {
+  discover: MarketplaceDiscoveryRow[];
+  featured: FeaturedShelf[];
+  creators: CreatorHighlight[];
+};
+
 export type MarketplaceCreatorProfile = MarketplaceCreatorSummary & {
   social_links_json: Record<string, unknown>;
   bots: MarketplaceDiscoveryRow[];
@@ -267,6 +273,22 @@ export function fetchMarketplaceDiscover(
     params.set("creator_id", options.creatorId);
   }
   return fetchJson<MarketplaceDiscoveryRow[]>(`/api/marketplace/discover?${params.toString()}`, options?.signal);
+}
+
+export function fetchMarketplaceOverview(
+  options?: {
+    discoverLimit?: number;
+    featuredLimit?: number;
+    creatorLimit?: number;
+    signal?: AbortSignal;
+  },
+) {
+  const params = new URLSearchParams({
+    discover_limit: String(options?.discoverLimit ?? 36),
+    featured_limit: String(options?.featuredLimit ?? 4),
+    creator_limit: String(options?.creatorLimit ?? 6),
+  });
+  return fetchJson<MarketplaceOverview>(`/api/marketplace/overview?${params.toString()}`, options?.signal);
 }
 
 export function fetchFeaturedShelves(limit = 4, signal?: AbortSignal) {

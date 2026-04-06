@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
 from collections import defaultdict
@@ -42,6 +43,12 @@ class CreatorMarketplaceService:
         self.builder_service = BotBuilderService()
         self.leaderboard_engine = BotLeaderboardEngine()
         self.trust_service = BotTrustService()
+        self._marketplace_rows_lock = asyncio.Lock()
+        self._marketplace_rows_cache: list[dict[str, Any]] = []
+        self._marketplace_rows_cache_captured_at: str | None = None
+        self._marketplace_rows_cache_built_at: datetime | None = None
+        self._marketplace_rows_cache_limit: int = 0
+        self._leaderboard_refresh_task: asyncio.Task[None] | None = None
 
     async def discover_public_bots(
         self,
@@ -50,21 +57,44 @@ class CreatorMarketplaceService:
         strategy_type: str | None = None,
         creator_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        rows = await self._load_public_leaderboard(limit=max(limit * 3, 60))
         normalized_strategy_type = (strategy_type or "").strip().lower()
+        requires_filter_scan = bool(normalized_strategy_type or creator_id)
+        rows = await self._load_marketplace_rows(limit=max(limit * 3, 60) if requires_filter_scan else limit)
         filtered: list[dict[str, Any]] = []
         for row in rows:
             if normalized_strategy_type and str(row.get("strategy_type") or "").strip().lower() != normalized_strategy_type:
                 continue
             if creator_id and str(row.get("creator", {}).get("creator_id") or "") != creator_id:
                 continue
-            filtered.append(self._attach_marketplace_fields(row))
+            filtered.append(row)
             if len(filtered) >= limit:
                 break
         return filtered
 
     async def list_featured_shelves(self, *, limit: int = 4) -> list[dict[str, Any]]:
-        public_rows = await self.discover_public_bots(limit=120)
+        public_rows = await self._load_marketplace_rows(limit=120)
+        return self._build_featured_shelves(public_rows=public_rows, limit=limit)
+
+    async def list_creator_highlights(self, *, limit: int = 6) -> list[dict[str, Any]]:
+        public_rows = await self._load_marketplace_rows(limit=96)
+        return self._build_creator_highlights(public_rows=public_rows, limit=limit)
+
+    async def get_marketplace_overview(
+        self,
+        *,
+        discover_limit: int = 36,
+        featured_limit: int = 4,
+        creator_limit: int = 6,
+    ) -> dict[str, Any]:
+        public_rows = await self._load_marketplace_rows(limit=max(discover_limit, 120))
+        discover_rows = public_rows[:discover_limit]
+        return {
+            "discover": discover_rows,
+            "featured": self._build_featured_shelves(public_rows=public_rows, limit=featured_limit),
+            "creators": self._build_creator_highlights(public_rows=public_rows, limit=creator_limit),
+        }
+
+    def _build_featured_shelves(self, *, public_rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
         rows_by_bot = {row["bot_definition_id"]: row for row in public_rows}
         featured_rows = self._select_featured_rows()
 
@@ -118,8 +148,7 @@ class CreatorMarketplaceService:
             }
         ]
 
-    async def list_creator_highlights(self, *, limit: int = 6) -> list[dict[str, Any]]:
-        public_rows = await self.discover_public_bots(limit=96)
+    def _build_creator_highlights(self, *, public_rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
         highlights: dict[str, dict[str, Any]] = {}
         for row in public_rows:
             creator = row["creator"]
@@ -295,13 +324,17 @@ class CreatorMarketplaceService:
                 "created_at": datetime.now(tz=UTC).isoformat(),
             },
         )
+        self._clear_marketplace_cache()
         return self.get_publishing_settings(bot_id=bot_id, wallet_address=wallet_address)
 
     async def _load_public_leaderboard(self, *, limit: int) -> list[dict[str, Any]]:
         latest = self.supabase.maybe_one("bot_leaderboard_snapshots", order="captured_at.desc")
-        if latest is None or self._snapshot_is_stale(latest.get("captured_at")):
+        if latest is None:
             rows = await self.leaderboard_engine.refresh_public_leaderboard(None, limit=max(limit, 60))
+            self._clear_marketplace_cache()
             return self._augment_public_rows(rows)
+        if self._snapshot_is_stale(latest.get("captured_at")):
+            self._schedule_public_leaderboard_refresh(limit=max(limit, 60))
 
         snapshots = self.supabase.select(
             "bot_leaderboard_snapshots",
@@ -345,6 +378,37 @@ class CreatorMarketplaceService:
                 }
             )
         return self._augment_public_rows(rows)
+
+    async def _load_marketplace_rows(self, *, limit: int) -> list[dict[str, Any]]:
+        cached_rows = self._get_cached_marketplace_rows(limit=limit)
+        if cached_rows is not None:
+            return cached_rows
+
+        async with self._marketplace_rows_lock:
+            cached_rows = self._get_cached_marketplace_rows(limit=limit)
+            if cached_rows is not None:
+                return cached_rows
+
+            target_limit = max(limit, 120)
+            rows = await self._load_public_leaderboard(limit=target_limit)
+            marketplace_rows = [self._attach_marketplace_fields(row) for row in rows]
+            captured_at = self._latest_captured_at(marketplace_rows)
+            self._marketplace_rows_cache = marketplace_rows
+            self._marketplace_rows_cache_captured_at = captured_at
+            self._marketplace_rows_cache_built_at = datetime.now(tz=UTC)
+            self._marketplace_rows_cache_limit = target_limit
+            return marketplace_rows[:limit]
+
+    def _get_cached_marketplace_rows(self, *, limit: int) -> list[dict[str, Any]] | None:
+        if self._marketplace_rows_cache_limit < limit:
+            return None
+        if self._marketplace_rows_cache_built_at is None:
+            return None
+        if datetime.now(tz=UTC) - self._marketplace_rows_cache_built_at > timedelta(seconds=SNAPSHOT_TTL_SECONDS):
+            return None
+        if not self._marketplace_rows_cache_captured_at:
+            return None
+        return self._marketplace_rows_cache[:limit]
 
     def _augment_public_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not rows:
@@ -743,3 +807,32 @@ class CreatorMarketplaceService:
         if captured_at is None:
             return True
         return datetime.now(tz=UTC) - captured_at > timedelta(seconds=SNAPSHOT_TTL_SECONDS)
+
+    @staticmethod
+    def _latest_captured_at(rows: list[dict[str, Any]]) -> str | None:
+        for row in rows:
+            captured_at = str(row.get("captured_at") or "").strip()
+            if captured_at:
+                return captured_at
+        return None
+
+    def _clear_marketplace_cache(self) -> None:
+        self._marketplace_rows_cache = []
+        self._marketplace_rows_cache_captured_at = None
+        self._marketplace_rows_cache_built_at = None
+        self._marketplace_rows_cache_limit = 0
+
+    def _schedule_public_leaderboard_refresh(self, *, limit: int) -> None:
+        task = self._leaderboard_refresh_task
+        if task is not None and not task.done():
+            return
+        self._leaderboard_refresh_task = asyncio.create_task(self._run_public_leaderboard_refresh(limit=limit))
+
+    async def _run_public_leaderboard_refresh(self, *, limit: int) -> None:
+        try:
+            await self.leaderboard_engine.refresh_public_leaderboard(None, limit=max(limit, 60))
+        except Exception:
+            return
+        finally:
+            self._clear_marketplace_cache()
+            self._leaderboard_refresh_task = None
