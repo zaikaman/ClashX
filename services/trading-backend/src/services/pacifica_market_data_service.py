@@ -15,6 +15,8 @@ from src.services.pacifica_client import PacificaClient, PacificaClientError, ge
 
 
 logger = logging.getLogger(__name__)
+INITIAL_RECONNECT_DELAY_SECONDS = 2.0
+MAX_RECONNECT_DELAY_SECONDS = 30.0
 TIMEFRAME_TO_MS: dict[str, int] = {
     "1m": 60_000,
     "5m": 300_000,
@@ -191,9 +193,11 @@ class PacificaMarketDataService:
             return []
 
     async def _run_price_subscription(self) -> None:
+        reconnect_delay = INITIAL_RECONNECT_DELAY_SECONDS
         while self._running:
             try:
                 async with websockets.connect(self._settings.pacifica_ws_url, ping_interval=30) as websocket:
+                    reconnect_delay = INITIAL_RECONNECT_DELAY_SECONDS
                     await websocket.send(json.dumps({"method": "subscribe", "params": {"source": "prices"}}))
                     async for message in websocket:
                         if not self._running:
@@ -202,8 +206,13 @@ class PacificaMarketDataService:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # pragma: no cover - network instability
-                logger.warning("Pacifica price feed disconnected: %s", exc)
-                await asyncio.sleep(2)
+                logger.warning(
+                    "Pacifica price feed disconnected: %s; retrying in %.1fs",
+                    exc,
+                    reconnect_delay,
+                )
+                await asyncio.sleep(reconnect_delay)
+                reconnect_delay = min(reconnect_delay * 2, MAX_RECONNECT_DELAY_SECONDS)
 
     def _ingest_price_message(self, message: str) -> None:
         try:

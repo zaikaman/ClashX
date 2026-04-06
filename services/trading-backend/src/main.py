@@ -84,9 +84,9 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def startup() -> None:
-        await market_data_service.start()
         if not settings.background_workers_enabled:
             return
+        await market_data_service.start()
         app.state.bot_runtime_worker = bot_runtime_worker
         app.state.bot_copy_worker = bot_copy_worker
         app.state.portfolio_allocator_worker = portfolio_allocator_worker
