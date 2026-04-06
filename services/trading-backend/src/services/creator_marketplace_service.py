@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import uuid
 from collections import defaultdict
@@ -21,6 +22,7 @@ from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
 
 SNAPSHOT_TTL_SECONDS = 60
 VALID_VISIBILITY = {"private", "public", "unlisted", "invite_only"}
+logger = logging.getLogger(__name__)
 
 
 def _as_datetime(value: Any) -> datetime | None:
@@ -48,7 +50,12 @@ class CreatorMarketplaceService:
         self._marketplace_rows_cache_captured_at: str | None = None
         self._marketplace_rows_cache_built_at: datetime | None = None
         self._marketplace_rows_cache_limit: int = 0
+        self._marketplace_overview_rows_lock = asyncio.Lock()
+        self._marketplace_overview_rows_cache: list[dict[str, Any]] = []
+        self._marketplace_overview_rows_cache_built_at: datetime | None = None
+        self._marketplace_overview_rows_cache_limit: int = 0
         self._leaderboard_refresh_task: asyncio.Task[None] | None = None
+        self._background_warm_task: asyncio.Task[None] | None = None
 
     async def discover_public_bots(
         self,
@@ -86,13 +93,41 @@ class CreatorMarketplaceService:
         featured_limit: int = 4,
         creator_limit: int = 6,
     ) -> dict[str, Any]:
-        public_rows = await self._load_marketplace_rows(limit=max(discover_limit, 120))
+        public_rows = await self._load_marketplace_overview_rows(limit=max(discover_limit, 120))
         discover_rows = public_rows[:discover_limit]
         return {
             "discover": discover_rows,
             "featured": self._build_featured_shelves(public_rows=public_rows, limit=featured_limit),
             "creators": self._build_creator_highlights(public_rows=public_rows, limit=creator_limit),
         }
+
+    async def start_background_warmup(self) -> None:
+        task = self._background_warm_task
+        if task is not None and not task.done():
+            return
+        self._background_warm_task = asyncio.create_task(self._background_warm_loop())
+
+    async def stop_background_warmup(self) -> None:
+        task = self._background_warm_task
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        self._background_warm_task = None
+
+    async def warm_marketplace_overview(self, *, limit: int = 120) -> None:
+        latest = self.supabase.maybe_one("bot_leaderboard_snapshots", columns="captured_at", order="captured_at.desc")
+        if latest is None or self._snapshot_is_stale(latest.get("captured_at")):
+            try:
+                await self.leaderboard_engine.refresh_public_leaderboard(None, limit=max(limit, 60))
+            except Exception:
+                logger.exception("Marketplace overview warm refresh failed")
+            finally:
+                self._clear_marketplace_cache()
+        await self._load_marketplace_overview_rows(limit=max(limit, 120))
 
     def _build_featured_shelves(self, *, public_rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
         rows_by_bot = {row["bot_definition_id"]: row for row in public_rows}
@@ -327,12 +362,12 @@ class CreatorMarketplaceService:
         self._clear_marketplace_cache()
         return self.get_publishing_settings(bot_id=bot_id, wallet_address=wallet_address)
 
-    async def _load_public_leaderboard(self, *, limit: int) -> list[dict[str, Any]]:
+    async def _load_public_leaderboard_rows(self, *, limit: int) -> list[dict[str, Any]]:
         latest = self.supabase.maybe_one("bot_leaderboard_snapshots", order="captured_at.desc")
         if latest is None:
             rows = await self.leaderboard_engine.refresh_public_leaderboard(None, limit=max(limit, 60))
             self._clear_marketplace_cache()
-            return self._augment_public_rows(rows)
+            return rows
         if self._snapshot_is_stale(latest.get("captured_at")):
             self._schedule_public_leaderboard_refresh(limit=max(limit, 60))
 
@@ -377,7 +412,10 @@ class CreatorMarketplaceService:
                     "captured_at": snapshot["captured_at"],
                 }
             )
-        return self._augment_public_rows(rows)
+        return rows
+
+    async def _load_public_leaderboard(self, *, limit: int) -> list[dict[str, Any]]:
+        return self._augment_public_rows(await self._load_public_leaderboard_rows(limit=limit))
 
     async def _load_marketplace_rows(self, *, limit: int) -> list[dict[str, Any]]:
         cached_rows = self._get_cached_marketplace_rows(limit=limit)
@@ -399,6 +437,24 @@ class CreatorMarketplaceService:
             self._marketplace_rows_cache_limit = target_limit
             return marketplace_rows[:limit]
 
+    async def _load_marketplace_overview_rows(self, *, limit: int) -> list[dict[str, Any]]:
+        cached_rows = self._get_cached_marketplace_overview_rows(limit=limit)
+        if cached_rows is not None:
+            return cached_rows
+
+        async with self._marketplace_overview_rows_lock:
+            cached_rows = self._get_cached_marketplace_overview_rows(limit=limit)
+            if cached_rows is not None:
+                return cached_rows
+
+            target_limit = max(limit, 120)
+            rows = await self._load_public_leaderboard_rows(limit=target_limit)
+            overview_rows = self._augment_marketplace_overview_rows(rows)
+            self._marketplace_overview_rows_cache = overview_rows
+            self._marketplace_overview_rows_cache_built_at = datetime.now(tz=UTC)
+            self._marketplace_overview_rows_cache_limit = target_limit
+            return overview_rows[:limit]
+
     def _get_cached_marketplace_rows(self, *, limit: int) -> list[dict[str, Any]] | None:
         if self._marketplace_rows_cache_limit < limit:
             return None
@@ -409,6 +465,15 @@ class CreatorMarketplaceService:
         if not self._marketplace_rows_cache_captured_at:
             return None
         return self._marketplace_rows_cache[:limit]
+
+    def _get_cached_marketplace_overview_rows(self, *, limit: int) -> list[dict[str, Any]] | None:
+        if self._marketplace_overview_rows_cache_limit < limit:
+            return None
+        if self._marketplace_overview_rows_cache_built_at is None:
+            return None
+        if datetime.now(tz=UTC) - self._marketplace_overview_rows_cache_built_at > timedelta(seconds=SNAPSHOT_TTL_SECONDS):
+            return None
+        return self._marketplace_overview_rows_cache[:limit]
 
     def _augment_public_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not rows:
@@ -457,6 +522,366 @@ class CreatorMarketplaceService:
                 }
             )
         return augmented
+
+    def _augment_marketplace_overview_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not rows:
+            return []
+
+        runtime_ids = [row["runtime_id"] for row in rows]
+        definition_ids = [row["bot_definition_id"] for row in rows]
+        runtimes = {row["id"]: row for row in self.supabase.select("bot_runtimes", filters={"id": ("in", runtime_ids)})}
+        definitions = {
+            row["id"]: row for row in self.supabase.select("bot_definitions", filters={"id": ("in", definition_ids)})
+        }
+        support = self._build_marketplace_support_maps(rows=rows, definitions=definitions)
+
+        overview_rows: list[dict[str, Any]] = []
+        for row in rows:
+            runtime = runtimes.get(row["runtime_id"])
+            definition = definitions.get(row["bot_definition_id"])
+            if runtime is None or definition is None:
+                continue
+            snapshot = {
+                "runtime_id": row["runtime_id"],
+                "rank": row["rank"],
+                "pnl_total": row["pnl_total"],
+                "pnl_unrealized": row["pnl_unrealized"],
+                "win_streak": row["win_streak"],
+                "drawdown": row["drawdown"],
+                "captured_at": row["captured_at"],
+            }
+            context = self._build_marketplace_overview_context(runtime=runtime, definition=definition, latest_snapshot=snapshot)
+            creator_id = str(definition["user_id"])
+            copy_stats = support["copy_stats_by_runtime"].get(
+                str(row["runtime_id"]),
+                {"mirror_count": 0, "active_mirror_count": 0, "clone_count": 0},
+            )
+            publishing = support["publishing_by_definition"].get(
+                str(row["bot_definition_id"]),
+                {
+                    "visibility": "public",
+                    "access_mode": "public",
+                    "publish_state": "published",
+                    "hero_headline": "",
+                    "access_note": "",
+                    "featured_collection_title": None,
+                    "featured_rank": 0,
+                    "is_featured": False,
+                    "invite_count": 0,
+                },
+            )
+            overview_rows.append(
+                {
+                    **row,
+                    "trust": context["trust"],
+                    "drift": context["drift"],
+                    "passport": {},
+                    "copy_stats": copy_stats,
+                    "publishing": publishing,
+                    "_creator_id": creator_id,
+                }
+            )
+
+        creator_summaries = self._build_marketplace_creator_summary_map(overview_rows=overview_rows, support=support)
+        hydrated_rows: list[dict[str, Any]] = []
+        for row in overview_rows:
+            creator_id = str(row.get("_creator_id") or "")
+            hydrated_rows.append(
+                {
+                    key: value
+                    for key, value in {
+                        **row,
+                        "creator": creator_summaries.get(creator_id, {}),
+                    }.items()
+                    if key != "_creator_id"
+                }
+            )
+        return hydrated_rows
+
+    def _build_marketplace_support_maps(
+        self,
+        *,
+        rows: list[dict[str, Any]],
+        definitions: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        runtime_ids = [str(row["runtime_id"]) for row in rows]
+        definition_ids = [str(row["bot_definition_id"]) for row in rows]
+        creator_id_by_runtime = {
+            str(row["runtime_id"]): str((definitions.get(row["bot_definition_id"]) or {}).get("user_id") or "")
+            for row in rows
+        }
+        creator_ids = sorted({creator_id for creator_id in creator_id_by_runtime.values() if creator_id})
+
+        relationships = (
+            self.supabase.select("bot_copy_relationships", filters={"source_runtime_id": ("in", runtime_ids)})
+            if runtime_ids
+            else []
+        )
+        publishing_rows = (
+            self.supabase.select("bot_publishing_settings", filters={"bot_definition_id": ("in", definition_ids)})
+            if definition_ids
+            else []
+        )
+        invite_rows = (
+            []
+        )
+        featured_rows = (
+            self._select_featured_rows(filters={"bot_definition_id": ("in", definition_ids), "active": True})
+            if definition_ids
+            else []
+        )
+        users = self.supabase.select("users", filters={"id": ("in", creator_ids)}) if creator_ids else []
+        profiles = (
+            self.supabase.select("creator_marketplace_profiles", filters={"user_id": ("in", creator_ids)})
+            if creator_ids
+            else []
+        )
+        clone_rows = (
+            self.supabase.select("bot_clones", filters={"source_bot_definition_id": ("in", definition_ids)})
+            if definition_ids
+            else []
+        )
+
+        invite_count_by_definition: dict[str, int] = defaultdict(int)
+        for row in invite_rows:
+            invite_count_by_definition[str(row.get("bot_definition_id") or "")] += 1
+
+        featured_by_definition = {str(row.get("bot_definition_id") or "") for row in featured_rows}
+
+        publishing_by_definition: dict[str, dict[str, Any]] = {}
+        for row in publishing_rows:
+            bot_definition_id = str(row.get("bot_definition_id") or "")
+            publishing_by_definition[bot_definition_id] = {
+                "visibility": row.get("visibility") or "public",
+                "access_mode": row.get("access_mode") or "public",
+                "publish_state": row.get("publish_state") or "published",
+                "hero_headline": row.get("hero_headline") or "",
+                "access_note": row.get("access_note") or "",
+                "featured_collection_title": row.get("featured_collection_title"),
+                "featured_rank": int(row.get("featured_rank") or 0),
+                "is_featured": bot_definition_id in featured_by_definition,
+                "invite_count": invite_count_by_definition.get(bot_definition_id, 0),
+            }
+        for definition_id in definition_ids:
+            publishing_by_definition.setdefault(
+                definition_id,
+                {
+                    "visibility": "public",
+                    "access_mode": "public",
+                    "publish_state": "published",
+                    "hero_headline": "",
+                    "access_note": "",
+                    "featured_collection_title": None,
+                    "featured_rank": 0,
+                    "is_featured": definition_id in featured_by_definition,
+                    "invite_count": invite_count_by_definition.get(definition_id, 0),
+                },
+            )
+
+        relationships_by_runtime: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        follower_ids_by_creator: dict[str, set[str]] = defaultdict(set)
+        mirror_count_by_creator: dict[str, int] = defaultdict(int)
+        active_mirror_count_by_creator: dict[str, int] = defaultdict(int)
+        copy_stats_by_runtime: dict[str, dict[str, int]] = {}
+        for relationship in relationships:
+            runtime_id = str(relationship.get("source_runtime_id") or "")
+            relationships_by_runtime[runtime_id].append(relationship)
+            creator_id = creator_id_by_runtime.get(runtime_id) or ""
+            if not creator_id:
+                continue
+            mirror_count_by_creator[creator_id] += 1
+            if str(relationship.get("status") or "") == "active":
+                active_mirror_count_by_creator[creator_id] += 1
+            follower_user_id = str(relationship.get("follower_user_id") or "")
+            if follower_user_id:
+                follower_ids_by_creator[creator_id].add(follower_user_id)
+
+        clone_count_by_definition: dict[str, int] = defaultdict(int)
+        clone_count_by_creator: dict[str, int] = defaultdict(int)
+        creator_id_by_definition = {
+            str(definition_id): str(definition.get("user_id") or "") for definition_id, definition in definitions.items()
+        }
+        for clone in clone_rows:
+            definition_id = str(clone.get("source_bot_definition_id") or "")
+            clone_count_by_definition[definition_id] += 1
+            creator_id = creator_id_by_definition.get(definition_id) or ""
+            if creator_id:
+                clone_count_by_creator[creator_id] += 1
+
+        public_bot_count_by_creator: dict[str, int] = defaultdict(int)
+        active_runtime_count_by_creator: dict[str, int] = defaultdict(int)
+        for row in rows:
+            runtime_id = str(row["runtime_id"])
+            definition_id = str(row["bot_definition_id"])
+            creator_id = creator_id_by_runtime.get(runtime_id) or ""
+            row_relationships = relationships_by_runtime.get(runtime_id, [])
+            copy_stats_by_runtime[runtime_id] = {
+                "mirror_count": len(row_relationships),
+                "active_mirror_count": len(
+                    [relationship for relationship in row_relationships if str(relationship.get("status") or "") == "active"]
+                ),
+                "clone_count": clone_count_by_definition.get(definition_id, 0),
+            }
+            if not creator_id:
+                continue
+            public_bot_count_by_creator[creator_id] += 1
+            active_runtime_count_by_creator[creator_id] += 1
+
+        featured_bot_count_by_creator: dict[str, int] = defaultdict(int)
+        for featured in featured_rows:
+            creator_id = creator_id_by_definition.get(str(featured.get("bot_definition_id") or "")) or ""
+            if creator_id:
+                featured_bot_count_by_creator[creator_id] += 1
+
+        return {
+            "publishing_by_definition": publishing_by_definition,
+            "copy_stats_by_runtime": copy_stats_by_runtime,
+            "users_by_creator": {str(row.get("id") or ""): row for row in users},
+            "profiles_by_creator": {str(row.get("user_id") or ""): row for row in profiles},
+            "follower_count_by_creator": {creator_id: len(followers) for creator_id, followers in follower_ids_by_creator.items()},
+            "mirror_count_by_creator": mirror_count_by_creator,
+            "active_mirror_count_by_creator": active_mirror_count_by_creator,
+            "clone_count_by_creator": clone_count_by_creator,
+            "public_bot_count_by_creator": public_bot_count_by_creator,
+            "active_runtime_count_by_creator": active_runtime_count_by_creator,
+            "featured_bot_count_by_creator": featured_bot_count_by_creator,
+        }
+
+    def _build_marketplace_overview_context(
+        self,
+        *,
+        runtime: dict[str, Any],
+        definition: dict[str, Any],
+        latest_snapshot: dict[str, Any],
+    ) -> dict[str, Any]:
+        health_metrics = self._marketplace_health_metrics(runtime)
+        drift = self._marketplace_drift_summary()
+        trust = self.trust_service._build_trust(
+            runtime=runtime,
+            latest_snapshot=latest_snapshot,
+            health_metrics=health_metrics,
+            drift=drift,
+        )
+        return {
+            "trust": trust,
+            "drift": drift,
+        }
+
+    def _build_marketplace_creator_summary_map(
+        self,
+        *,
+        overview_rows: list[dict[str, Any]],
+        support: dict[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        rows_by_creator: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in overview_rows:
+            creator_id = str(row.get("_creator_id") or "")
+            if creator_id:
+                rows_by_creator[creator_id].append(row)
+
+        creator_summaries: dict[str, dict[str, Any]] = {}
+        for creator_id, creator_rows in rows_by_creator.items():
+            user = support["users_by_creator"].get(creator_id)
+            profile = support["profiles_by_creator"].get(creator_id)
+            display_name = (
+                str((profile or {}).get("display_name") or (user or {}).get("display_name") or (user or {}).get("wallet_address") or creator_id[:8])
+            )[:80]
+            trust_scores = [int(row["trust"]["trust_score"]) for row in creator_rows]
+            average_trust_score = round(sum(trust_scores) / len(trust_scores)) if trust_scores else 0
+            ranked_rows = [int(row["rank"]) for row in creator_rows if row.get("rank") is not None]
+            best_rank = min(ranked_rows) if ranked_rows else None
+            mirror_count = int(support["mirror_count_by_creator"].get(creator_id, 0))
+            active_mirror_count = int(support["active_mirror_count_by_creator"].get(creator_id, 0))
+            clone_count = int(support["clone_count_by_creator"].get(creator_id, 0))
+            public_bot_count = int(support["public_bot_count_by_creator"].get(creator_id, len(creator_rows)))
+            active_runtime_count = int(support["active_runtime_count_by_creator"].get(creator_id, len(creator_rows)))
+            reputation_score = self.trust_service._creator_reputation_score(
+                average_trust_score=average_trust_score,
+                active_mirror_count=active_mirror_count,
+                mirror_count=mirror_count,
+                clone_count=clone_count,
+                public_bot_count=public_bot_count,
+                best_rank=best_rank,
+            )
+            reputation_label = self.trust_service._reputation_label(reputation_score)
+            tags = self.trust_service._creator_tags(
+                reputation_label=reputation_label,
+                best_rank=best_rank,
+                active_mirror_count=active_mirror_count,
+                public_bot_count=public_bot_count,
+            )
+            follower_count = int(support["follower_count_by_creator"].get(creator_id, 0))
+            featured_bot_count = int(support["featured_bot_count_by_creator"].get(creator_id, 0))
+            creator_summaries[creator_id] = {
+                "creator_id": creator_id,
+                "wallet_address": str((user or {}).get("wallet_address") or ""),
+                "display_name": display_name,
+                "public_bot_count": public_bot_count,
+                "active_runtime_count": active_runtime_count,
+                "mirror_count": mirror_count,
+                "active_mirror_count": active_mirror_count,
+                "clone_count": clone_count,
+                "average_trust_score": average_trust_score,
+                "best_rank": best_rank,
+                "reputation_score": reputation_score,
+                "reputation_label": reputation_label,
+                "summary": self.trust_service._creator_summary(
+                    display_name=display_name,
+                    public_bot_count=public_bot_count,
+                    active_mirror_count=active_mirror_count,
+                    average_trust_score=average_trust_score,
+                ),
+                "tags": tags,
+                "headline": str((profile or {}).get("headline") or "") or "Publishing live strategies with clear guardrails.",
+                "bio": str((profile or {}).get("bio") or ""),
+                "slug": str((profile or {}).get("slug") or ""),
+                "featured_collection_title": str((profile or {}).get("featured_collection_title") or "Featured strategies"),
+                "follower_count": follower_count,
+                "featured_bot_count": featured_bot_count,
+                "marketplace_reach_score": self._marketplace_reach_score(
+                    active_mirror_count=active_mirror_count,
+                    follower_count=follower_count,
+                    featured_bot_count=featured_bot_count,
+                    public_bot_count=public_bot_count,
+                    reputation_score=reputation_score,
+                ),
+            }
+        return creator_summaries
+
+    def _marketplace_health_metrics(self, runtime: dict[str, Any]) -> dict[str, Any]:
+        runtime_updated_at = self.trust_service._as_datetime(runtime.get("updated_at") or datetime.now(tz=UTC).isoformat())
+        heartbeat_age_seconds = max(0, int((datetime.now(tz=UTC) - runtime_updated_at).total_seconds()))
+        health = self.trust_service._health_label(
+            runtime_status=str(runtime.get("status") or "draft"),
+            heartbeat_age_seconds=heartbeat_age_seconds,
+            failure_rate_pct=0.0,
+        )
+        uptime_pct = max(0.0, min(99.9, float(self.trust_service.HEALTH_UPTIME_MAP.get(health, 56.0))))
+        return {
+            "health": health,
+            "heartbeat_age_seconds": heartbeat_age_seconds,
+            "latest_event_at": runtime_updated_at.isoformat(),
+            "failure_rate_pct": 0.0,
+            "actions_total": 0,
+            "action_error_count": 0,
+            "uptime_pct": uptime_pct,
+        }
+
+    @staticmethod
+    def _marketplace_drift_summary() -> dict[str, Any]:
+        return {
+            "status": "unverified",
+            "score": 48,
+            "summary": "Detailed replay drift is available on the runtime profile.",
+            "live_pnl_pct": None,
+            "benchmark_pnl_pct": None,
+            "return_gap_pct": None,
+            "live_drawdown_pct": 0.0,
+            "benchmark_drawdown_pct": None,
+            "drawdown_gap_pct": None,
+            "benchmark_run_id": None,
+            "benchmark_completed_at": None,
+        }
 
     def _attach_marketplace_fields(self, row: dict[str, Any]) -> dict[str, Any]:
         invites = self._list_invites(bot_id=str(row["bot_definition_id"]))
@@ -821,6 +1246,9 @@ class CreatorMarketplaceService:
         self._marketplace_rows_cache_captured_at = None
         self._marketplace_rows_cache_built_at = None
         self._marketplace_rows_cache_limit = 0
+        self._marketplace_overview_rows_cache = []
+        self._marketplace_overview_rows_cache_built_at = None
+        self._marketplace_overview_rows_cache_limit = 0
 
     def _schedule_public_leaderboard_refresh(self, *, limit: int) -> None:
         task = self._leaderboard_refresh_task
@@ -836,3 +1264,14 @@ class CreatorMarketplaceService:
         finally:
             self._clear_marketplace_cache()
             self._leaderboard_refresh_task = None
+
+    async def _background_warm_loop(self) -> None:
+        try:
+            await self.warm_marketplace_overview(limit=120)
+            while True:
+                await asyncio.sleep(max(15, SNAPSHOT_TTL_SECONDS // 2))
+                await self.warm_marketplace_overview(limit=120)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Marketplace background warm loop stopped unexpectedly")

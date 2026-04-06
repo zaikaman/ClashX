@@ -11,8 +11,8 @@ import { TrustBadgeStrip } from "@/components/leaderboard/trust-badge-strip";
 import {
   fetchMarketplaceOverview,
   type CreatorHighlight,
-  type FeaturedShelf,
-  type MarketplaceDiscoveryRow,
+  type MarketplaceOverviewDiscoveryRow,
+  type MarketplaceOverviewFeaturedShelf,
 } from "@/lib/public-bots";
 
 const BotMirrorModal = dynamic(
@@ -42,13 +42,13 @@ function getSeasonContext(now = new Date()) {
 }
 
 export default function BotLeaderboardPage() {
-  const [rows, setRows] = useState<MarketplaceDiscoveryRow[]>([]);
-  const [featuredShelves, setFeaturedShelves] = useState<FeaturedShelf[]>([]);
+  const [rows, setRows] = useState<MarketplaceOverviewDiscoveryRow[]>([]);
+  const [featuredShelves, setFeaturedShelves] = useState<MarketplaceOverviewFeaturedShelf[]>([]);
   const [creators, setCreators] = useState<CreatorHighlight[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selectedForMirror, setSelectedForMirror] = useState<MarketplaceDiscoveryRow | null>(null);
-  const [selectedForClone, setSelectedForClone] = useState<MarketplaceDiscoveryRow | null>(null);
+  const [selectedForMirror, setSelectedForMirror] = useState<MarketplaceOverviewDiscoveryRow | null>(null);
+  const [selectedForClone, setSelectedForClone] = useState<MarketplaceOverviewDiscoveryRow | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();

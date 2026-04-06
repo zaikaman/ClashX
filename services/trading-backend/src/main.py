@@ -12,6 +12,7 @@ from src.api.bot_copy import router as bot_copy_router
 from src.api.bots import router as bots_router
 from src.api.builder import router as builder_router
 from src.api.marketplace import router as marketplace_router
+from src.api.marketplace import marketplace_service
 from src.api.pacifica import router as pacifica_router
 from src.api.portfolios import router as portfolios_router
 from src.api.stream import router as stream_router
@@ -84,6 +85,7 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def startup() -> None:
+        await marketplace_service.start_background_warmup()
         if not settings.background_workers_enabled:
             return
         await market_data_service.start()
@@ -99,6 +101,7 @@ def create_app() -> FastAPI:
         running_bot_copy_worker: BotCopyWorker | None = getattr(app.state, "bot_copy_worker", None)
         running_bot_runtime_worker: BotRuntimeWorker | None = getattr(app.state, "bot_runtime_worker", None)
         running_portfolio_allocator_worker: PortfolioAllocatorWorker | None = getattr(app.state, "portfolio_allocator_worker", None)
+        await marketplace_service.stop_background_warmup()
         if running_bot_copy_worker is not None:
             with contextlib.suppress(asyncio.CancelledError):
                 await running_bot_copy_worker.stop()

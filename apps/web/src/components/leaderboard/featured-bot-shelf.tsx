@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { type FeaturedShelf } from "@/lib/public-bots";
+import { type FeaturedShelf, type MarketplaceOverviewFeaturedShelf } from "@/lib/public-bots";
 
 import { TrustBadgeStrip } from "./trust-badge-strip";
 
@@ -9,7 +9,7 @@ export function FeaturedBotShelf({
   onMirror,
   onClone,
 }: {
-  shelf: FeaturedShelf;
+  shelf: FeaturedShelf | MarketplaceOverviewFeaturedShelf;
   onMirror?: (runtimeId: string) => void;
   onClone?: (runtimeId: string) => void;
 }) {

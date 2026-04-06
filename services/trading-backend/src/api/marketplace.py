@@ -82,9 +82,29 @@ class CreatorHighlightResponse(BaseModel):
     spotlight_bot: dict[str, Any]
 
 
+class MarketplaceOverviewDiscoveryRowResponse(BaseModel):
+    runtime_id: str
+    bot_definition_id: str
+    bot_name: str
+    strategy_type: str
+    rank: int
+    pnl_total: float
+    trust: dict[str, Any]
+    creator: dict[str, Any]
+    copy_stats: MarketplaceCopyStatsResponse
+    publishing: MarketplacePublishingSummaryResponse
+
+
+class MarketplaceOverviewFeaturedShelfResponse(BaseModel):
+    collection_key: str
+    title: str
+    subtitle: str
+    bots: list[MarketplaceOverviewDiscoveryRowResponse]
+
+
 class MarketplaceOverviewResponse(BaseModel):
-    discover: list[MarketplaceDiscoveryRowResponse]
-    featured: list[FeaturedShelfResponse]
+    discover: list[MarketplaceOverviewDiscoveryRowResponse]
+    featured: list[MarketplaceOverviewFeaturedShelfResponse]
     creators: list[CreatorHighlightResponse]
 
 

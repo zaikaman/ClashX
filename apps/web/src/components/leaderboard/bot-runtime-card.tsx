@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { driftTone, type LeaderboardRow, type MarketplaceDiscoveryRow } from "@/lib/public-bots";
+import { driftTone, type LeaderboardRow, type MarketplaceDiscoveryRow, type MarketplaceOverviewDiscoveryRow } from "@/lib/public-bots";
 
 import { TrustBadgeStrip } from "./trust-badge-strip";
 
@@ -9,11 +9,14 @@ export function BotRuntimeCard({
   onMirror,
   onClone,
 }: {
-  row: LeaderboardRow | MarketplaceDiscoveryRow;
+  row: LeaderboardRow | MarketplaceDiscoveryRow | MarketplaceOverviewDiscoveryRow;
   onMirror?: () => void;
   onClone?: () => void;
 }) {
-  const marketplaceRow = "copy_stats" in row ? row : null;
+  const isMarketplaceRow = "copy_stats" in row;
+  const marketplaceRow = isMarketplaceRow ? row : null;
+  const fourthMetricValue = isMarketplaceRow ? `${row.copy_stats.active_mirror_count}` : row.drift.status;
+  const fourthMetricAccent = isMarketplaceRow ? "text-[#74b97f]" : driftTone(row.drift.status);
 
   return (
     <article className="grid gap-5 rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5 transition-colors duration-200 hover:border-[rgba(255,255,255,0.12)]">
@@ -42,11 +45,7 @@ export function BotRuntimeCard({
         <Metric label="Total PnL" value={`${row.pnl_total >= 0 ? "+" : ""}${row.pnl_total.toFixed(2)}`} accent={row.pnl_total >= 0 ? "text-[#74b97f]" : "text-[#ff8a9b]"} />
         <Metric label="Trust" value={`${row.trust.trust_score}`} accent="text-neutral-50" />
         <Metric label="Risk grade" value={row.trust.risk_grade} accent="text-[#dce85d]" />
-        <Metric
-          label={marketplaceRow ? "Live mirrors" : "Drift"}
-          value={marketplaceRow ? `${marketplaceRow.copy_stats.active_mirror_count}` : row.drift.status}
-          accent={marketplaceRow ? "text-[#74b97f]" : driftTone(row.drift.status)}
-        />
+        <Metric label={marketplaceRow ? "Live mirrors" : "Drift"} value={fourthMetricValue} accent={fourthMetricAccent} />
       </div>
 
       <div className="grid gap-2 rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-4">

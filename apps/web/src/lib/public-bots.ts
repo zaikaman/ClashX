@@ -146,6 +146,18 @@ export type FeaturedShelf = {
   bots: MarketplaceDiscoveryRow[];
 };
 
+export type MarketplaceOverviewDiscoveryRow = Pick<
+  MarketplaceDiscoveryRow,
+  "runtime_id" | "bot_definition_id" | "bot_name" | "strategy_type" | "rank" | "pnl_total" | "trust" | "creator" | "copy_stats" | "publishing"
+>;
+
+export type MarketplaceOverviewFeaturedShelf = {
+  collection_key: string;
+  title: string;
+  subtitle: string;
+  bots: MarketplaceOverviewDiscoveryRow[];
+};
+
 export type CreatorHighlight = MarketplaceCreatorSummary & {
   spotlight_bot: {
     runtime_id: string;
@@ -158,8 +170,8 @@ export type CreatorHighlight = MarketplaceCreatorSummary & {
 };
 
 export type MarketplaceOverview = {
-  discover: MarketplaceDiscoveryRow[];
-  featured: FeaturedShelf[];
+  discover: MarketplaceOverviewDiscoveryRow[];
+  featured: MarketplaceOverviewFeaturedShelf[];
   creators: CreatorHighlight[];
 };
 
