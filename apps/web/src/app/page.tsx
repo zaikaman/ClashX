@@ -8,7 +8,7 @@ import {
   Activity, ShieldCheck, Layers, Sparkles, Menu, X,
   Github, Twitter, Send, FileText, BookOpen
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { ClashXLogo } from '@/components/clashx-logo';
 
@@ -252,32 +252,28 @@ const Footer = () => {
 const Home = () => {
   const [isMobile, setIsMobile] = useState(false);
   const [isFeaturesSectionVisible, setIsFeaturesSectionVisible] = useState(false);
+  const unicornInitializedRef = useRef(false);
 
+  const initUnicorn = () => {
+    if (typeof window === 'undefined' || unicornInitializedRef.current) {
+      return;
+    }
+
+    const UnicornStudio = (window as typeof window & { UnicornStudio?: { init: () => void } }).UnicornStudio;
+    if (!UnicornStudio) {
+      return;
+    }
+
+    try {
+      UnicornStudio.init();
+      unicornInitializedRef.current = true;
+    } catch (error) {
+      console.error('Error initializing UnicornStudio:', error);
+    }
+  };
 
   useEffect(() => {
-    // The animated background is decorative, so it can load after the route is interactive.
-    const initUnicorn = () => {
-      const UnicornStudio = (window as any).UnicornStudio;
-      if (UnicornStudio) {
-        try {
-          UnicornStudio.init();
-        } catch (error) {
-          console.error('Error initializing UnicornStudio:', error);
-        }
-      }
-    };
-
-    // Check if already loaded
-    if ((window as any).UnicornStudio) {
-      initUnicorn();
-    } else {
-      const unicornScript = document.querySelector<HTMLScriptElement>('script[src="/unicornStudio.umd.js"]');
-      if (!unicornScript) {
-        return;
-      }
-      unicornScript.addEventListener('load', initUnicorn, { once: true });
-      return () => unicornScript.removeEventListener('load', initUnicorn);
-    }
+    initUnicorn();
   }, []);
 
 
@@ -398,7 +394,7 @@ const Home = () => {
 
   return (
     <div className="min-h-screen bg-app flex flex-col">
-      <Script src="/unicornStudio.umd.js" strategy="lazyOnload" />
+      <Script src="/unicornStudio.umd.js" strategy="afterInteractive" onLoad={initUnicorn} />
       <LandingHeader />
 
       <main className="flex-grow">
