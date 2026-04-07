@@ -11,17 +11,38 @@ class BuilderCatalogService:
     _TEMPLATES = [
         {
             "id": "momentum-breakout-v1",
-            "name": "Momentum Breakout",
-            "description": "Enters on trend confirmation and exits via TP/SL guards.",
+            "name": "Multi-Market Trend Scalper",
+            "description": "Trades fast long continuation across selected markets once lower and higher timeframe trend agree.",
             "authoring_mode": "visual",
-            "risk_profile": "moderate",
+            "risk_profile": "active",
         },
         {
             "id": "mean-revert-v1",
-            "name": "Mean Reversion",
-            "description": "Trades deviations from anchor bands with strict cooldown.",
+            "name": "Exhaustion Fade Short",
+            "description": "Sells sharp intraday extensions after upper-band stretch, overheated RSI, and liquidity confirmation line up.",
             "authoring_mode": "visual",
-            "risk_profile": "moderate",
+            "risk_profile": "balanced",
+        },
+        {
+            "id": "support-exit-v1",
+            "name": "Trend Pullback Reclaim",
+            "description": "Buys dip-and-reclaim setups inside an existing uptrend so the bot can keep cycling with the market.",
+            "authoring_mode": "visual",
+            "risk_profile": "balanced",
+        },
+        {
+            "id": "twap-trend-v1",
+            "name": "Breakdown Momentum Short",
+            "description": "Presses fresh downside breaks when intraday weakness lines up with the broader trend.",
+            "authoring_mode": "visual",
+            "risk_profile": "active",
+        },
+        {
+            "id": "maker-reclaim-v1",
+            "name": "Oversold Bounce Catcher",
+            "description": "Buys fast washouts after lower-band expansion and washed-out RSI create a short-term rebound setup.",
+            "authoring_mode": "visual",
+            "risk_profile": "active",
         },
     ]
     _CONDITION_LABELS = {

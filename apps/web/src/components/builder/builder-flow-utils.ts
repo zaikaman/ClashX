@@ -698,61 +698,52 @@ export function buildPrimaryRoute(nodes: BuilderFlowNode[], edges: BuilderFlowEd
 
 function buildMomentumBreakoutGraph(): BuilderGraphData {
   const trendCross = createCondition("ema_crosses_above");
-  trendCross.symbol = "BTC";
-  trendCross.timeframe = "15m";
-  trendCross.fast_period = 9;
-  trendCross.slow_period = 21;
+  trendCross.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  trendCross.timeframe = "5m";
+  trendCross.fast_period = 5;
+  trendCross.slow_period = 13;
 
-  const momentumGate = createCondition("rsi_above");
-  momentumGate.symbol = "BTC";
-  momentumGate.timeframe = "15m";
-  momentumGate.period = 14;
-  momentumGate.value = 58;
+  const higherTimeframeTrend = createCondition("higher_timeframe_sma_above");
+  higherTimeframeTrend.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  higherTimeframeTrend.timeframe = "5m";
+  higherTimeframeTrend.secondary_timeframe = "1h";
+  higherTimeframeTrend.period = 50;
 
-  const confirmation = createCondition("macd_crosses_above_signal");
-  confirmation.symbol = "BTC";
-  confirmation.timeframe = "1h";
-  confirmation.fast_period = 12;
-  confirmation.slow_period = 26;
-  confirmation.signal_period = 9;
+  const liquidityGate = createCondition("volume_above");
+  liquidityGate.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  liquidityGate.value = 10000000;
 
   const cooldown = createCondition("cooldown_elapsed");
-  cooldown.symbol = "BTC";
-  cooldown.seconds = 180;
+  cooldown.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  cooldown.seconds = 45;
 
   const longEntry = createAction("open_long");
-  longEntry.symbol = "BTC";
-  longEntry.size_usd = 240;
+  longEntry.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  longEntry.size_usd = 90;
   longEntry.leverage = 4;
 
-  const leverageAdjust = createAction("update_leverage");
-  leverageAdjust.symbol = "BTC";
-  leverageAdjust.leverage = 4;
-
   const protection = createAction("set_tpsl");
-  protection.symbol = "BTC";
-  protection.take_profit_pct = 2.8;
-  protection.stop_loss_pct = 1.0;
+  protection.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  protection.take_profit_pct = 0.8;
+  protection.stop_loss_pct = 0.4;
 
   const nodes: BuilderFlowNode[] = [
     createEntryNode(),
     createConditionNode(trendCross, { x: 300, y: 220 }),
-    createConditionNode(momentumGate, { x: 600, y: 220 }),
-    createConditionNode(confirmation, { x: 900, y: 220 }),
+    createConditionNode(higherTimeframeTrend, { x: 600, y: 220 }),
+    createConditionNode(liquidityGate, { x: 900, y: 220 }),
     createConditionNode(cooldown, { x: 1200, y: 220 }),
     createActionNode(longEntry, { x: 1500, y: 156 }),
-    createActionNode(leverageAdjust, { x: 1800, y: 156 }),
-    createActionNode(protection, { x: 2100, y: 156 }),
+    createActionNode(protection, { x: 1800, y: 156 }),
   ];
 
   const edges: BuilderFlowEdge[] = [
     createCanvasEdge(ENTRY_NODE_ID, trendCross.id),
-    createCanvasEdge(trendCross.id, momentumGate.id),
-    createCanvasEdge(momentumGate.id, confirmation.id),
-    createCanvasEdge(confirmation.id, cooldown.id),
+    createCanvasEdge(trendCross.id, higherTimeframeTrend.id),
+    createCanvasEdge(higherTimeframeTrend.id, liquidityGate.id),
+    createCanvasEdge(liquidityGate.id, cooldown.id),
     createCanvasEdge(cooldown.id, longEntry.id),
-    createCanvasEdge(longEntry.id, leverageAdjust.id),
-    createCanvasEdge(leverageAdjust.id, protection.id),
+    createCanvasEdge(longEntry.id, protection.id),
   ];
 
   return { nodes, edges };
@@ -760,226 +751,214 @@ function buildMomentumBreakoutGraph(): BuilderGraphData {
 
 function buildMeanReversionGraph(): BuilderGraphData {
   const overbought = createCondition("rsi_above");
-  overbought.symbol = "ETH";
-  overbought.timeframe = "15m";
+  overbought.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  overbought.timeframe = "5m";
   overbought.period = 14;
-  overbought.value = 72;
+  overbought.value = 71;
 
-  const exhaustion = createCondition("macd_crosses_below_signal");
-  exhaustion.symbol = "ETH";
-  exhaustion.timeframe = "30m";
-  exhaustion.fast_period = 12;
-  exhaustion.slow_period = 26;
-  exhaustion.signal_period = 9;
+  const exhaustion = createCondition("bollinger_above_upper");
+  exhaustion.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  exhaustion.timeframe = "5m";
+  exhaustion.period = 20;
+  exhaustion.value = 2;
 
-  const stretchedPrice = createCondition("price_above");
-  stretchedPrice.symbol = "ETH";
-  stretchedPrice.value = 2850;
+  const liquidityGate = createCondition("volume_above");
+  liquidityGate.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  liquidityGate.value = 10000000;
 
   const cooldown = createCondition("cooldown_elapsed");
-  cooldown.symbol = "ETH";
-  cooldown.seconds = 420;
+  cooldown.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  cooldown.seconds = 60;
 
   const shortEntry = createAction("open_short");
-  shortEntry.symbol = "ETH";
-  shortEntry.size_usd = 180;
+  shortEntry.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  shortEntry.size_usd = 85;
   shortEntry.leverage = 3;
 
-  const leverageAdjust = createAction("update_leverage");
-  leverageAdjust.symbol = "ETH";
-  leverageAdjust.leverage = 3;
-
   const protection = createAction("set_tpsl");
-  protection.symbol = "ETH";
-  protection.take_profit_pct = 1.6;
-  protection.stop_loss_pct = 0.8;
+  protection.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  protection.take_profit_pct = 0.75;
+  protection.stop_loss_pct = 0.45;
 
   const nodes: BuilderFlowNode[] = [
     createEntryNode(),
     createConditionNode(overbought, { x: 300, y: 220 }),
     createConditionNode(exhaustion, { x: 600, y: 220 }),
-    createConditionNode(stretchedPrice, { x: 900, y: 220 }),
+    createConditionNode(liquidityGate, { x: 900, y: 220 }),
     createConditionNode(cooldown, { x: 1200, y: 220 }),
     createActionNode(shortEntry, { x: 1500, y: 156 }),
-    createActionNode(leverageAdjust, { x: 1800, y: 156 }),
-    createActionNode(protection, { x: 2100, y: 156 }),
+    createActionNode(protection, { x: 1800, y: 156 }),
   ];
 
   const edges: BuilderFlowEdge[] = [
     createCanvasEdge(ENTRY_NODE_ID, overbought.id),
     createCanvasEdge(overbought.id, exhaustion.id),
-    createCanvasEdge(exhaustion.id, stretchedPrice.id),
-    createCanvasEdge(stretchedPrice.id, cooldown.id),
+    createCanvasEdge(exhaustion.id, liquidityGate.id),
+    createCanvasEdge(liquidityGate.id, cooldown.id),
     createCanvasEdge(cooldown.id, shortEntry.id),
-    createCanvasEdge(shortEntry.id, leverageAdjust.id),
-    createCanvasEdge(leverageAdjust.id, protection.id),
+    createCanvasEdge(shortEntry.id, protection.id),
   ];
 
   return { nodes, edges };
 }
 
 function buildSupportExitGraph(): BuilderGraphData {
-  const hasPosition = createCondition("has_position");
-  hasPosition.symbol = "BTC";
+  const higherTimeframeTrend = createCondition("higher_timeframe_sma_above");
+  higherTimeframeTrend.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  higherTimeframeTrend.timeframe = "5m";
+  higherTimeframeTrend.secondary_timeframe = "1h";
+  higherTimeframeTrend.period = 50;
 
-  const sideMatch = createCondition("position_side_is");
-  sideMatch.symbol = "BTC";
-  sideMatch.side = "long";
+  const pullback = createCondition("rsi_below");
+  pullback.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  pullback.timeframe = "5m";
+  pullback.period = 14;
+  pullback.value = 42;
 
-  const trendLoss = createCondition("ema_crosses_below");
-  trendLoss.symbol = "BTC";
-  trendLoss.timeframe = "15m";
-  trendLoss.fast_period = 9;
-  trendLoss.slow_period = 21;
-
-  const momentumLoss = createCondition("macd_crosses_below_signal");
-  momentumLoss.symbol = "BTC";
-  momentumLoss.timeframe = "1h";
-  momentumLoss.fast_period = 12;
-  momentumLoss.slow_period = 26;
-  momentumLoss.signal_period = 9;
-
-  const supportLoss = createCondition("price_below");
-  supportLoss.symbol = "BTC";
-  supportLoss.value = 98500;
+  const reclaim = createCondition("ema_crosses_above");
+  reclaim.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  reclaim.timeframe = "5m";
+  reclaim.fast_period = 8;
+  reclaim.slow_period = 21;
 
   const cooldown = createCondition("cooldown_elapsed");
-  cooldown.symbol = "BTC";
-  cooldown.seconds = 120;
+  cooldown.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  cooldown.seconds = 75;
 
-  const closePosition = createAction("close_position");
-  closePosition.symbol = "BTC";
+  const longEntry = createAction("open_long");
+  longEntry.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  longEntry.size_usd = 95;
+  longEntry.leverage = 4;
+
+  const protection = createAction("set_tpsl");
+  protection.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  protection.take_profit_pct = 1.0;
+  protection.stop_loss_pct = 0.55;
 
   const nodes: BuilderFlowNode[] = [
     createEntryNode(),
-    createConditionNode(hasPosition, { x: 300, y: 220 }),
-    createConditionNode(sideMatch, { x: 600, y: 220 }),
-    createConditionNode(trendLoss, { x: 900, y: 220 }),
-    createConditionNode(momentumLoss, { x: 1200, y: 220 }),
-    createConditionNode(supportLoss, { x: 1500, y: 220 }),
-    createConditionNode(cooldown, { x: 1800, y: 220 }),
-    createActionNode(closePosition, { x: 2100, y: 156 }),
+    createConditionNode(higherTimeframeTrend, { x: 300, y: 220 }),
+    createConditionNode(pullback, { x: 600, y: 220 }),
+    createConditionNode(reclaim, { x: 900, y: 220 }),
+    createConditionNode(cooldown, { x: 1200, y: 220 }),
+    createActionNode(longEntry, { x: 1500, y: 156 }),
+    createActionNode(protection, { x: 1800, y: 156 }),
   ];
 
   const edges: BuilderFlowEdge[] = [
-    createCanvasEdge(ENTRY_NODE_ID, hasPosition.id),
-    createCanvasEdge(hasPosition.id, sideMatch.id),
-    createCanvasEdge(sideMatch.id, trendLoss.id),
-    createCanvasEdge(trendLoss.id, momentumLoss.id),
-    createCanvasEdge(momentumLoss.id, supportLoss.id),
-    createCanvasEdge(supportLoss.id, cooldown.id),
-    createCanvasEdge(cooldown.id, closePosition.id),
+    createCanvasEdge(ENTRY_NODE_ID, higherTimeframeTrend.id),
+    createCanvasEdge(higherTimeframeTrend.id, pullback.id),
+    createCanvasEdge(pullback.id, reclaim.id),
+    createCanvasEdge(reclaim.id, cooldown.id),
+    createCanvasEdge(cooldown.id, longEntry.id),
+    createCanvasEdge(longEntry.id, protection.id),
   ];
 
   return { nodes, edges };
 }
 
 function buildTwapTrendGraph(): BuilderGraphData {
-  const trendCross = createCondition("ema_crosses_above");
-  trendCross.symbol = "SOL";
-  trendCross.timeframe = "30m";
-  trendCross.fast_period = 8;
-  trendCross.slow_period = 34;
+  const trendCross = createCondition("ema_crosses_below");
+  trendCross.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  trendCross.timeframe = "5m";
+  trendCross.fast_period = 5;
+  trendCross.slow_period = 13;
 
-  const followThrough = createCondition("macd_crosses_above_signal");
-  followThrough.symbol = "SOL";
-  followThrough.timeframe = "1h";
+  const followThrough = createCondition("higher_timeframe_sma_below");
+  followThrough.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  followThrough.timeframe = "5m";
+  followThrough.secondary_timeframe = "1h";
+  followThrough.period = 50;
+
+  const breakdown = createCondition("breakout_below_recent_low");
+  breakdown.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  breakdown.timeframe = "5m";
+  breakdown.period = 12;
 
   const cooldown = createCondition("cooldown_elapsed");
-  cooldown.symbol = "SOL";
-  cooldown.seconds = 600;
+  cooldown.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  cooldown.seconds = 45;
 
-  const twapEntry = createAction("place_twap_order");
-  twapEntry.symbol = "SOL";
-  twapEntry.side = "long";
-  twapEntry.quantity = 12;
-  twapEntry.leverage = 2;
-  twapEntry.duration_seconds = 1800;
-  twapEntry.slippage_percent = 0.4;
-  twapEntry.client_order_id = "sol-build-twap";
+  const shortEntry = createAction("open_short");
+  shortEntry.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  shortEntry.size_usd = 90;
+  shortEntry.leverage = 4;
 
   const protection = createAction("set_tpsl");
-  protection.symbol = "SOL";
-  protection.take_profit_pct = 4.2;
-  protection.stop_loss_pct = 1.5;
-
-  const cancelTwap = createAction("cancel_twap_order");
-  cancelTwap.symbol = "SOL";
-  cancelTwap.client_order_id = "sol-build-twap";
+  protection.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  protection.take_profit_pct = 0.9;
+  protection.stop_loss_pct = 0.45;
 
   const nodes: BuilderFlowNode[] = [
     createEntryNode(),
     createConditionNode(trendCross, { x: 300, y: 220 }),
     createConditionNode(followThrough, { x: 600, y: 220 }),
-    createConditionNode(cooldown, { x: 900, y: 220 }),
-    createActionNode(twapEntry, { x: 1200, y: 156 }),
-    createActionNode(protection, { x: 1500, y: 156 }),
-    createActionNode(cancelTwap, { x: 1800, y: 156 }),
+    createConditionNode(breakdown, { x: 900, y: 220 }),
+    createConditionNode(cooldown, { x: 1200, y: 220 }),
+    createActionNode(shortEntry, { x: 1500, y: 156 }),
+    createActionNode(protection, { x: 1800, y: 156 }),
   ];
 
   const edges: BuilderFlowEdge[] = [
     createCanvasEdge(ENTRY_NODE_ID, trendCross.id),
     createCanvasEdge(trendCross.id, followThrough.id),
-    createCanvasEdge(followThrough.id, cooldown.id),
-    createCanvasEdge(cooldown.id, twapEntry.id),
-    createCanvasEdge(twapEntry.id, protection.id),
-    createCanvasEdge(protection.id, cancelTwap.id),
+    createCanvasEdge(followThrough.id, breakdown.id),
+    createCanvasEdge(breakdown.id, cooldown.id),
+    createCanvasEdge(cooldown.id, shortEntry.id),
+    createCanvasEdge(shortEntry.id, protection.id),
   ];
 
   return { nodes, edges };
 }
 
 function buildMakerReclaimGraph(): BuilderGraphData {
-  const reclaim = createCondition("price_above");
-  reclaim.symbol = "BTC";
-  reclaim.value = 100800;
+  const reclaim = createCondition("bollinger_below_lower");
+  reclaim.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  reclaim.timeframe = "5m";
+  reclaim.period = 20;
+  reclaim.value = 2;
 
-  const trendCross = createCondition("ema_crosses_above");
-  trendCross.symbol = "BTC";
+  const trendCross = createCondition("rsi_below");
+  trendCross.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
   trendCross.timeframe = "5m";
-  trendCross.fast_period = 9;
-  trendCross.slow_period = 21;
+  trendCross.period = 14;
+  trendCross.value = 29;
+
+  const liquidityGate = createCondition("volume_above");
+  liquidityGate.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  liquidityGate.value = 10000000;
 
   const cooldown = createCondition("cooldown_elapsed");
-  cooldown.symbol = "BTC";
-  cooldown.seconds = 90;
+  cooldown.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  cooldown.seconds = 60;
 
-  const makerEntry = createAction("place_limit_order");
-  makerEntry.symbol = "BTC";
-  makerEntry.side = "long";
-  makerEntry.quantity = 0.015;
-  makerEntry.leverage = 3;
-  makerEntry.price = 100400;
-  makerEntry.tif = "GTC";
-  makerEntry.client_order_id = "btc-maker-reclaim";
+  const longEntry = createAction("open_long");
+  longEntry.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  longEntry.size_usd = 80;
+  longEntry.leverage = 3;
 
   const protection = createAction("set_tpsl");
-  protection.symbol = "BTC";
-  protection.take_profit_pct = 1.9;
-  protection.stop_loss_pct = 0.7;
-
-  const cleanup = createAction("cancel_all_orders");
-  cleanup.symbol = "BTC";
-  cleanup.all_symbols = false;
-  cleanup.exclude_reduce_only = true;
+  protection.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
+  protection.take_profit_pct = 0.7;
+  protection.stop_loss_pct = 0.4;
 
   const nodes: BuilderFlowNode[] = [
     createEntryNode(),
     createConditionNode(reclaim, { x: 300, y: 220 }),
     createConditionNode(trendCross, { x: 600, y: 220 }),
-    createConditionNode(cooldown, { x: 900, y: 220 }),
-    createActionNode(makerEntry, { x: 1200, y: 156 }),
-    createActionNode(protection, { x: 1500, y: 156 }),
-    createActionNode(cleanup, { x: 1800, y: 156 }),
+    createConditionNode(liquidityGate, { x: 900, y: 220 }),
+    createConditionNode(cooldown, { x: 1200, y: 220 }),
+    createActionNode(longEntry, { x: 1500, y: 156 }),
+    createActionNode(protection, { x: 1800, y: 156 }),
   ];
 
   const edges: BuilderFlowEdge[] = [
     createCanvasEdge(ENTRY_NODE_ID, reclaim.id),
     createCanvasEdge(reclaim.id, trendCross.id),
-    createCanvasEdge(trendCross.id, cooldown.id),
-    createCanvasEdge(cooldown.id, makerEntry.id),
-    createCanvasEdge(makerEntry.id, protection.id),
-    createCanvasEdge(protection.id, cleanup.id),
+    createCanvasEdge(trendCross.id, liquidityGate.id),
+    createCanvasEdge(liquidityGate.id, cooldown.id),
+    createCanvasEdge(cooldown.id, longEntry.id),
+    createCanvasEdge(longEntry.id, protection.id),
   ];
 
   return { nodes, edges };
@@ -988,57 +967,57 @@ function buildMakerReclaimGraph(): BuilderGraphData {
 export const BUILDER_STARTER_TEMPLATES: BuilderStarterTemplate[] = [
   {
     id: "momentum-breakout-v1",
-    name: "Momentum Breakout",
-    description: "Stacks trend, momentum, and cooldown confirmation before a managed BTC breakout entry.",
-    marketScope: "Pacifica perpetuals / BTC",
-    setupLabel: "Trend continuation",
-    riskProfile: "Moderate",
+    name: "Multi-Market Trend Scalper",
+    description: "Trades fast long continuation across selected markets once lower and higher timeframe trend agree.",
+    marketScope: "Pacifica perpetuals / BTC, ETH, SOL",
+    setupLabel: "Fast continuation",
+    riskProfile: "Active",
     conditionCount: 4,
-    actionCount: 3,
+    actionCount: 2,
     buildGraph: buildMomentumBreakoutGraph,
   },
   {
     id: "mean-revert-v1",
-    name: "Mean Reversion",
-    description: "Fades ETH exhaustion only after momentum rollover and stretch confirmation align.",
-    marketScope: "Pacifica perpetuals / ETH",
-    setupLabel: "Counter-trend fade",
-    riskProfile: "Moderate",
+    name: "Exhaustion Fade Short",
+    description: "Sells sharp intraday extensions after upper-band stretch, overheated RSI, and liquidity confirmation line up.",
+    marketScope: "Pacifica perpetuals / BTC, ETH, SOL",
+    setupLabel: "Short fade",
+    riskProfile: "Balanced",
     conditionCount: 4,
-    actionCount: 3,
+    actionCount: 2,
     buildGraph: buildMeanReversionGraph,
   },
   {
     id: "support-exit-v1",
-    name: "Support Exit Guard",
-    description: "Protects an open BTC long by forcing an exit when support and momentum both fail.",
-    marketScope: "Pacifica perpetuals / BTC",
-    setupLabel: "Position defense",
-    riskProfile: "Defensive",
-    conditionCount: 6,
-    actionCount: 1,
+    name: "Trend Pullback Reclaim",
+    description: "Buys dip-and-reclaim setups inside an existing uptrend so the bot can keep cycling with the market.",
+    marketScope: "Pacifica perpetuals / BTC, ETH, SOL",
+    setupLabel: "Dip continuation",
+    riskProfile: "Balanced",
+    conditionCount: 4,
+    actionCount: 2,
     buildGraph: buildSupportExitGraph,
   },
   {
     id: "twap-trend-v1",
-    name: "TWAP Trend Builder",
-    description: "Builds a SOL position gradually once higher-timeframe trend continuation is confirmed.",
-    marketScope: "Pacifica perpetuals / SOL",
-    setupLabel: "Gradual execution",
-    riskProfile: "Patient",
-    conditionCount: 3,
-    actionCount: 3,
+    name: "Breakdown Momentum Short",
+    description: "Presses fresh downside breaks when intraday weakness lines up with the broader trend.",
+    marketScope: "Pacifica perpetuals / BTC, ETH, SOL",
+    setupLabel: "Short continuation",
+    riskProfile: "Active",
+    conditionCount: 4,
+    actionCount: 2,
     buildGraph: buildTwapTrendGraph,
   },
   {
     id: "maker-reclaim-v1",
-    name: "Maker Reclaim",
-    description: "Works a BTC reclaim with a resting limit order, attached protection, and cleanup logic.",
-    marketScope: "Pacifica perpetuals / BTC",
-    setupLabel: "Passive entry",
+    name: "Oversold Bounce Catcher",
+    description: "Buys fast washouts after lower-band expansion and washed-out RSI create a short-term rebound setup.",
+    marketScope: "Pacifica perpetuals / BTC, ETH, SOL",
+    setupLabel: "Fast mean reversion",
     riskProfile: "Active",
-    conditionCount: 3,
-    actionCount: 3,
+    conditionCount: 4,
+    actionCount: 2,
     buildGraph: buildMakerReclaimGraph,
   },
 ];
