@@ -202,6 +202,24 @@ export type PublishingSettings = {
   };
 };
 
+const publishingSettingsCache = new Map<string, PublishingSettings>();
+
+function publishingSettingsCacheKey(botId: string, walletAddress: string) {
+  return `${botId}:${walletAddress}`;
+}
+
+export function readCachedPublishingSettings(botId: string, walletAddress: string) {
+  return publishingSettingsCache.get(publishingSettingsCacheKey(botId, walletAddress)) ?? null;
+}
+
+export function writeCachedPublishingSettings(
+  botId: string,
+  walletAddress: string,
+  settings: PublishingSettings,
+) {
+  publishingSettingsCache.set(publishingSettingsCacheKey(botId, walletAddress), settings);
+}
+
 export type LeaderboardRow = {
   runtime_id: string;
   bot_definition_id: string;
@@ -324,7 +342,6 @@ export async function fetchPublishingSettings(
   const response = await fetch(
     `${API_BASE_URL}/api/marketplace/publishing/${botId}?wallet_address=${encodeURIComponent(walletAddress)}`,
     {
-      cache: "no-store",
       headers,
       signal,
     },
@@ -337,7 +354,9 @@ export async function fetchPublishingSettings(
         : undefined;
     throw new Error(detail ?? "Request failed");
   }
-  return payload as PublishingSettings;
+  const settings = payload as PublishingSettings;
+  writeCachedPublishingSettings(botId, walletAddress, settings);
+  return settings;
 }
 
 export async function updatePublishingSettings(
@@ -374,7 +393,9 @@ export async function updatePublishingSettings(
         : undefined;
     throw new Error(detail ?? "Request failed");
   }
-  return data as PublishingSettings;
+  const settings = data as PublishingSettings;
+  writeCachedPublishingSettings(botId, payload.wallet_address, settings);
+  return settings;
 }
 
 export function toneToClasses(tone: string) {

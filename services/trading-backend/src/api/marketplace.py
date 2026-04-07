@@ -240,11 +240,13 @@ async def get_creator_profile(
 @router.get("/publishing/{bot_id}", response_model=PublishingSettingsResponse)
 def get_publishing_settings(
     bot_id: str,
+    response: Response,
     wallet_address: str = Query(min_length=8),
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> PublishingSettingsResponse:
     del db
+    response.headers["Cache-Control"] = "private, max-age=30, stale-while-revalidate=120"
     ensure_wallet_owned(user, wallet_address)
     try:
         payload = marketplace_service.get_publishing_settings(bot_id=bot_id, wallet_address=wallet_address)

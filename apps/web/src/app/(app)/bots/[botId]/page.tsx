@@ -10,6 +10,7 @@ import { RuntimeFailurePanel } from "@/components/bots/runtime-failure-panel";
 import { RuntimeHealthCard } from "@/components/bots/runtime-health-card";
 import { useClashxAuth } from "@/lib/clashx-auth";
 import type { BotPerformance } from "@/lib/bot-performance";
+import type { PublishingSettings } from "@/lib/public-bots";
 import type { RuntimeOverview } from "@/lib/runtime-overview";
 
 const AdvancedSettingsPanel = dynamic(
@@ -352,6 +353,44 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
   }, [visibleRuntimeOverview]);
 
   const runtimeHealth = visibleRuntimeOverview?.health.health ?? "not deployed";
+  const initialPublishingSettings = useMemo<PublishingSettings | null>(() => {
+    if (!visibleBot) {
+      return null;
+    }
+
+    const displayName = walletAddress
+      ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}`
+      : "";
+    const publishState =
+      visibleBot.visibility === "public"
+        ? "published"
+        : visibleBot.visibility === "unlisted"
+          ? "unlisted"
+          : visibleBot.visibility === "invite_only"
+            ? "invite_only"
+            : "draft";
+
+    return {
+      bot_definition_id: visibleBot.id,
+      visibility: visibleBot.visibility,
+      access_mode: visibleBot.visibility,
+      publish_state: publishState,
+      hero_headline: "",
+      access_note: "",
+      featured_collection_title: "Featured strategies",
+      featured_rank: 0,
+      is_featured: false,
+      invite_wallet_addresses: [],
+      invite_count: 0,
+      creator_profile: {
+        display_name: displayName,
+        headline: "",
+        bio: "",
+        slug: "",
+        featured_collection_title: "Featured strategies",
+      },
+    };
+  }, [visibleBot, walletAddress]);
 
   function refreshRuntimeData() {
     setRuntimeRefreshToken((value) => value + 1);
@@ -486,9 +525,11 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
         <section className="grid gap-3">
           <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Publishing</span>
           <BotPublishingPanel
+            key={visibleBot.id}
             botId={visibleBot.id}
             walletAddress={walletAddress}
             getAuthHeaders={getAuthHeaders}
+            initialSettings={initialPublishingSettings}
             onSaved={(nextSettings) => {
               setBot((current) => (current ? { ...current, visibility: nextSettings.visibility } : current));
             }}

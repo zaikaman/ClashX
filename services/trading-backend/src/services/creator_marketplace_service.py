@@ -259,28 +259,38 @@ class CreatorMarketplaceService:
 
     def get_publishing_settings(self, *, bot_id: str, wallet_address: str) -> dict[str, Any]:
         bot = self._require_owned_bot(bot_id=bot_id, wallet_address=wallet_address)
-        creator_profile = self._ensure_creator_profile_for_bot(bot)
-        publishing = self._ensure_publishing_settings(bot=bot)
+        user = self.supabase.maybe_one("users", filters={"id": bot["user_id"]})
+        if user is None:
+            raise ValueError("Creator not found")
+        creator_profile = self._get_creator_profile_row(user_id=str(user["id"]))
+        publishing = self._read_publishing_settings_row(bot_definition_id=str(bot["id"]))
         invites = self._list_invites(bot_id=bot_id)
         featured_row = self.supabase.maybe_one("featured_bots", filters={"bot_definition_id": bot_id, "active": True})
+        creator_display_name = (
+            str((creator_profile or {}).get("display_name") or user.get("display_name") or bot.get("wallet_address") or "")[:80]
+            or str(bot.get("wallet_address") or "")[:8]
+        )
+        creator_featured_collection_title = (
+            (creator_profile or {}).get("featured_collection_title") or "Featured strategies"
+        )
         return {
             "bot_definition_id": bot["id"],
             "visibility": bot["visibility"],
-            "access_mode": publishing["access_mode"],
-            "publish_state": publishing["publish_state"],
-            "hero_headline": publishing.get("hero_headline") or "",
-            "access_note": publishing.get("access_note") or "",
-            "featured_collection_title": publishing.get("featured_collection_title") or creator_profile["featured_collection_title"],
-            "featured_rank": int(publishing.get("featured_rank") or 0),
+            "access_mode": (publishing or {}).get("access_mode") or bot["visibility"],
+            "publish_state": (publishing or {}).get("publish_state") or self._publish_state(str(bot["visibility"])),
+            "hero_headline": (publishing or {}).get("hero_headline") or "",
+            "access_note": (publishing or {}).get("access_note") or "",
+            "featured_collection_title": (publishing or {}).get("featured_collection_title") or creator_featured_collection_title,
+            "featured_rank": int((publishing or {}).get("featured_rank") or 0),
             "is_featured": featured_row is not None,
             "invite_wallet_addresses": [invite["invited_wallet_address"] for invite in invites],
             "invite_count": len(invites),
             "creator_profile": {
-                "display_name": creator_profile["display_name"],
-                "headline": creator_profile.get("headline") or "",
-                "bio": creator_profile.get("bio") or "",
-                "slug": creator_profile.get("slug") or "",
-                "featured_collection_title": creator_profile.get("featured_collection_title") or "Featured strategies",
+                "display_name": creator_display_name,
+                "headline": (creator_profile or {}).get("headline") or "",
+                "bio": (creator_profile or {}).get("bio") or "",
+                "slug": (creator_profile or {}).get("slug") or "",
+                "featured_collection_title": creator_featured_collection_title,
             },
         }
 
@@ -943,15 +953,6 @@ class CreatorMarketplaceService:
             ),
         }
 
-    def _ensure_creator_profile_for_bot(self, bot: dict[str, Any]) -> dict[str, Any]:
-        user = self.supabase.maybe_one("users", filters={"id": bot["user_id"]})
-        if user is None:
-            raise ValueError("Creator not found")
-        return self._ensure_creator_profile(
-            user=user,
-            display_name=str(user.get("display_name") or bot.get("wallet_address") or "")[:80],
-        )
-
     def _ensure_creator_profile(
         self,
         *,
@@ -1000,6 +1001,12 @@ class CreatorMarketplaceService:
         if next_display_name != (user.get("display_name") or ""):
             self.supabase.update("users", {"display_name": next_display_name}, filters={"id": user["id"]})
         return updated
+
+    def _get_creator_profile_row(self, *, user_id: str) -> dict[str, Any] | None:
+        try:
+            return self.supabase.maybe_one("creator_marketplace_profiles", filters={"user_id": user_id})
+        except SupabaseRestError:
+            return None
 
     def _unique_slug(self, *, base_slug: str, user_id: str, current_profile_id: str | None = None) -> str:
         candidate_base = base_slug or f"creator-{user_id[:8]}"
@@ -1148,6 +1155,12 @@ class CreatorMarketplaceService:
             return self.supabase.insert("bot_publishing_settings", record.to_row())[0]
         except SupabaseRestError:
             return record.to_row()
+
+    def _read_publishing_settings_row(self, *, bot_definition_id: str) -> dict[str, Any] | None:
+        try:
+            return self.supabase.maybe_one("bot_publishing_settings", filters={"bot_definition_id": bot_definition_id})
+        except SupabaseRestError:
+            return None
 
     def _ensure_publishing_settings(self, *, bot: dict[str, Any]) -> dict[str, Any]:
         publishing = self._get_publishing_settings_row(bot_definition_id=str(bot["id"]))

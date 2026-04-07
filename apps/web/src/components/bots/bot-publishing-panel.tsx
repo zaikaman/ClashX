@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   fetchPublishingSettings,
+  readCachedPublishingSettings,
   type PublishingSettings,
   updatePublishingSettings,
 } from "@/lib/public-bots";
@@ -54,25 +55,36 @@ export function BotPublishingPanel({
   getAuthHeaders,
   onSaved,
   compact = false,
+  initialSettings = null,
 }: {
   botId: string;
   walletAddress: string;
   getAuthHeaders: (headersInit?: HeadersInit) => Promise<Headers>;
   onSaved?: (settings: PublishingSettings) => void;
   compact?: boolean;
+  initialSettings?: PublishingSettings | null;
 }) {
-  const [settings, setSettings] = useState<PublishingSettings | null>(null);
-  const [form, setForm] = useState<PublishingFormState | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cachedSettings = readCachedPublishingSettings(botId, walletAddress);
+  const seededSettings = cachedSettings ?? initialSettings;
+  const [settings, setSettings] = useState<PublishingSettings | null>(seededSettings);
+  const [form, setForm] = useState<PublishingFormState | null>(
+    seededSettings ? buildInitialState(seededSettings) : null,
+  );
+  const [loading, setLoading] = useState(!seededSettings);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(Boolean(seededSettings));
 
   useEffect(() => {
     const controller = new AbortController();
 
     async function load() {
-      setLoading(true);
+      if (!settings) {
+        setLoading(true);
+      } else {
+        setRefreshing(true);
+      }
       try {
         const headers = await getAuthHeaders();
         const nextSettings = await fetchPublishingSettings(botId, walletAddress, headers, controller.signal);
@@ -89,6 +101,7 @@ export function BotPublishingPanel({
       } finally {
         if (!controller.signal.aborted) {
           setLoading(false);
+          setRefreshing(false);
         }
       }
     }
@@ -162,8 +175,15 @@ export function BotPublishingPanel({
             Choose the access mode, shape the creator profile, and decide whether this bot belongs on a featured shelf.
           </p>
         </div>
-        <div className="rounded-full border border-[rgba(255,255,255,0.1)] px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-300">
-          {settings.publish_state}
+        <div className="flex items-center gap-2">
+          {refreshing ? (
+            <span className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+              Refreshing
+            </span>
+          ) : null}
+          <div className="rounded-full border border-[rgba(255,255,255,0.1)] px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-300">
+            {settings.publish_state}
+          </div>
         </div>
       </div>
 
