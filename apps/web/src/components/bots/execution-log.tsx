@@ -1,3 +1,5 @@
+import { useMemo } from "react";
+
 type BotExecutionEvent = {
   id: string;
   runtime_id: string;
@@ -93,7 +95,7 @@ export function ExecutionLog({ events }: { events: BotExecutionEvent[] }) {
     );
   }
 
-  const displayEvents = collapseEvents(events);
+  const displayEvents = useMemo(() => collapseEvents(events), [events]);
 
   return (
     <div className="grid gap-3">

@@ -577,10 +577,15 @@ def get_runtime_metrics(
 @router.get("/{bot_id}/runtime-overview", response_model=RuntimeOverviewResponse)
 async def get_runtime_overview(
     bot_id: str,
+    response: Response,
     wallet_address: str | None = Query(default=None, min_length=8),
+    include_performance: bool = Query(default=False),
+    performance_mode: Literal["full", "fast"] = Query(default="fast"),
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> RuntimeOverviewResponse:
+    if not include_performance or performance_mode == "fast":
+        response.headers["Cache-Control"] = "private, max-age=2, stale-while-revalidate=8"
     resolved_wallet = _resolve_wallet(user, wallet_address)
     try:
         payload = runtime_observability_service.get_overview(
@@ -591,14 +596,18 @@ async def get_runtime_overview(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    performance = await _build_runtime_performance(
-        bot_runtime_engine.get_runtime(
+    performance = None
+    if include_performance:
+        runtime = bot_runtime_engine.get_runtime(
             db,
             bot_id=bot_id,
             wallet_address=resolved_wallet,
             user_id=user.user_id,
         )
-    )
+        if performance_mode == "fast":
+            performance = _build_fast_runtime_performance(runtime)
+        else:
+            performance = await _build_runtime_performance(runtime)
     return RuntimeOverviewResponse.model_validate({**payload, "performance": performance})
 
 

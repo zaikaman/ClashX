@@ -1,17 +1,55 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { use, useEffect, useMemo, useState } from "react";
 
-import { AdvancedSettingsPanel } from "@/components/bots/advanced-settings-panel";
 import { BotPerformancePanel } from "@/components/bots/bot-performance-panel";
-import { BotPublishingPanel } from "@/components/bots/bot-publishing-panel";
 import { ExecutionLog } from "@/components/bots/execution-log";
 import { RuntimeFailurePanel } from "@/components/bots/runtime-failure-panel";
 import { RuntimeHealthCard } from "@/components/bots/runtime-health-card";
-import { RuntimeControls } from "@/components/bots/runtime-controls";
 import { useClashxAuth } from "@/lib/clashx-auth";
+import type { BotPerformance } from "@/lib/bot-performance";
 import type { RuntimeOverview } from "@/lib/runtime-overview";
+
+const AdvancedSettingsPanel = dynamic(
+  () => import("@/components/bots/advanced-settings-panel").then((module) => module.AdvancedSettingsPanel),
+  {
+    loading: () => (
+      <DeferredPanelPlaceholder
+        eyebrow="Advanced settings"
+        title="Loading runtime policy"
+        body="Risk controls and execution settings are loading in the background."
+      />
+    ),
+  },
+);
+
+const BotPublishingPanel = dynamic(
+  () => import("@/components/bots/bot-publishing-panel").then((module) => module.BotPublishingPanel),
+  {
+    loading: () => (
+      <DeferredPanelPlaceholder
+        eyebrow="Publishing"
+        title="Loading publishing controls"
+        body="Marketplace settings are loading in the background."
+      />
+    ),
+  },
+);
+
+const RuntimeControls = dynamic(
+  () => import("@/components/bots/runtime-controls").then((module) => module.RuntimeControls),
+  {
+    loading: () => (
+      <DeferredPanelPlaceholder
+        eyebrow="Runtime controls"
+        title="Loading live controls"
+        body="Deploy, pause, and stop actions are loading in the background."
+      />
+    ),
+  },
+);
 
 type BotDefinition = {
   id: string;
@@ -39,6 +77,8 @@ type BotExecutionEvent = {
 };
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const EVENTS_PAGE_SIZE = 40;
+const REFRESH_INTERVAL_MS = 15000;
 
 async function unwrapResponse<T>(response: Response, fallback: string): Promise<T> {
   const payload = (await response.json()) as unknown;
@@ -52,6 +92,24 @@ async function unwrapResponse<T>(response: Response, fallback: string): Promise<
   return payload as T;
 }
 
+function DeferredPanelPlaceholder({
+  eyebrow,
+  title,
+  body,
+}: {
+  eyebrow: string;
+  title: string;
+  body: string;
+}) {
+  return (
+    <article className="grid gap-3 rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-5 py-5">
+      <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">{eyebrow}</span>
+      <h3 className="font-mono text-xl font-bold uppercase tracking-tight text-neutral-50">{title}</h3>
+      <p className="text-sm leading-7 text-neutral-400">{body}</p>
+    </article>
+  );
+}
+
 export default function BotDetailPage({ params: paramsPromise }: { params: Promise<{ botId: string }> }) {
   const params = use(paramsPromise);
   const { authenticated, login, walletAddress, getAuthHeaders } = useClashxAuth();
@@ -59,80 +117,229 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
   const [bot, setBot] = useState<BotDefinition | null>(null);
   const [events, setEvents] = useState<BotExecutionEvent[]>([]);
   const [runtimeOverview, setRuntimeOverview] = useState<RuntimeOverview | null>(null);
+  const [performance, setPerformance] = useState<BotPerformance | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [refreshToken, setRefreshToken] = useState(0);
+  const [eventsError, setEventsError] = useState<string | null>(null);
+  const [performanceError, setPerformanceError] = useState<string | null>(null);
+  const [primaryLoading, setPrimaryLoading] = useState(false);
+  const [secondaryLoading, setSecondaryLoading] = useState(false);
+  const [runtimeRefreshToken, setRuntimeRefreshToken] = useState(0);
+  const [secondaryRefreshToken, setSecondaryRefreshToken] = useState(0);
+
+  const sessionActive = authenticated && Boolean(walletAddress);
 
   useEffect(() => {
-    const resolvedWalletValue = walletAddress;
-    if (!authenticated || !resolvedWalletValue) {
+    if (!sessionActive || !walletAddress) {
+      setBot(null);
+      setEvents([]);
+      setRuntimeOverview(null);
+      setPerformance(null);
+      setError(null);
+      setEventsError(null);
+      setPerformanceError(null);
+      setPrimaryLoading(false);
+      setSecondaryLoading(false);
+      setRuntimeRefreshToken(0);
+      setSecondaryRefreshToken(0);
       return;
     }
 
+    const resolvedWallet = walletAddress;
     const controller = new AbortController();
 
-    async function loadDetails() {
+    async function loadPrimary() {
+      setPrimaryLoading(true);
+      setSecondaryLoading(false);
+      setBot(null);
+      setEvents([]);
+      setRuntimeOverview(null);
+      setPerformance(null);
+      setError(null);
+      setEventsError(null);
+      setPerformanceError(null);
+      setRuntimeRefreshToken(0);
+      setSecondaryRefreshToken(0);
+
       try {
         const headers = await getAuthHeaders();
-        const walletQuery = encodeURIComponent(resolvedWalletValue ?? "");
-        const [botResponse, eventsResponse, overviewResponse] = await Promise.all([
+        const walletQuery = encodeURIComponent(resolvedWallet);
+        const [botResponse, overviewResponse] = await Promise.all([
           fetch(`${API_BASE_URL}/api/bots/${params.botId}?wallet_address=${walletQuery}`, {
             cache: "no-store",
             headers,
             signal: controller.signal,
           }),
-          fetch(`${API_BASE_URL}/api/bots/${params.botId}/events?wallet_address=${walletQuery}&limit=100`, {
-            cache: "no-store",
-            headers,
-            signal: controller.signal,
-          }),
           fetch(`${API_BASE_URL}/api/bots/${params.botId}/runtime-overview?wallet_address=${walletQuery}`, {
-            cache: "no-store",
             headers,
             signal: controller.signal,
           }),
         ]);
 
-        const [nextBot, nextEvents, nextOverview] = await Promise.all([
+        const [nextBot, nextOverview] = await Promise.all([
           unwrapResponse<BotDefinition>(botResponse, "Could not load bot"),
-          unwrapResponse<BotExecutionEvent[]>(eventsResponse, "Could not load events"),
           unwrapResponse<RuntimeOverview>(overviewResponse, "Could not load runtime overview"),
         ]);
 
         if (controller.signal.aborted) {
           return;
         }
+
         setBot(nextBot);
-        setEvents(nextEvents);
         setRuntimeOverview(nextOverview);
         setError(null);
+        setSecondaryLoading(true);
+        setSecondaryRefreshToken(1);
       } catch (loadError) {
         if (controller.signal.aborted) {
           return;
         }
         setError(loadError instanceof Error ? loadError.message : "Could not load bot runtime");
+      } finally {
+        if (!controller.signal.aborted) {
+          setPrimaryLoading(false);
+        }
       }
     }
 
-    void loadDetails();
+    void loadPrimary();
     return () => controller.abort();
-  }, [authenticated, walletAddress, params.botId, getAuthHeaders, refreshToken]);
+  }, [authenticated, walletAddress, params.botId, sessionActive, getAuthHeaders]);
 
   useEffect(() => {
-    if (!authenticated || !walletAddress) {
+    if (!sessionActive || !walletAddress || runtimeRefreshToken === 0) {
       return;
     }
-    const interval = window.setInterval(() => {
-      setRefreshToken((value) => value + 1);
-    }, 15000);
-    return () => window.clearInterval(interval);
-  }, [authenticated, walletAddress]);
 
-  const sessionActive = authenticated && Boolean(walletAddress);
+    const resolvedWallet = walletAddress;
+    const controller = new AbortController();
+
+    async function refreshOverview() {
+      try {
+        const headers = await getAuthHeaders();
+        const walletQuery = encodeURIComponent(resolvedWallet);
+        const overviewResponse = await fetch(
+          `${API_BASE_URL}/api/bots/${params.botId}/runtime-overview?wallet_address=${walletQuery}`,
+          {
+            headers,
+            signal: controller.signal,
+          },
+        );
+        const nextOverview = await unwrapResponse<RuntimeOverview>(
+          overviewResponse,
+          "Could not refresh runtime overview",
+        );
+
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setRuntimeOverview(nextOverview);
+      } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setError(loadError instanceof Error ? loadError.message : "Could not refresh runtime overview");
+      }
+    }
+
+    void refreshOverview();
+    return () => controller.abort();
+  }, [getAuthHeaders, params.botId, runtimeRefreshToken, sessionActive, walletAddress]);
+
+  useEffect(() => {
+    if (!sessionActive || !walletAddress || secondaryRefreshToken === 0) {
+      return;
+    }
+
+    const resolvedWallet = walletAddress;
+    const controller = new AbortController();
+
+    async function loadSecondary() {
+      setSecondaryLoading(true);
+      try {
+        const headers = await getAuthHeaders();
+        const walletQuery = encodeURIComponent(resolvedWallet);
+
+        const [eventsResult, performanceResult] = await Promise.allSettled([
+          (async () => {
+            const response = await fetch(
+              `${API_BASE_URL}/api/bots/${params.botId}/events?wallet_address=${walletQuery}&limit=${EVENTS_PAGE_SIZE}`,
+              {
+                cache: "no-store",
+                headers,
+                signal: controller.signal,
+              },
+            );
+            return unwrapResponse<BotExecutionEvent[]>(response, "Could not load activity stream");
+          })(),
+          (async () => {
+            const response = await fetch(
+              `${API_BASE_URL}/api/bots/${params.botId}/runtime-overview?wallet_address=${walletQuery}&include_performance=true&performance_mode=fast`,
+              {
+                headers,
+                signal: controller.signal,
+              },
+            );
+            const overview = await unwrapResponse<RuntimeOverview>(
+              response,
+              "Could not load performance snapshot",
+            );
+            return overview.performance;
+          })(),
+        ]);
+
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        if (eventsResult.status === "fulfilled") {
+          setEvents(eventsResult.value);
+          setEventsError(null);
+        } else {
+          setEventsError(
+            eventsResult.reason instanceof Error
+              ? eventsResult.reason.message
+              : "Could not load activity stream",
+          );
+        }
+
+        if (performanceResult.status === "fulfilled") {
+          setPerformance(performanceResult.value ?? null);
+          setPerformanceError(null);
+        } else {
+          setPerformanceError(
+            performanceResult.reason instanceof Error
+              ? performanceResult.reason.message
+              : "Could not load performance snapshot",
+          );
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setSecondaryLoading(false);
+        }
+      }
+    }
+
+    void loadSecondary();
+    return () => controller.abort();
+  }, [getAuthHeaders, params.botId, secondaryRefreshToken, sessionActive, walletAddress]);
+
+  useEffect(() => {
+    if (!sessionActive || !walletAddress || primaryLoading) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      setRuntimeRefreshToken((value) => value + 1);
+      setSecondaryRefreshToken((value) => value + 1);
+    }, REFRESH_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [primaryLoading, sessionActive, walletAddress]);
+
   const visibleBot = sessionActive ? bot : null;
-  const visibleEvents = sessionActive ? events : [];
   const visibleRuntimeOverview = sessionActive ? runtimeOverview : null;
   const visibleError = sessionActive ? error : null;
-
   const runtime = useMemo(() => {
     if (!visibleRuntimeOverview?.health.runtime_id) {
       return null;
@@ -146,16 +353,21 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
 
   const runtimeHealth = visibleRuntimeOverview?.health.health ?? "not deployed";
 
+  function refreshRuntimeData() {
+    setRuntimeRefreshToken((value) => value + 1);
+    setSecondaryRefreshToken((value) => value + 1);
+  }
+
   return (
     <main className="shell grid gap-8 pb-10 md:pb-12">
       <section className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
         <article className="grid gap-3 rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-6">
           <span className="label text-[#dce85d]">Bot summary</span>
           <h2 className="font-mono text-3xl font-bold uppercase tracking-tight text-neutral-50">
-            {visibleBot?.name ?? "Loading bot"}
+            {visibleBot?.name ?? (primaryLoading ? "Loading bot" : "Bot workspace")}
           </h2>
           <p className="max-w-3xl text-sm leading-7 text-neutral-400">
-            {visibleBot?.description ?? "Loading the bot description and runtime data."}
+            {visibleBot?.description ?? "Loading the bot description and core runtime status."}
           </p>
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="rounded-xl bg-[#090a0a] px-4 py-3">
@@ -220,7 +432,21 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
         </article>
       </section>
 
-      <BotPerformancePanel performance={visibleRuntimeOverview?.performance ?? null} />
+      {performanceError && !performance ? (
+        <article className="rounded-2xl border border-[#dce85d]/30 bg-[#dce85d]/10 px-5 py-4 text-sm text-neutral-50">
+          {performanceError}
+        </article>
+      ) : null}
+
+      {secondaryLoading && !performance ? (
+        <DeferredPanelPlaceholder
+          eyebrow="Performance snapshot"
+          title="Loading live performance"
+          body="PnL and open position metrics are loading after the primary view."
+        />
+      ) : (
+        <BotPerformancePanel performance={sessionActive ? performance : null} />
+      )}
 
       {!authenticated ? (
         <button
@@ -247,9 +473,7 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
             botId={params.botId}
             walletAddress={walletAddress}
             getAuthHeaders={getAuthHeaders}
-            onRuntimeUpdate={() => {
-              setRefreshToken((value) => value + 1);
-            }}
+            onRuntimeUpdate={refreshRuntimeData}
           />
         ) : (
           <article className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-5 py-5 text-sm leading-7 text-neutral-400">
@@ -286,7 +510,7 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
             botId={params.botId}
             walletAddress={walletAddress}
             getAuthHeaders={getAuthHeaders}
-            onSaved={() => setRefreshToken((value) => value + 1)}
+            onSaved={refreshRuntimeData}
           />
         </section>
       ) : walletAddress && visibleRuntimeOverview ? (
@@ -298,9 +522,24 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
       <section className="grid gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Activity stream</span>
-          <span className="text-xs text-neutral-500">refreshes every 15 seconds while this page is open</span>
+          <span className="text-xs text-neutral-500">
+            showing the latest {EVENTS_PAGE_SIZE} events, refreshed every 15 seconds while this page is open
+          </span>
         </div>
-        <ExecutionLog events={visibleEvents} />
+        {eventsError ? (
+          <article className="rounded-2xl border border-[#dce85d]/30 bg-[#dce85d]/10 px-5 py-4 text-sm text-neutral-50">
+            {eventsError}
+          </article>
+        ) : null}
+        {secondaryLoading && events.length === 0 ? (
+          <DeferredPanelPlaceholder
+            eyebrow="Activity stream"
+            title="Loading recent activity"
+            body="Recent runtime decisions are loading after the primary view."
+          />
+        ) : (
+          <ExecutionLog events={sessionActive ? events : []} />
+        )}
       </section>
     </main>
   );
