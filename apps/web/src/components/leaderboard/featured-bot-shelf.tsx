@@ -37,7 +37,7 @@ export function FeaturedBotShelf({
                   #{bot.rank} / {bot.strategy_type}
                 </span>
                 <Link
-                  href={`/leaderboard/${bot.runtime_id}`}
+                  href={`/marketplace/${bot.runtime_id}`}
                   className="font-mono text-xl font-bold uppercase tracking-tight text-neutral-50 transition hover:text-[#dce85d]"
                 >
                   {bot.bot_name}

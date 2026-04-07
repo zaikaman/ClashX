@@ -540,7 +540,7 @@ export default function CopyPage() {
               Sign in
             </button>
             <Link
-              href="/leaderboard"
+              href="/marketplace"
               className="rounded-full border border-[rgba(255,255,255,0.12)] px-5 py-3 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#74b97f] hover:text-[#74b97f]"
             >
               Browse the public board
@@ -588,7 +588,7 @@ export default function CopyPage() {
                 {refreshing ? "Refreshing..." : "Refresh data"}
               </button>
               <Link
-                href="/leaderboard"
+                href="/marketplace"
                 className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#74b97f] hover:text-[#74b97f]"
               >
                 Find strategies
@@ -688,7 +688,7 @@ export default function CopyPage() {
               <span className="text-sm text-neutral-400">Review status, resize exposure, or stop a relationship before the next mirrored action lands.</span>
             </div>
             <Link
-              href="/leaderboard"
+              href="/marketplace"
               className="whitespace-nowrap rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#dce85d] hover:text-[#dce85d]"
             >
               Browse board
@@ -711,10 +711,10 @@ export default function CopyPage() {
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <Link
-                  href="/leaderboard"
+                  href="/marketplace"
                   className="w-fit rounded-full bg-[#dce85d] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d]"
                 >
-                  Explore the leaderboard
+                  Explore the marketplace
                 </Link>
                 <Link
                   href="/bots"
@@ -821,7 +821,7 @@ export default function CopyPage() {
                         )}
 
                         <Link
-                          href={`/leaderboard/${relationship.source_runtime_id}`}
+                          href={`/marketplace/${relationship.source_runtime_id}`}
                           className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-neutral-50 hover:text-neutral-50"
                         >
                           Open source bot
@@ -869,7 +869,7 @@ export default function CopyPage() {
                 </p>
               </div>
               <Link
-                href="/leaderboard"
+                href="/marketplace"
                 className="w-fit rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#74b97f] hover:text-[#74b97f]"
               >
                 Browse cloneable bots
@@ -893,7 +893,7 @@ export default function CopyPage() {
                     Open draft
                   </Link>
                   <Link
-                    href="/leaderboard"
+                    href="/marketplace"
                     className="w-fit rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#74b97f] hover:text-[#74b97f]"
                   >
                     Clone another

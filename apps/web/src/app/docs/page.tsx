@@ -46,7 +46,7 @@ export default function DocsPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
-            <Link href="/leaderboard" className="rounded-full bg-[#dce85d] px-4 py-2 text-sm font-medium text-[#090a0a]">
+              <Link href="/marketplace" className="rounded-full bg-[#dce85d] px-4 py-2 text-sm font-medium text-[#090a0a]">
               Marketplace
             </Link>
             <Link href="/builder" className="rounded-full border border-white/15 px-4 py-2 text-sm font-medium text-neutral-50">

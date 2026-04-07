@@ -336,7 +336,7 @@ const Home = () => {
       handle: '@sarahm_tradings',
       initial: 'SM',
       color: 'from-[#74b97f] to-[#5a9268]',
-      text: 'Cloning the top leaderboard bot transformed my trading. The copy limits keep me perfectly safe.',
+    text: 'Cloning a top marketplace bot transformed my trading. The copy limits keep me perfectly safe.',
     },
     {
       name: 'James Park',
@@ -718,7 +718,7 @@ const Home = () => {
                         <p className="text-[#a1a1aa] leading-relaxed">
                           Discover top-performing bots, creator shelves, and transparent on-chain execution with verifiable metrics, then mirror them live.
                         </p>
-                        <Link href="/leaderboard" className="inline-flex items-center gap-2 mt-4 text-sm font-medium text-[#a8c93a] hover:text-[#dce85d] transition-colors group/link">
+                  <Link href="/marketplace" className="inline-flex items-center gap-2 mt-4 text-sm font-medium text-[#a8c93a] hover:text-[#dce85d] transition-colors group/link">
                           Open Marketplace
                           <ArrowRight className="w-3.5 h-3.5 group-hover/link:translate-x-1 transition-transform" />
                         </Link>

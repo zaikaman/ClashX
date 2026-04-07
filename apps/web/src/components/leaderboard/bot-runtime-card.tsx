@@ -34,7 +34,7 @@ export function BotRuntimeCard({
           <TrustBadgeStrip trust={row.trust} />
         </div>
         <Link
-          href={`/leaderboard/${row.runtime_id}`}
+          href={`/marketplace/${row.runtime_id}`}
           className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#74b97f] hover:text-[#74b97f]"
         >
           Open profile
@@ -51,7 +51,7 @@ export function BotRuntimeCard({
       <div className="grid gap-2 rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-4">
         <div className="flex items-center justify-between gap-3 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
           <span>Creator</span>
-          <Link href={`/leaderboard/creators/${row.creator.creator_id}`} className="text-neutral-300 transition hover:text-[#dce85d]">
+        <Link href={`/marketplace/creators/${row.creator.creator_id}`} className="text-neutral-300 transition hover:text-[#dce85d]">
             {row.creator.reputation_label}
           </Link>
         </div>

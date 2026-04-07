@@ -30,7 +30,7 @@ export function CreatorReputationCard({ creator, showBots = false }: CreatorProp
           </div>
         </div>
         <Link
-          href={`/leaderboard/creators/${creator.creator_id}`}
+          href={`/marketplace/creators/${creator.creator_id}`}
           className="rounded-full border border-white/10 px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#74b97f] hover:text-[#74b97f]"
         >
           Open creator
@@ -61,7 +61,7 @@ export function CreatorReputationCard({ creator, showBots = false }: CreatorProp
             bots.map((bot) => (
               <Link
                 key={bot.runtime_id}
-                href={`/leaderboard/${bot.runtime_id}`}
+                href={`/marketplace/${bot.runtime_id}`}
                 className="grid gap-2 rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-3 transition hover:border-[#dce85d]/20 hover:bg-[#111315] md:grid-cols-[1fr_0.3fr_0.3fr_0.3fr] md:items-center"
               >
                 <div>

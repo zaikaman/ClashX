@@ -3240,7 +3240,7 @@ export function BuilderGraphStudio({
                     className="w-full px-3 py-2 bg-neutral-800 border border-[rgba(255,255,255,0.06)] rounded-md text-neutral-50 text-xs focus:outline-none focus:border-[#dce85d] transition-colors"
                   >
                     <option value="private">Private</option>
-                    <option value="public">Public (Leaderboard)</option>
+                              <option value="public">Public (Marketplace)</option>
                     <option value="unlisted">Unlisted (Link only)</option>
                     <option value="invite_only">Invite-only</option>
                   </select>

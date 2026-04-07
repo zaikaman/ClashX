@@ -30,7 +30,7 @@ export const appNavGroups: AppNavGroup[] = [
     label: "Explore",
     items: [
       {
-        href: "/leaderboard",
+        href: "/marketplace",
         label: "Marketplace",
         description: "Discover public bots, creator shelves, and live winners.",
       },
@@ -64,7 +64,7 @@ export const appNavGroups: AppNavGroup[] = [
 ];
 
 export const appWorkflow = [
-  { href: "/leaderboard", label: "Browse the marketplace" },
+  { href: "/marketplace", label: "Browse the marketplace" },
   { href: "/builder", label: "Draft a strategy" },
   { href: "/bots", label: "Deploy and monitor" },
   { href: "/copy", label: "Follow or clone a winner" },
@@ -97,7 +97,7 @@ const fallbackMeta: AppPageMeta = {
 export function getAppPageMeta(pathname: string): AppPageMeta {
   const normalizedPathname = pathname !== "/" ? pathname.replace(/\/+$/, "") : pathname;
 
-  if (normalizedPathname.startsWith("/leaderboard/")) {
+  if (normalizedPathname.startsWith("/marketplace/")) {
     return {
       eyebrow: "Marketplace profile",
       title: "Review one live bot in detail",
@@ -109,7 +109,7 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
         "Use clone when you want a draft you can edit. Use follow when you want live copying.",
       ],
       actions: [
-        { href: "/leaderboard", label: "Back to marketplace", tone: "secondary" },
+        { href: "/marketplace", label: "Back to marketplace", tone: "secondary" },
         { href: "/copy", label: "Open copy center", tone: "ghost" },
       ],
     };
@@ -133,7 +133,7 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
     };
   }
 
-  if (normalizedPathname === "/leaderboard") {
+  if (normalizedPathname === "/marketplace") {
     return {
       eyebrow: "Creator marketplace",
       title: "Discover the strongest live bots",
@@ -164,7 +164,7 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
       ],
       actions: [
         { href: "/bots", label: "Open my bots", tone: "primary" },
-        { href: "/leaderboard", label: "Open marketplace", tone: "secondary" },
+        { href: "/marketplace", label: "Open marketplace", tone: "secondary" },
       ],
     };
   }
@@ -182,7 +182,7 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
       ],
       actions: [
         { href: "/builder", label: "New bot draft", tone: "primary" },
-        { href: "/leaderboard", label: "Browse marketplace", tone: "secondary" },
+        { href: "/marketplace", label: "Browse marketplace", tone: "secondary" },
       ],
     };
   }
@@ -199,7 +199,7 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
         "Review active follows regularly so your risk stays intentional.",
       ],
       actions: [
-        { href: "/leaderboard", label: "Browse marketplace", tone: "primary" },
+        { href: "/marketplace", label: "Browse marketplace", tone: "primary" },
         { href: "/bots", label: "Open my bots", tone: "secondary" },
       ],
     };

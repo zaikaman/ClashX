@@ -16,7 +16,7 @@ export function CreatorSpotlightCard({ creator }: { creator: CreatorHighlight })
           <p className="text-sm leading-7 text-neutral-400">{creator.headline || creator.summary}</p>
         </div>
         <Link
-          href={`/leaderboard/creators/${creator.creator_id}`}
+          href={`/marketplace/creators/${creator.creator_id}`}
           className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d]"
         >
           Open creator
