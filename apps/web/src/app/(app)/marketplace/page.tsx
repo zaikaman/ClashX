@@ -9,7 +9,6 @@ import {
   fetchMarketplaceOverview,
   type CreatorHighlight,
   type MarketplaceOverviewDiscoveryRow,
-  type MarketplaceOverviewFeaturedShelf,
 } from "@/lib/public-bots";
 
 const BotMirrorModal = dynamic(
@@ -44,7 +43,6 @@ function formatSignedPnl(value: number) {
 
 export default function MarketplacePage() {
   const [rows, setRows] = useState<MarketplaceOverviewDiscoveryRow[]>([]);
-  const [featuredShelves, setFeaturedShelves] = useState<MarketplaceOverviewFeaturedShelf[]>([]);
   const [creators, setCreators] = useState<CreatorHighlight[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -66,7 +64,6 @@ export default function MarketplacePage() {
           return;
         }
         setRows(overview.discover);
-        setFeaturedShelves(overview.featured);
         setCreators(overview.creators);
         setError(null);
       } catch (loadError) {
@@ -87,7 +84,6 @@ export default function MarketplacePage() {
   const season = useMemo(() => getSeasonContext(), []);
   const topThree = useMemo(() => rows.slice(0, 3), [rows]);
   const featuredCreators = useMemo(() => creators.slice(0, 4), [creators]);
-  const rowsByRuntimeId = useMemo(() => new Map(rows.map((row) => [row.runtime_id, row])), [rows]);
   const liveCopies = useMemo(
     () => rows.reduce((sum, row) => sum + row.copy_stats.active_mirror_count, 0),
     [rows],
@@ -97,7 +93,6 @@ export default function MarketplacePage() {
     () => [...creators].sort((left, right) => right.follower_count - left.follower_count)[0] ?? null,
     [creators],
   );
-  const strongestShelf = featuredShelves[0] ?? null;
 
   return (
     <main className="shell grid gap-6 pb-10 md:gap-8 md:pb-12">
@@ -171,7 +166,7 @@ export default function MarketplacePage() {
 
             <div className="grid gap-3 rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4">
               <SignalLine label="Window opened" value={season.seasonStart.toLocaleDateString()} />
-              <SignalLine label="Featured shelves" value={loading ? "..." : `${featuredShelves.length}`} />
+              <SignalLine label="Public strategies" value={loading ? "..." : `${rows.length}`} />
               <SignalLine label="Clone drafts" value={loading ? "..." : `${totalClones}`} />
             </div>
 
@@ -207,11 +202,6 @@ export default function MarketplacePage() {
                 A quick look at the strongest performers on the board right now.
               </p>
             </div>
-            {strongestShelf ? (
-              <span className="rounded-full border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-3 py-1 text-[0.56rem] font-semibold uppercase tracking-[0.16em] text-neutral-300">
-                Featured: {strongestShelf.title}
-              </span>
-            ) : null}
           </div>
 
           {topThree.length > 0 ? (
@@ -262,41 +252,6 @@ export default function MarketplacePage() {
           )}
         </div>
       </section>
-
-      {featuredShelves.length > 0 ? (
-        <section className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[radial-gradient(circle_at_top_left,rgba(116,185,127,0.12),transparent_24%),#16181a] p-5 md:p-6">
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div className="grid gap-1">
-              <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#74b97f]">
-                Curated lanes
-              </span>
-              <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
-                Featured collections
-              </h2>
-              <p className="max-w-3xl text-sm leading-7 text-neutral-400">
-                Browse grouped picks based on style, momentum, or current interest.
-              </p>
-            </div>
-          </div>
-
-          <div className="grid gap-4 xl:grid-cols-2">
-            {featuredShelves.map((shelf) => (
-              <ShelfLane
-                key={shelf.collection_key}
-                shelf={shelf}
-                onMirror={(runtimeId) => {
-                  const row = rowsByRuntimeId.get(runtimeId) ?? null;
-                  setSelectedForMirror(row);
-                }}
-                onClone={(runtimeId) => {
-                  const row = rowsByRuntimeId.get(runtimeId) ?? null;
-                  setSelectedForClone(row);
-                }}
-              />
-            ))}
-          </div>
-        </section>
-      ) : null}
 
       <section className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4 md:p-5">
         <div className="flex flex-wrap items-end justify-between gap-3 px-1">
@@ -531,7 +486,7 @@ function CreatorSignalRow({ creator }: { creator: CreatorHighlight }) {
       <div className="grid gap-3 sm:grid-cols-3">
         <MetricTile label="Reach" value={`${creator.marketplace_reach_score}`} accent="text-[#dce85d]" />
         <MetricTile label="Followers" value={`${creator.follower_count}`} accent="text-neutral-50" />
-        <MetricTile label="Featured bots" value={`${creator.featured_bot_count}`} accent="text-[#74b97f]" />
+        <MetricTile label="Public bots" value={`${creator.public_bot_count}`} accent="text-[#74b97f]" />
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-[1.25rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-4 py-3">
@@ -551,77 +506,6 @@ function CreatorSignalRow({ creator }: { creator: CreatorHighlight }) {
             {creator.spotlight_bot.copy_stats.active_mirror_count} live mirrors
           </div>
         </div>
-      </div>
-    </article>
-  );
-}
-
-function ShelfLane({
-  shelf,
-  onMirror,
-  onClone,
-}: {
-  shelf: MarketplaceOverviewFeaturedShelf;
-  onMirror: (runtimeId: string) => void;
-  onClone: (runtimeId: string) => void;
-}) {
-  return (
-    <article className="grid gap-4 rounded-[1.7rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-4">
-      <div className="grid gap-1">
-        <h3 className="font-mono text-xl font-bold uppercase tracking-tight text-neutral-50">{shelf.title}</h3>
-        <p className="text-sm leading-7 text-neutral-400">{shelf.subtitle}</p>
-      </div>
-
-      <div className="grid gap-3">
-        {shelf.bots.map((bot) => (
-          <div
-            key={`${shelf.collection_key}-${bot.runtime_id}`}
-            className="grid gap-3 rounded-[1.25rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4"
-          >
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="grid gap-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[0.56rem] font-semibold uppercase tracking-[0.16em] text-[#74b97f]">
-                    #{bot.rank}
-                  </span>
-                  <span className="text-[0.56rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">
-                    {bot.strategy_type}
-                  </span>
-                </div>
-                <Link
-                  href={`/marketplace/${bot.runtime_id}`}
-                  className="font-mono text-base font-bold uppercase tracking-tight text-neutral-50 transition hover:text-[#dce85d]"
-                >
-                  {bot.bot_name}
-                </Link>
-              </div>
-              <span className="text-xs text-neutral-500">{bot.creator.display_name}</span>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-3">
-              <MetricTile label="Trust" value={`${bot.trust.trust_score}`} accent="text-neutral-50" />
-              <MetricTile label="Mirrors" value={`${bot.copy_stats.active_mirror_count}`} accent="text-[#dce85d]" />
-              <MetricTile label="Clones" value={`${bot.copy_stats.clone_count}`} accent="text-[#74b97f]" />
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => onMirror(bot.runtime_id)}
-                className="rounded-full border border-[rgba(255,255,255,0.12)] px-3 py-1.5 text-[0.56rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d]"
-              >
-                Follow
-              </button>
-              <button
-                type="button"
-                onClick={() => onClone(bot.runtime_id)}
-                className="rounded-full border border-[rgba(255,255,255,0.12)] px-3 py-1.5 text-[0.56rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#74b97f] hover:text-[#74b97f]"
-              >
-                Clone
-              </button>
-            </div>
-          </div>
-        ))}
       </div>
     </article>
   );

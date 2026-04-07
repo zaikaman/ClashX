@@ -26,7 +26,7 @@ export function CreatorSpotlightCard({ creator }: { creator: CreatorHighlight })
       <div className="grid gap-3 sm:grid-cols-3">
         <Metric label="Reach" value={`${creator.marketplace_reach_score}`} />
         <Metric label="Followers" value={`${creator.follower_count}`} />
-        <Metric label="Featured bots" value={`${creator.featured_bot_count}`} />
+        <Metric label="Public bots" value={`${creator.public_bot_count}`} />
       </div>
 
       <div className="rounded-[1.2rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-4">

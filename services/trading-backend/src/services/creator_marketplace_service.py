@@ -12,7 +12,6 @@ from src.models import (
     BotInviteAccessRecord,
     BotPublishingSettingsRecord,
     CreatorMarketplaceProfileRecord,
-    FeaturedBotRecord,
 )
 from src.services.bot_builder_service import BotBuilderService
 from src.services.bot_leaderboard_engine import BotLeaderboardEngine
@@ -79,8 +78,8 @@ class CreatorMarketplaceService:
         return filtered
 
     async def list_featured_shelves(self, *, limit: int = 4) -> list[dict[str, Any]]:
-        public_rows = await self._load_marketplace_rows(limit=120)
-        return self._build_featured_shelves(public_rows=public_rows, limit=limit)
+        del limit
+        return []
 
     async def list_creator_highlights(self, *, limit: int = 6) -> list[dict[str, Any]]:
         public_rows = await self._load_marketplace_rows(limit=96)
@@ -93,11 +92,12 @@ class CreatorMarketplaceService:
         featured_limit: int = 4,
         creator_limit: int = 6,
     ) -> dict[str, Any]:
+        del featured_limit
         public_rows = await self._load_marketplace_overview_rows(limit=max(discover_limit, 120))
         discover_rows = public_rows[:discover_limit]
         return {
             "discover": discover_rows,
-            "featured": self._build_featured_shelves(public_rows=public_rows, limit=featured_limit),
+            "featured": [],
             "creators": self._build_creator_highlights(public_rows=public_rows, limit=creator_limit),
         }
 
@@ -129,60 +129,6 @@ class CreatorMarketplaceService:
                 self._clear_marketplace_cache()
         await self._load_marketplace_overview_rows(limit=max(limit, 120))
 
-    def _build_featured_shelves(self, *, public_rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
-        rows_by_bot = {row["bot_definition_id"]: row for row in public_rows}
-        featured_rows = self._select_featured_rows()
-
-        grouped_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        shelf_meta: dict[str, dict[str, Any]] = {}
-        for row in featured_rows:
-            bot_row = rows_by_bot.get(str(row.get("bot_definition_id") or ""))
-            if bot_row is None:
-                continue
-            collection_key = str(row.get("collection_key") or "featured")
-            grouped_rows[collection_key].append(bot_row)
-            shelf_meta[collection_key] = {
-                "collection_key": collection_key,
-                "title": str(row.get("collection_title") or "Featured strategies"),
-                "subtitle": str(row.get("featured_reason") or "Curated by creators for copy-ready discovery.").strip()
-                or "Curated by creators for copy-ready discovery.",
-            }
-
-        shelves: list[dict[str, Any]] = []
-        for collection_key, bots in grouped_rows.items():
-            bots.sort(
-                key=lambda item: (
-                    -(1 if item["publishing"]["is_featured"] else 0),
-                    int(item["publishing"]["featured_rank"]),
-                    int(item["rank"]),
-                )
-            )
-            meta = shelf_meta[collection_key]
-            shelves.append(
-                {
-                    "collection_key": meta["collection_key"],
-                    "title": meta["title"],
-                    "subtitle": meta["subtitle"],
-                    "bots": bots[:4],
-                }
-            )
-
-        shelves.sort(key=lambda item: item["title"])
-        if shelves:
-            return shelves[:limit]
-
-        fallback = public_rows[:4]
-        if not fallback:
-            return []
-        return [
-            {
-                "collection_key": "board-spotlight",
-                "title": "Board spotlight",
-                "subtitle": "Live strategies with the strongest current mix of rank, trust, and creator demand.",
-                "bots": fallback,
-            }
-        ]
-
     def _build_creator_highlights(self, *, public_rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
         highlights: dict[str, dict[str, Any]] = {}
         for row in public_rows:
@@ -194,7 +140,7 @@ class CreatorMarketplaceService:
                 "headline": creator.get("headline") or creator.get("summary") or "Publishing live strategies with clear guardrails.",
                 "bio": creator.get("bio") or "",
                 "follower_count": creator.get("follower_count") or 0,
-                "featured_bot_count": creator.get("featured_bot_count") or 0,
+                "featured_bot_count": 0,
                 "marketplace_reach_score": creator.get("marketplace_reach_score") or creator.get("reputation_score") or 0,
                 "spotlight_bot": {
                     "runtime_id": row["runtime_id"],
@@ -229,17 +175,10 @@ class CreatorMarketplaceService:
             display_name=str(base_profile.get("display_name") or user.get("display_name") or user["wallet_address"][:8]),
         )
         public_rows = await self.discover_public_bots(limit=96, creator_id=creator_id)
-        featured_ids = {
-            str(row.get("bot_definition_id") or "")
-            for row in self._select_featured_rows(filters={"creator_profile_id": marketplace_profile["id"], "active": True})
-        }
-        featured_bots = [row for row in public_rows if row["bot_definition_id"] in featured_ids]
         follower_count = self._count_creator_followers(creator_id=creator_id)
-        featured_bot_count = len(featured_bots)
         marketplace_reach_score = self._marketplace_reach_score(
             active_mirror_count=int(base_profile["active_mirror_count"]),
             follower_count=follower_count,
-            featured_bot_count=featured_bot_count,
             public_bot_count=int(base_profile["public_bot_count"]),
             reputation_score=int(base_profile["reputation_score"]),
         )
@@ -249,12 +188,11 @@ class CreatorMarketplaceService:
             "bio": marketplace_profile["bio"],
             "slug": marketplace_profile["slug"],
             "social_links_json": marketplace_profile.get("social_links_json") or {},
-            "featured_collection_title": marketplace_profile["featured_collection_title"],
             "follower_count": follower_count,
-            "featured_bot_count": featured_bot_count,
+            "featured_bot_count": 0,
             "marketplace_reach_score": marketplace_reach_score,
             "bots": public_rows,
-            "featured_bots": featured_bots,
+            "featured_bots": [],
         }
 
     def get_publishing_settings(self, *, bot_id: str, wallet_address: str) -> dict[str, Any]:
@@ -265,13 +203,9 @@ class CreatorMarketplaceService:
         creator_profile = self._get_creator_profile_row(user_id=str(user["id"]))
         publishing = self._read_publishing_settings_row(bot_definition_id=str(bot["id"]))
         invites = self._list_invites(bot_id=bot_id)
-        featured_row = self.supabase.maybe_one("featured_bots", filters={"bot_definition_id": bot_id, "active": True})
         creator_display_name = (
             str((creator_profile or {}).get("display_name") or user.get("display_name") or bot.get("wallet_address") or "")[:80]
             or str(bot.get("wallet_address") or "")[:8]
-        )
-        creator_featured_collection_title = (
-            (creator_profile or {}).get("featured_collection_title") or "Featured strategies"
         )
         return {
             "bot_definition_id": bot["id"],
@@ -280,9 +214,9 @@ class CreatorMarketplaceService:
             "publish_state": (publishing or {}).get("publish_state") or self._publish_state(str(bot["visibility"])),
             "hero_headline": (publishing or {}).get("hero_headline") or "",
             "access_note": (publishing or {}).get("access_note") or "",
-            "featured_collection_title": (publishing or {}).get("featured_collection_title") or creator_featured_collection_title,
-            "featured_rank": int((publishing or {}).get("featured_rank") or 0),
-            "is_featured": featured_row is not None,
+            "featured_collection_title": None,
+            "featured_rank": 0,
+            "is_featured": False,
             "invite_wallet_addresses": [invite["invited_wallet_address"] for invite in invites],
             "invite_count": len(invites),
             "creator_profile": {
@@ -290,7 +224,6 @@ class CreatorMarketplaceService:
                 "headline": (creator_profile or {}).get("headline") or "",
                 "bio": (creator_profile or {}).get("bio") or "",
                 "slug": (creator_profile or {}).get("slug") or "",
-                "featured_collection_title": creator_featured_collection_title,
             },
         }
 
@@ -310,6 +243,7 @@ class CreatorMarketplaceService:
         creator_headline: str | None,
         creator_bio: str | None,
     ) -> dict[str, Any]:
+        del is_featured, featured_collection_title, featured_rank
         normalized_visibility = visibility.strip()
         if normalized_visibility not in VALID_VISIBILITY:
             raise ValueError("visibility must be one of private|public|unlisted|invite_only")
@@ -327,31 +261,21 @@ class CreatorMarketplaceService:
         if user is None:
             raise ValueError("Creator not found")
 
-        creator_profile = self._ensure_creator_profile(
+        self._ensure_creator_profile(
             user=user,
             display_name=creator_display_name or user.get("display_name"),
             headline=creator_headline,
             bio=creator_bio,
-            featured_collection_title=featured_collection_title,
         )
         publishing = self._upsert_publishing_settings(
             bot=bot,
             hero_headline=hero_headline,
             access_note=access_note,
-            featured_collection_title=featured_collection_title,
-            featured_rank=featured_rank,
         )
         self._replace_invites(
             bot_id=bot_id,
             invited_by_user_id=str(bot["user_id"]),
             invite_wallet_addresses=invite_wallet_addresses if normalized_visibility == "invite_only" else [],
-        )
-        self._sync_featured_row(
-            bot=bot,
-            creator_profile=creator_profile,
-            featured_collection_title=featured_collection_title or creator_profile["featured_collection_title"],
-            featured_rank=featured_rank,
-            is_featured=is_featured and normalized_visibility == "public",
         )
         self.supabase.insert(
             "audit_events",
@@ -362,7 +286,7 @@ class CreatorMarketplaceService:
                 "payload": {
                     "bot_definition_id": bot_id,
                     "visibility": normalized_visibility,
-                    "is_featured": is_featured and normalized_visibility == "public",
+                    "is_featured": False,
                     "invite_count": len(invite_wallet_addresses if normalized_visibility == "invite_only" else []),
                     "publishing_id": publishing["id"],
                 },
@@ -635,11 +559,6 @@ class CreatorMarketplaceService:
         invite_rows = (
             []
         )
-        featured_rows = (
-            self._select_featured_rows(filters={"bot_definition_id": ("in", definition_ids), "active": True})
-            if definition_ids
-            else []
-        )
         users = self.supabase.select("users", filters={"id": ("in", creator_ids)}) if creator_ids else []
         profiles = (
             self.supabase.select("creator_marketplace_profiles", filters={"user_id": ("in", creator_ids)})
@@ -656,8 +575,6 @@ class CreatorMarketplaceService:
         for row in invite_rows:
             invite_count_by_definition[str(row.get("bot_definition_id") or "")] += 1
 
-        featured_by_definition = {str(row.get("bot_definition_id") or "") for row in featured_rows}
-
         publishing_by_definition: dict[str, dict[str, Any]] = {}
         for row in publishing_rows:
             bot_definition_id = str(row.get("bot_definition_id") or "")
@@ -667,9 +584,9 @@ class CreatorMarketplaceService:
                 "publish_state": row.get("publish_state") or "published",
                 "hero_headline": row.get("hero_headline") or "",
                 "access_note": row.get("access_note") or "",
-                "featured_collection_title": row.get("featured_collection_title"),
-                "featured_rank": int(row.get("featured_rank") or 0),
-                "is_featured": bot_definition_id in featured_by_definition,
+                "featured_collection_title": None,
+                "featured_rank": 0,
+                "is_featured": False,
                 "invite_count": invite_count_by_definition.get(bot_definition_id, 0),
             }
         for definition_id in definition_ids:
@@ -683,7 +600,7 @@ class CreatorMarketplaceService:
                     "access_note": "",
                     "featured_collection_title": None,
                     "featured_rank": 0,
-                    "is_featured": definition_id in featured_by_definition,
+                    "is_featured": False,
                     "invite_count": invite_count_by_definition.get(definition_id, 0),
                 },
             )
@@ -737,12 +654,6 @@ class CreatorMarketplaceService:
             public_bot_count_by_creator[creator_id] += 1
             active_runtime_count_by_creator[creator_id] += 1
 
-        featured_bot_count_by_creator: dict[str, int] = defaultdict(int)
-        for featured in featured_rows:
-            creator_id = creator_id_by_definition.get(str(featured.get("bot_definition_id") or "")) or ""
-            if creator_id:
-                featured_bot_count_by_creator[creator_id] += 1
-
         return {
             "publishing_by_definition": publishing_by_definition,
             "copy_stats_by_runtime": copy_stats_by_runtime,
@@ -754,7 +665,6 @@ class CreatorMarketplaceService:
             "clone_count_by_creator": clone_count_by_creator,
             "public_bot_count_by_creator": public_bot_count_by_creator,
             "active_runtime_count_by_creator": active_runtime_count_by_creator,
-            "featured_bot_count_by_creator": featured_bot_count_by_creator,
         }
 
     def _build_marketplace_overview_context(
@@ -821,7 +731,6 @@ class CreatorMarketplaceService:
                 public_bot_count=public_bot_count,
             )
             follower_count = int(support["follower_count_by_creator"].get(creator_id, 0))
-            featured_bot_count = int(support["featured_bot_count_by_creator"].get(creator_id, 0))
             creator_summaries[creator_id] = {
                 "creator_id": creator_id,
                 "wallet_address": str((user or {}).get("wallet_address") or ""),
@@ -845,13 +754,11 @@ class CreatorMarketplaceService:
                 "headline": str((profile or {}).get("headline") or "") or "Publishing live strategies with clear guardrails.",
                 "bio": str((profile or {}).get("bio") or ""),
                 "slug": str((profile or {}).get("slug") or ""),
-                "featured_collection_title": str((profile or {}).get("featured_collection_title") or "Featured strategies"),
                 "follower_count": follower_count,
-                "featured_bot_count": featured_bot_count,
+                "featured_bot_count": 0,
                 "marketplace_reach_score": self._marketplace_reach_score(
                     active_mirror_count=active_mirror_count,
                     follower_count=follower_count,
-                    featured_bot_count=featured_bot_count,
                     public_bot_count=public_bot_count,
                     reputation_score=reputation_score,
                 ),
@@ -896,10 +803,6 @@ class CreatorMarketplaceService:
     def _attach_marketplace_fields(self, row: dict[str, Any]) -> dict[str, Any]:
         invites = self._list_invites(bot_id=str(row["bot_definition_id"]))
         publishing = self._get_publishing_settings_row(bot_definition_id=str(row["bot_definition_id"]))
-        is_featured = (
-            self.supabase.maybe_one("featured_bots", filters={"bot_definition_id": row["bot_definition_id"], "active": True})
-            is not None
-        )
         return {
             **row,
             "publishing": {
@@ -908,9 +811,9 @@ class CreatorMarketplaceService:
                 "publish_state": publishing.get("publish_state") or "published",
                 "hero_headline": publishing.get("hero_headline") or "",
                 "access_note": publishing.get("access_note") or "",
-                "featured_collection_title": publishing.get("featured_collection_title"),
-                "featured_rank": int(publishing.get("featured_rank") or 0),
-                "is_featured": is_featured,
+                "featured_collection_title": None,
+                "featured_rank": 0,
+                "is_featured": False,
                 "invite_count": len(invites),
             },
             "copy_stats": self._bot_copy_stats(
@@ -927,27 +830,22 @@ class CreatorMarketplaceService:
                 "headline": summary.get("summary") or "",
                 "bio": "",
                 "slug": "",
-                "featured_collection_title": "Featured strategies",
                 "follower_count": 0,
                 "featured_bot_count": 0,
                 "marketplace_reach_score": int(summary.get("reputation_score") or 0),
             }
         profile = self._ensure_creator_profile(user=user, display_name=str(summary.get("display_name") or user["wallet_address"][:8]))
         follower_count = self._count_creator_followers(creator_id=str(summary["creator_id"]))
-        featured_rows = self._select_featured_rows(filters={"creator_profile_id": profile["id"], "active": True})
-        featured_bot_count = len(featured_rows)
         return {
             **summary,
             "headline": profile.get("headline") or summary.get("summary") or "",
             "bio": profile.get("bio") or "",
             "slug": profile.get("slug") or "",
-            "featured_collection_title": profile.get("featured_collection_title") or "Featured strategies",
             "follower_count": follower_count,
-            "featured_bot_count": featured_bot_count,
+            "featured_bot_count": 0,
             "marketplace_reach_score": self._marketplace_reach_score(
                 active_mirror_count=int(summary.get("active_mirror_count") or 0),
                 follower_count=follower_count,
-                featured_bot_count=featured_bot_count,
                 public_bot_count=int(summary.get("public_bot_count") or 0),
                 reputation_score=int(summary.get("reputation_score") or 0),
             ),
@@ -960,7 +858,6 @@ class CreatorMarketplaceService:
         display_name: str | None = None,
         headline: str | None = None,
         bio: str | None = None,
-        featured_collection_title: str | None = None,
     ) -> dict[str, Any]:
         profile = self.supabase.maybe_one("creator_marketplace_profiles", filters={"user_id": user["id"]})
         resolved_display_name = (display_name or user.get("display_name") or str(user["wallet_address"])[:8]).strip()
@@ -971,7 +868,6 @@ class CreatorMarketplaceService:
                 display_name=resolved_display_name,
                 headline=headline,
                 bio=bio,
-                featured_collection_title=featured_collection_title,
             )
             row = record.to_row()
             row["slug"] = self._unique_slug(base_slug=row["slug"], user_id=str(user["id"]))
@@ -985,9 +881,6 @@ class CreatorMarketplaceService:
             "display_name": next_display_name,
             "headline": headline if headline is not None else profile.get("headline") or "",
             "bio": bio if bio is not None else profile.get("bio") or "",
-            "featured_collection_title": featured_collection_title
-            if featured_collection_title is not None
-            else profile.get("featured_collection_title") or "Featured strategies",
             "updated_at": datetime.now(tz=UTC).isoformat(),
         }
         requested_slug = self._unique_slug(
@@ -1025,8 +918,6 @@ class CreatorMarketplaceService:
         bot: dict[str, Any],
         hero_headline: str | None,
         access_note: str | None,
-        featured_collection_title: str | None,
-        featured_rank: int,
     ) -> dict[str, Any]:
         existing = self._get_publishing_settings_row(bot_definition_id=str(bot["id"]))
         if existing is None:
@@ -1036,8 +927,6 @@ class CreatorMarketplaceService:
                 visibility=str(bot["visibility"]),
                 hero_headline=hero_headline,
                 access_note=access_note,
-                featured_collection_title=featured_collection_title,
-                featured_rank=featured_rank,
             )
             return self.supabase.insert("bot_publishing_settings", record.to_row())[0]
 
@@ -1049,54 +938,11 @@ class CreatorMarketplaceService:
             "listed_at": existing.get("listed_at") or (datetime.now(tz=UTC).isoformat() if publish_state != "draft" else None),
             "hero_headline": (hero_headline if hero_headline is not None else existing.get("hero_headline") or "").strip(),
             "access_note": (access_note if access_note is not None else existing.get("access_note") or "").strip(),
-            "featured_collection_title": (featured_collection_title if featured_collection_title is not None else existing.get("featured_collection_title") or "").strip()
-            or None,
-            "featured_rank": max(0, int(featured_rank)),
+            "featured_collection_title": None,
+            "featured_rank": 0,
             "updated_at": datetime.now(tz=UTC).isoformat(),
         }
         return self.supabase.update("bot_publishing_settings", values, filters={"id": existing["id"]})[0]
-
-    def _sync_featured_row(
-        self,
-        *,
-        bot: dict[str, Any],
-        creator_profile: dict[str, Any],
-        featured_collection_title: str,
-        featured_rank: int,
-        is_featured: bool,
-    ) -> None:
-        existing = self.supabase.maybe_one("featured_bots", filters={"bot_definition_id": bot["id"]})
-        if not is_featured:
-            if existing is not None:
-                self.supabase.update(
-                    "featured_bots",
-                    {"active": False, "updated_at": datetime.now(tz=UTC).isoformat()},
-                    filters={"id": existing["id"]},
-                )
-            return
-
-        collection_key = _slugify(featured_collection_title) or "featured"
-        values = {
-            "creator_profile_id": creator_profile["id"],
-            "bot_definition_id": bot["id"],
-            "collection_key": collection_key,
-            "collection_title": featured_collection_title.strip() or creator_profile["featured_collection_title"],
-            "shelf_rank": max(0, int(featured_rank)),
-            "featured_reason": "",
-            "active": True,
-            "updated_at": datetime.now(tz=UTC).isoformat(),
-        }
-        if existing is None:
-            record = FeaturedBotRecord.create(
-                creator_profile_id=str(creator_profile["id"]),
-                bot_definition_id=str(bot["id"]),
-                collection_key=collection_key,
-                collection_title=values["collection_title"],
-                shelf_rank=featured_rank,
-            )
-            self.supabase.insert("featured_bots", record.to_row())
-            return
-        self.supabase.update("featured_bots", values, filters={"id": existing["id"]})
 
     def _replace_invites(
         self,
@@ -1199,7 +1045,6 @@ class CreatorMarketplaceService:
         *,
         active_mirror_count: int,
         follower_count: int,
-        featured_bot_count: int,
         public_bot_count: int,
         reputation_score: int,
     ) -> int:
@@ -1211,7 +1056,6 @@ class CreatorMarketplaceService:
                     (reputation_score * 0.52)
                     + min(28, active_mirror_count * 3.4)
                     + min(12, follower_count * 2.0)
-                    + min(10, featured_bot_count * 4)
                     + min(10, public_bot_count * 2)
                 ),
             ),
@@ -1222,12 +1066,6 @@ class CreatorMarketplaceService:
         if bot is None:
             raise ValueError("Bot not found")
         return bot
-
-    def _select_featured_rows(self, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        try:
-            return self.supabase.select("featured_bots", filters=filters, order="collection_title.asc,shelf_rank.asc")
-        except SupabaseRestError:
-            return []
 
     @staticmethod
     def _publish_state(visibility: str) -> str:

@@ -389,9 +389,6 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
       publish_state: publishState,
       hero_headline: "",
       access_note: "",
-      featured_collection_title: "Featured strategies",
-      featured_rank: 0,
-      is_featured: false,
       invite_wallet_addresses: [],
       invite_count: 0,
       creator_profile: {
@@ -399,7 +396,6 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
         headline: "",
         bio: "",
         slug: "",
-        featured_collection_title: "Featured strategies",
       },
     };
   }, [visibleBot, walletAddress]);
@@ -640,7 +636,7 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
                         Marketplace profile
                       </div>
                       <p className="mt-2 text-sm leading-6 text-neutral-400">
-                        Access mode, creator details, and shelf placement.
+                        Access mode, creator details, and discovery copy.
                       </p>
                     </div>
 

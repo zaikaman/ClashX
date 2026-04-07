@@ -13,9 +13,6 @@ type PublishingFormState = {
   visibility: string;
   heroHeadline: string;
   accessNote: string;
-  isFeatured: boolean;
-  featuredCollectionTitle: string;
-  featuredRank: number;
   inviteWalletsText: string;
   creatorDisplayName: string;
   creatorHeadline: string;
@@ -35,10 +32,6 @@ function buildInitialState(settings: PublishingSettings): PublishingFormState {
     visibility: settings.visibility,
     heroHeadline: settings.hero_headline,
     accessNote: settings.access_note,
-    isFeatured: settings.is_featured,
-    featuredCollectionTitle:
-      settings.featured_collection_title ?? settings.creator_profile.featured_collection_title ?? "",
-    featuredRank: settings.featured_rank,
     inviteWalletsText: settings.invite_wallet_addresses.join("\n"),
     creatorDisplayName: settings.creator_profile.display_name,
     creatorHeadline: settings.creator_profile.headline,
@@ -135,9 +128,6 @@ export function BotPublishingPanel({
         visibility: form.visibility,
         hero_headline: form.heroHeadline.trim(),
         access_note: form.accessNote.trim(),
-        is_featured: form.isFeatured,
-        featured_collection_title: form.featuredCollectionTitle.trim(),
-        featured_rank: Number.isFinite(form.featuredRank) ? form.featuredRank : 0,
         invite_wallet_addresses: parseInviteWallets(form.inviteWalletsText),
         creator_display_name: form.creatorDisplayName.trim(),
         creator_headline: form.creatorHeadline.trim(),
@@ -181,7 +171,7 @@ export function BotPublishingPanel({
             Control how this strategy shows up
           </h3>
           <p className="max-w-3xl text-sm leading-7 text-neutral-400">
-            Choose the access mode, shape the creator profile, and decide whether this bot belongs on a featured shelf.
+            Set who can access it, shape the creator profile, and decide how it appears in discovery.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -293,70 +283,9 @@ export function BotPublishingPanel({
         </div>
       </div>
 
-      <div className={`grid gap-4 ${compact ? "" : "md:grid-cols-[minmax(0,0.58fr)_minmax(10rem,0.18fr)_minmax(13rem,0.24fr)]"}`}>
-        <label className={FIELD_WRAPPER_CLASS}>
-          <span className={FIELD_LABEL_CLASS}>Featured shelf</span>
-          <input
-            value={form.featuredCollectionTitle}
-            onChange={(event) =>
-              setForm((current) => (current ? { ...current, featuredCollectionTitle: event.target.value } : current))
-            }
-            placeholder="High conviction majors"
-            disabled={!form.isFeatured && form.visibility !== "public"}
-            className={`${FIELD_CLASS} disabled:opacity-60`}
-          />
-        </label>
-
-        <label className={FIELD_WRAPPER_CLASS}>
-          <span className={FIELD_LABEL_CLASS}>Shelf rank</span>
-          <input
-            type="number"
-            min={0}
-            max={50}
-            value={form.featuredRank}
-            onChange={(event) =>
-              setForm((current) =>
-                current ? { ...current, featuredRank: Number.parseInt(event.target.value || "0", 10) || 0 } : current,
-              )
-            }
-            disabled={!form.isFeatured}
-            className={`${FIELD_CLASS} disabled:opacity-60`}
-          />
-        </label>
-
-        <label className="grid gap-3 rounded-[1.2rem] border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-300">
-          <span className={FIELD_LABEL_CLASS}>Featured slot</span>
-          <div className="flex items-center justify-between gap-3">
-            <div className="grid gap-1">
-              <span className="font-medium text-neutral-100">
-                {form.isFeatured ? "Featured on" : "Featured off"}
-              </span>
-              <span className="text-xs leading-5 text-neutral-500">
-                {form.visibility === "public"
-                  ? "Show this bot in a featured shelf."
-                  : "Set access to public before featuring this bot."}
-              </span>
-            </div>
-            <span className="relative inline-flex">
-              <input
-                type="checkbox"
-                checked={form.isFeatured}
-                disabled={form.visibility !== "public"}
-                onChange={(event) =>
-                  setForm((current) => (current ? { ...current, isFeatured: event.target.checked } : current))
-                }
-                className="peer sr-only"
-              />
-              <span className="h-7 w-12 rounded-full bg-[#090a0a] transition peer-checked:bg-[#dce85d] peer-disabled:opacity-50" />
-              <span className="pointer-events-none absolute left-1 top-1 h-5 w-5 rounded-full bg-neutral-200 transition peer-checked:translate-x-5 peer-checked:bg-[#090a0a]" />
-            </span>
-          </div>
-        </label>
-      </div>
-
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[rgba(255,255,255,0.06)] pt-4">
         <p className="text-xs leading-6 text-neutral-500">
-          Public bots appear in discovery. Unlisted stays off shelves. Invite-only requires a wallet allowlist.
+          Public bots appear in the marketplace. Unlisted stays off discovery. Invite-only requires a wallet allowlist.
         </p>
         <button
           type="button"

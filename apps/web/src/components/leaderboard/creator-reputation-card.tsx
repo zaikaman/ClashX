@@ -15,7 +15,6 @@ type CreatorProps = {
 export function CreatorReputationCard({ creator, showBots = false }: CreatorProps) {
   const bots = "bots" in creator ? creator.bots : [];
   const followerCount = "follower_count" in creator ? creator.follower_count : 0;
-  const featuredBotCount = "featured_bot_count" in creator ? creator.featured_bot_count : 0;
   const reachScore = "marketplace_reach_score" in creator ? creator.marketplace_reach_score : creator.reputation_score;
   const headline = "headline" in creator ? creator.headline : creator.summary;
 
@@ -41,7 +40,7 @@ export function CreatorReputationCard({ creator, showBots = false }: CreatorProp
         <Metric label="Reach" value={`${reachScore}`} accent="text-[#dce85d]" />
         <Metric label="Trust avg" value={`${creator.average_trust_score}`} accent="text-[#74b97f]" />
         <Metric label="Followers" value={`${followerCount || creator.active_mirror_count}`} accent="text-neutral-50" />
-        <Metric label="Published bots" value={`${featuredBotCount || creator.public_bot_count}`} accent="text-neutral-50" />
+        <Metric label="Published bots" value={`${creator.public_bot_count}`} accent="text-neutral-50" />
       </div>
 
       <div className="flex flex-wrap gap-2">

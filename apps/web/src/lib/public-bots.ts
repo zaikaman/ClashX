@@ -127,7 +127,6 @@ export type MarketplaceCreatorSummary = CreatorSummary & {
   headline: string;
   bio: string;
   slug: string;
-  featured_collection_title: string;
   follower_count: number;
   featured_bot_count: number;
   marketplace_reach_score: number;
@@ -178,7 +177,6 @@ export type MarketplaceOverview = {
 export type MarketplaceCreatorProfile = MarketplaceCreatorSummary & {
   social_links_json: Record<string, unknown>;
   bots: MarketplaceDiscoveryRow[];
-  featured_bots: MarketplaceDiscoveryRow[];
 };
 
 export type PublishingSettings = {
@@ -188,9 +186,6 @@ export type PublishingSettings = {
   publish_state: string;
   hero_headline: string;
   access_note: string;
-  featured_collection_title: string | null;
-  featured_rank: number;
-  is_featured: boolean;
   invite_wallet_addresses: string[];
   invite_count: number;
   creator_profile: {
@@ -198,7 +193,6 @@ export type PublishingSettings = {
     headline: string;
     bio: string;
     slug: string;
-    featured_collection_title: string;
   };
 };
 
@@ -367,9 +361,6 @@ export async function updatePublishingSettings(
     visibility: string;
     hero_headline?: string;
     access_note?: string;
-    is_featured: boolean;
-    featured_collection_title?: string;
-    featured_rank: number;
     invite_wallet_addresses: string[];
     creator_display_name?: string;
     creator_headline?: string;

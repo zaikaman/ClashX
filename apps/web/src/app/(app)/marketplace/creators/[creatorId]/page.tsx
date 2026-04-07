@@ -4,7 +4,6 @@ import Link from "next/link";
 import { use, useEffect, useState } from "react";
 
 import { CreatorReputationCard } from "@/components/leaderboard/creator-reputation-card";
-import { FeaturedBotShelf } from "@/components/leaderboard/featured-bot-shelf";
 import {
   fetchMarketplaceCreatorProfile,
   type MarketplaceCreatorProfile,
@@ -83,7 +82,7 @@ export default function MarketplaceCreatorPage({ params: paramsPromise }: { para
               {profile ? `${profile.marketplace_reach_score} reach` : "Loading"}
             </span>
             <p className="text-sm leading-7 text-neutral-400">
-              {profile ? `${profile.follower_count} followers, ${profile.active_mirror_count} live mirrors, and ${profile.featured_bot_count} featured bots.` : "Loading creator footprint."}
+              {profile ? `${profile.follower_count} followers, ${profile.active_mirror_count} live mirrors, and ${profile.public_bot_count} public strategies.` : "Loading creator footprint."}
             </p>
           </div>
         </div>
@@ -95,17 +94,6 @@ export default function MarketplaceCreatorPage({ params: paramsPromise }: { para
         <HeroStat label="Followers" value={profile ? `${profile.follower_count}` : "--"} accent="text-neutral-50" />
         <HeroStat label="Best rank" value={profile?.best_rank ? `#${profile.best_rank}` : loading ? "..." : "Unranked"} accent="text-neutral-50" />
       </section>
-
-      {profile?.featured_bots.length ? (
-        <FeaturedBotShelf
-          shelf={{
-            collection_key: profile.slug || profile.creator_id,
-            title: profile.featured_collection_title,
-            subtitle: profile.bio || profile.summary,
-            bots: profile.featured_bots,
-          }}
-        />
-      ) : null}
 
       {profile ? (
         <CreatorReputationCard creator={profile} showBots />
