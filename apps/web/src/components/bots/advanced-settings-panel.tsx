@@ -10,6 +10,11 @@ type RiskStateResponse = {
 };
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const FIELD_LABEL_CLASS = "grid gap-2 text-sm text-neutral-400";
+const INPUT_CLASS =
+  "w-full rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]";
+const SECTION_CARD_CLASS =
+  "grid gap-4 rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] p-4";
 
 export function AdvancedSettingsPanel({
   botId,
@@ -101,58 +106,91 @@ export function AdvancedSettingsPanel({
   }
 
   return (
-    <section className="grid gap-4 border-l-2 border-[rgba(255,255,255,0.12)] bg-[#16181a] p-6">
-      <div className="flex items-center justify-between">
-        <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">advanced execution settings</span>
+    <article className="grid gap-5 rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="grid gap-1">
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
+            Advanced settings
+          </span>
+          <h3 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
+            Refine runtime policy
+          </h3>
+          <p className="max-w-3xl text-sm leading-7 text-neutral-400">
+            Fine-tune leverage, drawdown, symbol scope, and sizing rules for live execution.
+          </p>
+        </div>
         <span className="text-xs text-neutral-500">live runtime policy</span>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="grid gap-1.5 text-sm text-neutral-400">
-          Max leverage
-          <input type="number" min={1} value={maxLeverage} onChange={(event) => setMaxLeverage(Number(event.target.value))} className="w-full border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d] rounded-md" />
-        </label>
-        <label className="grid gap-1.5 text-sm text-neutral-400">
-          Max order size USD
-          <input type="number" min={1} value={maxOrderSizeUsd} onChange={(event) => setMaxOrderSizeUsd(Number(event.target.value))} className="w-full border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d] rounded-md" />
-        </label>
-        <label className="grid gap-1.5 text-sm text-neutral-400">
-          Allocated capital USD
-          <input type="number" min={1} value={allocatedCapitalUsd} onChange={(event) => setAllocatedCapitalUsd(Number(event.target.value))} className="w-full border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d] rounded-md" />
-        </label>
-        <label className="grid gap-1.5 text-sm text-neutral-400">
-          Max open positions
-          <input type="number" min={1} value={maxOpenPositions} onChange={(event) => setMaxOpenPositions(Number(event.target.value))} className="w-full border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d] rounded-md" />
-        </label>
-        <label className="grid gap-1.5 text-sm text-neutral-400">
-          Cooldown seconds
-          <input type="number" min={0} value={cooldownSeconds} onChange={(event) => setCooldownSeconds(Number(event.target.value))} className="w-full border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d] rounded-md" />
-        </label>
-        <label className="grid gap-1.5 text-sm text-neutral-400">
-          Max drawdown % of allocation
-          <input type="number" min={0} step="0.1" value={maxDrawdownPct} onChange={(event) => setMaxDrawdownPct(Number(event.target.value))} className="w-full border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d] rounded-md" />
-        </label>
-      </div>
-      <p className="text-xs leading-6 text-neutral-500">
-        Drawdown now uses realized plus unrealized bot PnL against this runtime allocation. If a bot with ${allocatedCapitalUsd || 0} allocated reaches a {maxDrawdownPct}% loss budget, it is stopped automatically. Open positions are capped at {maxOpenPositions} so the runtime cannot keep stacking fresh entries indefinitely.
-      </p>
+      <div className={SECTION_CARD_CLASS}>
+        <div className="grid gap-1">
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
+            Risk profile
+          </span>
+          <p className="text-sm leading-7 text-neutral-400">
+            Set the capital, leverage, and drawdown boundaries this runtime should respect.
+          </p>
+        </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="grid gap-1.5 text-sm text-neutral-400">
-          Market scope symbols
-          <input value={allowedSymbols} onChange={(event) => setAllowedSymbols(event.target.value)} placeholder="BTC,ETH,SOL" className="w-full border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d] rounded-md" />
-        </label>
-        <label className="grid gap-1.5 text-sm text-neutral-400">
-          Sizing mode
-          <select
-            value={sizingMode}
-            onChange={(event) => setSizingMode(event.target.value)}
-            className="w-full border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d] rounded-md"
-          >
-            <option value="fixed_usd">fixed usd</option>
-            <option value="risk_adjusted">risk adjusted</option>
-          </select>
-        </label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className={FIELD_LABEL_CLASS}>
+            Max leverage
+            <input type="number" min={1} value={maxLeverage} onChange={(event) => setMaxLeverage(Number(event.target.value))} className={INPUT_CLASS} />
+          </label>
+          <label className={FIELD_LABEL_CLASS}>
+            Max order size USD
+            <input type="number" min={1} value={maxOrderSizeUsd} onChange={(event) => setMaxOrderSizeUsd(Number(event.target.value))} className={INPUT_CLASS} />
+          </label>
+          <label className={FIELD_LABEL_CLASS}>
+            Allocated capital USD
+            <input type="number" min={1} value={allocatedCapitalUsd} onChange={(event) => setAllocatedCapitalUsd(Number(event.target.value))} className={INPUT_CLASS} />
+          </label>
+          <label className={FIELD_LABEL_CLASS}>
+            Max open positions
+            <input type="number" min={1} value={maxOpenPositions} onChange={(event) => setMaxOpenPositions(Number(event.target.value))} className={INPUT_CLASS} />
+          </label>
+          <label className={FIELD_LABEL_CLASS}>
+            Cooldown seconds
+            <input type="number" min={0} value={cooldownSeconds} onChange={(event) => setCooldownSeconds(Number(event.target.value))} className={INPUT_CLASS} />
+          </label>
+          <label className={FIELD_LABEL_CLASS}>
+            Max drawdown % of allocation
+            <input type="number" min={0} step="0.1" value={maxDrawdownPct} onChange={(event) => setMaxDrawdownPct(Number(event.target.value))} className={INPUT_CLASS} />
+          </label>
+        </div>
+      </div>
+
+      <div className={SECTION_CARD_CLASS}>
+        <div className="grid gap-1">
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
+            Execution scope
+          </span>
+          <p className="text-sm leading-7 text-neutral-400">
+            Limit which markets can trade and how position sizing should be calculated.
+          </p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className={FIELD_LABEL_CLASS}>
+            Market scope symbols
+            <input value={allowedSymbols} onChange={(event) => setAllowedSymbols(event.target.value)} placeholder="BTC,ETH,SOL" className={INPUT_CLASS} />
+          </label>
+          <label className={FIELD_LABEL_CLASS}>
+            Sizing mode
+            <select
+              value={sizingMode}
+              onChange={(event) => setSizingMode(event.target.value)}
+              className={INPUT_CLASS}
+            >
+              <option value="fixed_usd">fixed usd</option>
+              <option value="risk_adjusted">risk adjusted</option>
+            </select>
+          </label>
+        </div>
+
+        <p className="text-xs leading-6 text-neutral-500">
+          Drawdown uses realized plus unrealized PnL against this runtime allocation. If a bot with ${allocatedCapitalUsd || 0} allocated reaches a {maxDrawdownPct}% loss budget, it is stopped automatically. Open positions are capped at {maxOpenPositions} so the runtime cannot keep stacking fresh entries indefinitely.
+        </p>
       </div>
 
       {error ? <p className="text-sm text-[#dce85d]">{error}</p> : null}
@@ -167,6 +205,6 @@ export function AdvancedSettingsPanel({
           {status === "saving" ? <><span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full spinner-reverse mr-2 align-middle"></span>saving...</> : "save settings"}
         </button>
       </div>
-    </section>
+    </article>
   );
 }

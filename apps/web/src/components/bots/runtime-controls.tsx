@@ -21,6 +21,11 @@ type RuntimeResponse = {
   stopped_at?: string | null;
 };
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const FIELD_LABEL_CLASS = "grid gap-2 text-sm text-neutral-400";
+const INPUT_CLASS =
+  "rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]";
+const SECTION_CARD_CLASS =
+  "grid gap-4 rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] p-4";
 
 export function RuntimeControls({
   botId,
@@ -164,7 +169,7 @@ export function RuntimeControls({
   }
 
   return (
-    <section className="grid gap-5 border-l-2 border-[#74b97f] bg-[#16181a] p-6">
+    <article className="grid gap-5 rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
       <PacificaOnboardingChecklist
         open={setupOpen}
         onClose={() => setSetupOpen(false)}
@@ -172,61 +177,71 @@ export function RuntimeControls({
         onStatusChange={setSetupStatus}
         walletAddressOverride={walletAddress}
       />
-      <div className="flex items-center justify-between">
-        <span className="label text-[#74b97f]">runtime controls</span>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="grid gap-1">
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#74b97f]">
+            Runtime controls
+          </span>
+          <h3 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
+            Run this bot live
+          </h3>
+          <p className="max-w-3xl text-sm leading-7 text-neutral-400">
+            Set guardrails, check deployment readiness, and control the runtime from one place.
+          </p>
+        </div>
         <span className="text-xs text-neutral-500">wallet-bound live deployment</span>
       </div>
 
-      <div className="grid gap-3 rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-4">
+      <div className={SECTION_CARD_CLASS}>
         <div className="grid gap-1">
-          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#74b97f]">deploy profile</span>
-          <p className="text-sm leading-6 text-neutral-400">
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Deploy profile</span>
+          <p className="text-sm leading-7 text-neutral-400">
             Set the live guardrails the bot will use the moment it starts trading.
           </p>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          <label className="grid gap-1.5 text-sm text-neutral-400">
+          <label className={FIELD_LABEL_CLASS}>
             Max leverage
             <input
               type="number"
               min={1}
               value={maxLeverage}
               onChange={(event) => setMaxLeverage(Number(event.target.value))}
-              className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+              className={INPUT_CLASS}
             />
           </label>
-          <label className="grid gap-1.5 text-sm text-neutral-400">
+          <label className={FIELD_LABEL_CLASS}>
             Max order size
             <input
               type="number"
               min={1}
               value={maxOrderSizeUsd}
               onChange={(event) => setMaxOrderSizeUsd(Number(event.target.value))}
-              className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+              className={INPUT_CLASS}
             />
           </label>
-          <label className="grid gap-1.5 text-sm text-neutral-400">
+          <label className={FIELD_LABEL_CLASS}>
             Allocated capital
             <input
               type="number"
               min={1}
               value={allocatedCapitalUsd}
               onChange={(event) => setAllocatedCapitalUsd(Number(event.target.value))}
-              className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+              className={INPUT_CLASS}
             />
           </label>
-          <label className="grid gap-1.5 text-sm text-neutral-400">
+          <label className={FIELD_LABEL_CLASS}>
             Cooldown
             <input
               type="number"
               min={0}
               value={cooldownSeconds}
               onChange={(event) => setCooldownSeconds(Number(event.target.value))}
-              className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+              className={INPUT_CLASS}
             />
           </label>
-          <label className="grid gap-1.5 text-sm text-neutral-400">
+          <label className={FIELD_LABEL_CLASS}>
             Max drawdown %
             <input
               type="number"
@@ -234,22 +249,22 @@ export function RuntimeControls({
               step="0.1"
               value={maxDrawdownPct}
               onChange={(event) => setMaxDrawdownPct(Number(event.target.value))}
-              className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+              className={INPUT_CLASS}
             />
           </label>
-          <label className="grid gap-1.5 text-sm text-neutral-400">
+          <label className={FIELD_LABEL_CLASS}>
             Open positions allowed
             <input
               type="number"
               min={1}
               value={maxOpenPositions}
               onChange={(event) => setMaxOpenPositions(Number(event.target.value))}
-              className="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+              className={INPUT_CLASS}
             />
           </label>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[rgba(255,255,255,0.05)] bg-[#111416] px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[1.2rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-3">
           <p className="text-xs leading-6 text-neutral-500">
             With this profile, the bot can hold up to {maxOpenPositions} live position{maxOpenPositions === 1 ? "" : "s"} and waits {cooldownSeconds}s before the next fresh entry.
           </p>
@@ -263,14 +278,14 @@ export function RuntimeControls({
         </div>
 
         {showRawPolicy ? (
-          <pre className="overflow-x-auto rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-4 py-3 text-xs leading-6 text-neutral-300">
+          <pre className="overflow-x-auto rounded-[1.2rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-3 text-xs leading-6 text-neutral-300">
             {JSON.stringify(riskPolicy, null, 2)}
           </pre>
         ) : null}
       </div>
 
       {readinessBlocker && status !== "deploy" ? (
-        <div className="rounded-xl border border-[rgba(220,232,93,0.18)] bg-[rgba(220,232,93,0.08)] px-4 py-3 text-sm leading-6 text-neutral-200">
+        <div className="rounded-[1.2rem] border border-[rgba(220,232,93,0.18)] bg-[rgba(220,232,93,0.08)] px-4 py-3 text-sm leading-6 text-neutral-200">
           <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#dce85d]">Deploy blocked</div>
           <div className="mt-1">{readinessBlocker}</div>
         </div>
@@ -312,6 +327,6 @@ export function RuntimeControls({
           stop
         </button>
       </div>
-    </section>
+    </article>
   );
 }

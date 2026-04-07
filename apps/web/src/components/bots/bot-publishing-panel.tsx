@@ -22,6 +22,14 @@ type PublishingFormState = {
   creatorBio: string;
 };
 
+const FIELD_LABEL_CLASS =
+  "text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400";
+const FIELD_WRAPPER_CLASS = "grid gap-2";
+const FIELD_CLASS =
+  "rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]";
+const FIELD_CLASS_ALT_FOCUS =
+  "rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]";
+
 function buildInitialState(settings: PublishingSettings): PublishingFormState {
   return {
     visibility: settings.visibility,
@@ -75,12 +83,13 @@ export function BotPublishingPanel({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(Boolean(seededSettings));
+  const hasSeededSettings = Boolean(seededSettings);
 
   useEffect(() => {
     const controller = new AbortController();
 
     async function load() {
-      if (!settings) {
+      if (!hasSeededSettings) {
         setLoading(true);
       } else {
         setRefreshing(true);
@@ -108,7 +117,7 @@ export function BotPublishingPanel({
 
     void load();
     return () => controller.abort();
-  }, [botId, walletAddress, getAuthHeaders]);
+  }, [botId, walletAddress, getAuthHeaders, hasSeededSettings]);
 
   const inviteCount = useMemo(() => parseInviteWallets(form?.inviteWalletsText ?? "").length, [form?.inviteWalletsText]);
 
@@ -201,12 +210,12 @@ export function BotPublishingPanel({
 
       <div className={`grid gap-4 ${compact ? "" : "xl:grid-cols-[1.05fr_0.95fr]"}`}>
         <div className="grid gap-4">
-          <label className="grid gap-2">
-            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Access</span>
+          <label className={FIELD_WRAPPER_CLASS}>
+            <span className={FIELD_LABEL_CLASS}>Access</span>
             <select
               value={form.visibility}
               onChange={(event) => setForm((current) => (current ? { ...current, visibility: event.target.value } : current))}
-              className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]"
+              className={FIELD_CLASS}
             >
               <option value="private">Private</option>
               <option value="public">Public</option>
@@ -215,29 +224,29 @@ export function BotPublishingPanel({
             </select>
           </label>
 
-          <label className="grid gap-2">
-            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Shelf headline</span>
+          <label className={FIELD_WRAPPER_CLASS}>
+            <span className={FIELD_LABEL_CLASS}>Shelf headline</span>
             <input
               value={form.heroHeadline}
               onChange={(event) => setForm((current) => (current ? { ...current, heroHeadline: event.target.value } : current))}
               placeholder="Fast trend rotation with tight drawdown control"
-              className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]"
+              className={FIELD_CLASS}
             />
           </label>
 
-          <label className="grid gap-2">
-            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Access note</span>
+          <label className={FIELD_WRAPPER_CLASS}>
+            <span className={FIELD_LABEL_CLASS}>Access note</span>
             <input
               value={form.accessNote}
               onChange={(event) => setForm((current) => (current ? { ...current, accessNote: event.target.value } : current))}
               placeholder="Best used on liquid majors with a funded Pacifica wallet."
-              className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]"
+              className={FIELD_CLASS}
             />
           </label>
 
           {form.visibility === "invite_only" ? (
-            <label className="grid gap-2">
-              <span className="flex items-center justify-between gap-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
+            <label className={FIELD_WRAPPER_CLASS}>
+              <span className={`flex items-center justify-between gap-3 ${FIELD_LABEL_CLASS}`}>
                 <span>Invite wallets</span>
                 <span className="text-neutral-500">{inviteCount} added</span>
               </span>
@@ -246,47 +255,47 @@ export function BotPublishingPanel({
                 onChange={(event) => setForm((current) => (current ? { ...current, inviteWalletsText: event.target.value } : current))}
                 rows={Math.max(4, inviteCount || 3)}
                 placeholder={"WalletA\nWalletB"}
-                className="min-h-[8rem] rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]"
+                className={`min-h-[8rem] ${FIELD_CLASS}`}
               />
             </label>
           ) : null}
         </div>
 
         <div className="grid gap-4">
-          <label className="grid gap-2">
-            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Creator name</span>
+          <label className={FIELD_WRAPPER_CLASS}>
+            <span className={FIELD_LABEL_CLASS}>Creator name</span>
             <input
               value={form.creatorDisplayName}
               onChange={(event) => setForm((current) => (current ? { ...current, creatorDisplayName: event.target.value } : current))}
-              className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#74b97f]"
+              className={FIELD_CLASS_ALT_FOCUS}
             />
           </label>
 
-          <label className="grid gap-2">
-            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Creator headline</span>
+          <label className={FIELD_WRAPPER_CLASS}>
+            <span className={FIELD_LABEL_CLASS}>Creator headline</span>
             <input
               value={form.creatorHeadline}
               onChange={(event) => setForm((current) => (current ? { ...current, creatorHeadline: event.target.value } : current))}
               placeholder="Systematic intraday momentum across Pacifica majors"
-              className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#74b97f]"
+              className={FIELD_CLASS_ALT_FOCUS}
             />
           </label>
 
-          <label className="grid gap-2">
-            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Creator bio</span>
+          <label className={FIELD_WRAPPER_CLASS}>
+            <span className={FIELD_LABEL_CLASS}>Creator bio</span>
             <textarea
               value={form.creatorBio}
               onChange={(event) => setForm((current) => (current ? { ...current, creatorBio: event.target.value } : current))}
               rows={compact ? 4 : 5}
-              className="min-h-[7rem] rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#74b97f]"
+              className={`min-h-[7rem] ${FIELD_CLASS_ALT_FOCUS}`}
             />
           </label>
         </div>
       </div>
 
-      <div className={`grid gap-4 ${compact ? "" : "md:grid-cols-[0.7fr_0.2fr_0.1fr]"}`}>
-        <label className="grid gap-2">
-          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Featured shelf</span>
+      <div className={`grid gap-4 ${compact ? "" : "md:grid-cols-[minmax(0,0.58fr)_minmax(10rem,0.18fr)_minmax(13rem,0.24fr)]"}`}>
+        <label className={FIELD_WRAPPER_CLASS}>
+          <span className={FIELD_LABEL_CLASS}>Featured shelf</span>
           <input
             value={form.featuredCollectionTitle}
             onChange={(event) =>
@@ -294,12 +303,12 @@ export function BotPublishingPanel({
             }
             placeholder="High conviction majors"
             disabled={!form.isFeatured && form.visibility !== "public"}
-            className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d] disabled:opacity-60"
+            className={`${FIELD_CLASS} disabled:opacity-60`}
           />
         </label>
 
-        <label className="grid gap-2">
-          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Shelf rank</span>
+        <label className={FIELD_WRAPPER_CLASS}>
+          <span className={FIELD_LABEL_CLASS}>Shelf rank</span>
           <input
             type="number"
             min={0}
@@ -311,19 +320,37 @@ export function BotPublishingPanel({
               )
             }
             disabled={!form.isFeatured}
-            className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d] disabled:opacity-60"
+            className={`${FIELD_CLASS} disabled:opacity-60`}
           />
         </label>
 
-        <label className="flex items-center justify-between rounded-[1.2rem] border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-300">
-          <span>Feature</span>
-          <input
-            type="checkbox"
-            checked={form.isFeatured}
-            disabled={form.visibility !== "public"}
-            onChange={(event) => setForm((current) => (current ? { ...current, isFeatured: event.target.checked } : current))}
-            className="h-4 w-4 rounded border-[rgba(255,255,255,0.18)] bg-transparent"
-          />
+        <label className="grid gap-3 rounded-[1.2rem] border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-300">
+          <span className={FIELD_LABEL_CLASS}>Featured slot</span>
+          <div className="flex items-center justify-between gap-3">
+            <div className="grid gap-1">
+              <span className="font-medium text-neutral-100">
+                {form.isFeatured ? "Featured on" : "Featured off"}
+              </span>
+              <span className="text-xs leading-5 text-neutral-500">
+                {form.visibility === "public"
+                  ? "Show this bot in a featured shelf."
+                  : "Set access to public before featuring this bot."}
+              </span>
+            </div>
+            <span className="relative inline-flex">
+              <input
+                type="checkbox"
+                checked={form.isFeatured}
+                disabled={form.visibility !== "public"}
+                onChange={(event) =>
+                  setForm((current) => (current ? { ...current, isFeatured: event.target.checked } : current))
+                }
+                className="peer sr-only"
+              />
+              <span className="h-7 w-12 rounded-full bg-[#090a0a] transition peer-checked:bg-[#dce85d] peer-disabled:opacity-50" />
+              <span className="pointer-events-none absolute left-1 top-1 h-5 w-5 rounded-full bg-neutral-200 transition peer-checked:translate-x-5 peer-checked:bg-[#090a0a]" />
+            </span>
+          </div>
         </label>
       </div>
 

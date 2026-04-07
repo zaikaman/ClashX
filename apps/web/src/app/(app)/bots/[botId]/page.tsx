@@ -103,7 +103,7 @@ function DeferredPanelPlaceholder({
   body: string;
 }) {
   return (
-    <article className="grid gap-3 rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-5 py-5">
+    <article className="grid gap-3 rounded-[1.8rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-5 py-5">
       <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">{eyebrow}</span>
       <h3 className="font-mono text-xl font-bold uppercase tracking-tight text-neutral-50">{title}</h3>
       <p className="text-sm leading-7 text-neutral-400">{body}</p>
@@ -126,6 +126,7 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
   const [secondaryLoading, setSecondaryLoading] = useState(false);
   const [runtimeRefreshToken, setRuntimeRefreshToken] = useState(0);
   const [secondaryRefreshToken, setSecondaryRefreshToken] = useState(0);
+  const [activeTab, setActiveTab] = useState<"overview" | "operate" | "activity">("overview");
 
   const sessionActive = authenticated && Boolean(walletAddress);
 
@@ -348,11 +349,22 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
     return {
       status: visibleRuntimeOverview.health.status,
       mode: visibleRuntimeOverview.health.mode,
-      updated_at: visibleRuntimeOverview.health.last_runtime_update ?? visibleRuntimeOverview.metrics.last_event_at ?? "",
+      updated_at:
+        visibleRuntimeOverview.health.last_runtime_update ??
+        visibleRuntimeOverview.metrics.last_event_at ??
+        "",
     };
   }, [visibleRuntimeOverview]);
 
   const runtimeHealth = visibleRuntimeOverview?.health.health ?? "not deployed";
+  const runtimeReasons = (visibleRuntimeOverview?.health.reasons ?? []).slice(0, 2);
+  const successRate = visibleRuntimeOverview?.metrics
+    ? `${(visibleRuntimeOverview.metrics.success_rate * 100).toFixed(1)}%`
+    : "--";
+  const lastRuntimeEvent = runtime?.updated_at
+    ? new Date(runtime.updated_at).toLocaleString()
+    : "No runtime event yet";
+
   const initialPublishingSettings = useMemo<PublishingSettings | null>(() => {
     if (!visibleBot) {
       return null;
@@ -398,103 +410,119 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
   }
 
   return (
-    <main className="shell grid gap-8 pb-10 md:pb-12">
-      <section className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-        <article className="grid gap-3 rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-6">
-          <span className="label text-[#dce85d]">Bot summary</span>
-          <h2 className="font-mono text-3xl font-bold uppercase tracking-tight text-neutral-50">
-            {visibleBot?.name ?? (primaryLoading ? "Loading bot" : "Bot workspace")}
-          </h2>
-          <p className="max-w-3xl text-sm leading-7 text-neutral-400">
-            {visibleBot?.description ?? "Loading the bot description and core runtime status."}
-          </p>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="rounded-xl bg-[#090a0a] px-4 py-3">
-              <div className="label text-[0.6rem]">Build flow</div>
-              <div className="mt-1 text-sm font-semibold text-neutral-50">Builder</div>
+    <main className="shell grid gap-6 pb-10 md:gap-8 md:pb-12">
+      <section className="grid gap-5 rounded-[2.2rem] border border-[rgba(255,255,255,0.06)] bg-[radial-gradient(circle_at_top_left,rgba(220,232,93,0.16),transparent_28%),radial-gradient(circle_at_80%_20%,rgba(116,185,127,0.12),transparent_24%),linear-gradient(135deg,#16181a,#0d0f10)] p-6 md:p-8">
+        <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr] xl:items-end">
+          <div className="grid gap-5">
+            <div className="flex flex-wrap gap-2">
+              <span className="rounded-full border border-[rgba(220,232,93,0.24)] bg-[#dce85d]/10 px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]">
+                Bot workspace
+              </span>
+              <span className="rounded-full border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.18em] text-neutral-300">
+                {visibleBot?.visibility ?? "draft"}
+              </span>
             </div>
-            <div className="rounded-xl bg-[#090a0a] px-4 py-3">
-              <div className="label text-[0.6rem]">Strategy type</div>
-              <div className="mt-1 text-sm font-semibold text-neutral-50">{visibleBot?.strategy_type ?? "--"}</div>
+
+            <div className="grid gap-3">
+              <h1 className="max-w-5xl font-mono text-[clamp(2.2rem,5vw,4.4rem)] font-extrabold uppercase leading-[0.9] tracking-[-0.06em] text-neutral-50">
+                {visibleBot?.name ?? (primaryLoading ? "Loading bot" : "Bot workspace")}
+              </h1>
+              <p className="max-w-3xl text-sm leading-7 text-neutral-400 md:text-base">
+                {visibleBot?.description ??
+                  "Open runtime health, performance, publishing, and live controls from one place."}
+              </p>
             </div>
-            <div className="rounded-xl bg-[#090a0a] px-4 py-3">
-              <div className="label text-[0.6rem]">Market scope</div>
-              <div className="mt-1 text-sm font-semibold text-neutral-50">{visibleBot?.market_scope ?? "--"}</div>
+
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <HeroStat
+                label="Status"
+                value={runtime?.status ?? "draft"}
+                accent="text-neutral-50"
+                copy="Current runtime state"
+              />
+              <HeroStat
+                label="Health"
+                value={runtimeHealth}
+                accent="text-[#74b97f]"
+                copy="Latest runtime health"
+              />
+              <HeroStat
+                label="Strategy"
+                value={visibleBot?.strategy_type ?? "--"}
+                accent="text-[#dce85d]"
+                copy="Execution style"
+              />
+              <HeroStat
+                label="Success rate"
+                value={successRate}
+                accent="text-neutral-50"
+                copy="Latest 24h window"
+              />
             </div>
           </div>
-        </article>
 
-        <article className="grid gap-3 rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-6">
-          <div className="flex items-center justify-between gap-3">
-            <span className="label text-[#74b97f]">Runtime snapshot</span>
-            <div className="flex items-center gap-2">
+          <aside className="grid gap-4 rounded-[1.8rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10]/90 p-5">
+            <div className="grid gap-3 rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4">
+              <SignalLine label="Market scope" value={visibleBot?.market_scope ?? "--"} />
+              <SignalLine label="Build flow" value="Builder" />
+              <SignalLine label="Last event" value={lastRuntimeEvent} />
+            </div>
+
+            {runtimeReasons.length > 0 ? (
+              <div className="grid gap-2 rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4">
+                <span className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                  Current notes
+                </span>
+                {runtimeReasons.map((reason) => (
+                  <p key={reason} className="text-sm leading-6 text-neutral-400">
+                    {reason}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+
+            <div className="flex flex-wrap gap-3">
               <Link
                 href={`/builder?botId=${encodeURIComponent(params.botId)}`}
-                className="rounded-full border border-[rgba(220,232,93,0.24)] px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#dce85d] transition hover:border-[#dce85d] hover:bg-[#dce85d]/8"
+                className="rounded-full bg-[#dce85d] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d]"
               >
                 Edit in builder
               </Link>
               <Link
                 href={`/backtests?botId=${encodeURIComponent(params.botId)}`}
-                className="rounded-full border border-[rgba(116,185,127,0.22)] px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#74b97f] transition hover:border-[#74b97f] hover:bg-[#74b97f]/8"
+                className="rounded-full border border-[rgba(116,185,127,0.22)] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#74b97f] transition hover:border-[#74b97f] hover:bg-[#74b97f]/8"
               >
                 Open backtests
               </Link>
               <Link
                 href="/bots"
-                className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#dce85d] hover:text-[#dce85d]"
+                className="rounded-full border border-[rgba(255,255,255,0.12)] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d]"
               >
                 Back to my bots
               </Link>
             </div>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="rounded-xl bg-[#090a0a] px-4 py-3">
-              <div className="label text-[0.6rem]">Status</div>
-              <div className="mt-1 font-mono text-xl font-bold uppercase text-neutral-50">
-                {runtime?.status ?? "draft"}
-              </div>
-            </div>
-            <div className="rounded-xl bg-[#090a0a] px-4 py-3">
-              <div className="label text-[0.6rem]">Health</div>
-              <div className="mt-1 font-mono text-xl font-bold uppercase text-neutral-50">
-                {runtimeHealth}
-              </div>
-            </div>
-            <div className="rounded-xl bg-[#090a0a] px-4 py-3">
-              <div className="label text-[0.6rem]">Last runtime event</div>
-              <div className="mt-1 text-sm font-semibold text-neutral-50">
-                {runtime?.updated_at ? new Date(runtime.updated_at).toLocaleString() : "No runtime event yet"}
-              </div>
-            </div>
-          </div>
-        </article>
+          </aside>
+        </div>
       </section>
 
-      {performanceError && !performance ? (
-        <article className="rounded-2xl border border-[#dce85d]/30 bg-[#dce85d]/10 px-5 py-4 text-sm text-neutral-50">
-          {performanceError}
-        </article>
-      ) : null}
-
-      {secondaryLoading && !performance ? (
-        <DeferredPanelPlaceholder
-          eyebrow="Performance snapshot"
-          title="Loading live performance"
-          body="PnL and open position metrics are loading after the primary view."
-        />
-      ) : (
-        <BotPerformancePanel performance={sessionActive ? performance : null} />
-      )}
-
       {!authenticated ? (
-        <button
-          type="button"
-          onClick={login}
-          className="w-fit rounded-full border border-[rgba(255,255,255,0.12)] px-5 py-2.5 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#dce85d] hover:text-[#dce85d]"
-        >
-          Sign in to manage this bot
-        </button>
+        <article className="flex flex-wrap items-center justify-between gap-4 rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-5 py-5">
+          <div className="grid gap-1">
+            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
+              Sign in required
+            </span>
+            <p className="text-sm leading-7 text-neutral-400">
+              Connect your wallet to manage runtime actions, publishing, and advanced settings.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={login}
+            className="rounded-full border border-[rgba(255,255,255,0.12)] px-5 py-2.5 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d]"
+          >
+            Sign in to manage this bot
+          </button>
+        </article>
       ) : null}
 
       {visibleError ? (
@@ -503,85 +531,283 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
         </article>
       ) : null}
 
-      <section className="grid gap-3">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Runtime controls</span>
-        </div>
-        {walletAddress ? (
-          <RuntimeControls
-            botId={params.botId}
-            walletAddress={walletAddress}
-            getAuthHeaders={getAuthHeaders}
-            onRuntimeUpdate={refreshRuntimeData}
-          />
-        ) : (
-          <article className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-5 py-5 text-sm leading-7 text-neutral-400">
-            Connect the wallet for this bot if you want to start, stop, or change the runtime.
-          </article>
-        )}
-      </section>
-
-      {walletAddress && visibleBot ? (
-        <section className="grid gap-3">
-          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Publishing</span>
-          <BotPublishingPanel
-            key={visibleBot.id}
-            botId={visibleBot.id}
-            walletAddress={walletAddress}
-            getAuthHeaders={getAuthHeaders}
-            initialSettings={initialPublishingSettings}
-            onSaved={(nextSettings) => {
-              setBot((current) => (current ? { ...current, visibility: nextSettings.visibility } : current));
-            }}
-          />
-        </section>
-      ) : null}
-
-      {walletAddress ? (
-        <section className="grid gap-6 xl:grid-cols-2">
-          <RuntimeHealthCard health={visibleRuntimeOverview?.health ?? null} metrics={visibleRuntimeOverview?.metrics ?? null} />
-          <RuntimeFailurePanel metrics={visibleRuntimeOverview?.metrics ?? null} />
-        </section>
-      ) : null}
-
-      {walletAddress && visibleRuntimeOverview?.health.runtime_id ? (
-        <section className="grid gap-3">
-          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Advanced settings</span>
-          <AdvancedSettingsPanel
-            botId={params.botId}
-            walletAddress={walletAddress}
-            getAuthHeaders={getAuthHeaders}
-            onSaved={refreshRuntimeData}
-          />
-        </section>
-      ) : walletAddress && visibleRuntimeOverview ? (
-        <article className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-5 py-5 text-sm leading-7 text-neutral-400">
-          Deploy this bot to unlock live runtime controls and risk policy settings.
+      {performanceError && !performance ? (
+        <article className="rounded-2xl border border-[#dce85d]/30 bg-[#dce85d]/10 px-5 py-4 text-sm text-neutral-50">
+          {performanceError}
         </article>
       ) : null}
 
-      <section className="grid gap-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Activity stream</span>
-          <span className="text-xs text-neutral-500">
-            showing the latest {EVENTS_PAGE_SIZE} events, refreshed every 15 seconds while this page is open
-          </span>
+      <section className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4 md:p-5">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="grid gap-1">
+            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-400">
+              Workspace
+            </span>
+            <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
+              Choose a desk
+            </h2>
+            <p className="max-w-3xl text-sm leading-7 text-neutral-400">
+              Keep monitoring, operations, and recent activity separate so the page stays easier to scan.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <TabButton
+              active={activeTab === "overview"}
+              label="Overview"
+              onClick={() => setActiveTab("overview")}
+            />
+            <TabButton
+              active={activeTab === "operate"}
+              label="Operate"
+              onClick={() => setActiveTab("operate")}
+            />
+            <TabButton
+              active={activeTab === "activity"}
+              label="Activity"
+              onClick={() => setActiveTab("activity")}
+            />
+          </div>
         </div>
-        {eventsError ? (
-          <article className="rounded-2xl border border-[#dce85d]/30 bg-[#dce85d]/10 px-5 py-4 text-sm text-neutral-50">
-            {eventsError}
-          </article>
+
+        {activeTab === "overview" ? (
+          <section className="grid gap-6">
+            <div className="grid gap-3">
+              <SectionIntro
+                eyebrow="Overview"
+                title="Runtime snapshot"
+                copy="A compact view of performance, health, and failure signals."
+              />
+              {secondaryLoading && !performance ? (
+                <DeferredPanelPlaceholder
+                  eyebrow="Performance"
+                  title="Loading live performance"
+                  body="PnL and open position metrics are loading after the primary view."
+                />
+              ) : (
+                <BotPerformancePanel performance={sessionActive ? performance : null} />
+              )}
+            </div>
+
+            {walletAddress ? (
+              <div className="grid gap-6 xl:grid-cols-2">
+                <RuntimeHealthCard
+                  health={visibleRuntimeOverview?.health ?? null}
+                  metrics={visibleRuntimeOverview?.metrics ?? null}
+                />
+                <RuntimeFailurePanel metrics={visibleRuntimeOverview?.metrics ?? null} />
+              </div>
+            ) : (
+              <article className="rounded-[1.8rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] px-5 py-5 text-sm leading-7 text-neutral-400">
+                Sign in to see runtime health, failure review, and live monitoring details.
+              </article>
+            )}
+          </section>
         ) : null}
-        {secondaryLoading && events.length === 0 ? (
-          <DeferredPanelPlaceholder
-            eyebrow="Activity stream"
-            title="Loading recent activity"
-            body="Recent runtime decisions are loading after the primary view."
-          />
-        ) : (
-          <ExecutionLog events={sessionActive ? events : []} />
-        )}
+
+        {activeTab === "operate" ? (
+          <section className="grid gap-6">
+            <div className="grid gap-3">
+              <SectionIntro
+                eyebrow="Operate"
+                title="Control the bot"
+                copy="Deploy, pause, publish, and tune the runtime from one operations desk."
+              />
+
+              {walletAddress ? (
+                <RuntimeControls
+                  botId={params.botId}
+                  walletAddress={walletAddress}
+                  getAuthHeaders={getAuthHeaders}
+                  onRuntimeUpdate={refreshRuntimeData}
+                />
+              ) : (
+                <article className="rounded-[1.8rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] px-5 py-5 text-sm leading-7 text-neutral-400">
+                  Connect the wallet for this bot to unlock deployment and live controls.
+                </article>
+              )}
+            </div>
+
+            {walletAddress && visibleBot ? (
+              <div className="grid gap-5 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] p-4 md:p-5">
+                <div className="grid gap-5 xl:grid-cols-[0.28fr_1fr] xl:items-start">
+                  <div className="grid gap-4">
+                    <div className="rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4">
+                      <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                        Publishing
+                      </div>
+                      <div className="mt-2 font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">
+                        Marketplace profile
+                      </div>
+                      <p className="mt-2 text-sm leading-6 text-neutral-400">
+                        Access mode, creator details, and shelf placement.
+                      </p>
+                    </div>
+
+                    <div className="rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4">
+                      <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                        Advanced settings
+                      </div>
+                      <div className="mt-2 font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">
+                        Runtime policy
+                      </div>
+                      <p className="mt-2 text-sm leading-6 text-neutral-400">
+                        Leverage, drawdown, cooldowns, and sizing rules.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-5">
+                    <div className="grid gap-3">
+                      <SectionIntro
+                        eyebrow="Publishing"
+                        title="Control visibility"
+                        copy="Manage how this bot appears in the marketplace."
+                      />
+                      <BotPublishingPanel
+                        key={visibleBot.id}
+                        botId={visibleBot.id}
+                        walletAddress={walletAddress}
+                        getAuthHeaders={getAuthHeaders}
+                        initialSettings={initialPublishingSettings}
+                        onSaved={(nextSettings) => {
+                          setBot((current) => (current ? { ...current, visibility: nextSettings.visibility } : current));
+                        }}
+                      />
+                    </div>
+
+                    <div className="h-px bg-[rgba(255,255,255,0.06)]" />
+
+                    <div className="grid gap-3">
+                      <SectionIntro
+                        eyebrow="Advanced settings"
+                        title="Refine live guardrails"
+                        copy="Tighten execution boundaries after deployment."
+                      />
+                      {visibleRuntimeOverview?.health.runtime_id ? (
+                        <AdvancedSettingsPanel
+                          botId={params.botId}
+                          walletAddress={walletAddress}
+                          getAuthHeaders={getAuthHeaders}
+                          onSaved={refreshRuntimeData}
+                        />
+                      ) : (
+                        <article className="rounded-[1.8rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-5 py-5 text-sm leading-7 text-neutral-400">
+                          Deploy this bot to unlock advanced runtime policy controls.
+                        </article>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
+        {activeTab === "activity" ? (
+          <section className="grid gap-4">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <SectionIntro
+                eyebrow="Activity stream"
+                title="Recent runtime activity"
+                copy="Latest decisions, outcomes, and repeated checks."
+              />
+              <span className="text-xs text-neutral-500">
+                latest {EVENTS_PAGE_SIZE} events, refreshed every 15 seconds
+              </span>
+            </div>
+
+            {eventsError ? (
+              <article className="rounded-2xl border border-[#dce85d]/30 bg-[#dce85d]/10 px-5 py-4 text-sm text-neutral-50">
+                {eventsError}
+              </article>
+            ) : null}
+
+            {secondaryLoading && events.length === 0 ? (
+              <DeferredPanelPlaceholder
+                eyebrow="Activity stream"
+                title="Loading recent activity"
+                body="Recent runtime decisions are loading after the primary view."
+              />
+            ) : (
+              <ExecutionLog events={sessionActive ? events : []} />
+            )}
+          </section>
+        ) : null}
       </section>
     </main>
+  );
+}
+
+function HeroStat({
+  label,
+  value,
+  copy,
+  accent,
+}: {
+  label: string;
+  value: string;
+  copy: string;
+  accent: string;
+}) {
+  return (
+    <article className="grid gap-1 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] p-4">
+      <span className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">{label}</span>
+      <div className={`font-mono text-2xl font-bold uppercase ${accent}`}>{value}</div>
+      <p className="text-xs leading-6 text-neutral-400">{copy}</p>
+    </article>
+  );
+}
+
+function SignalLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-[rgba(255,255,255,0.06)] pb-3 last:border-b-0 last:pb-0">
+      <span className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">{label}</span>
+      <span className="text-right text-sm font-semibold text-neutral-100">{value}</span>
+    </div>
+  );
+}
+
+function SectionIntro({
+  eyebrow,
+  title,
+  copy,
+}: {
+  eyebrow: string;
+  title: string;
+  copy: string;
+}) {
+  return (
+    <div className="grid gap-1">
+      <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-400">
+        {eyebrow}
+      </span>
+      <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">{title}</h2>
+      <p className="max-w-3xl text-sm leading-7 text-neutral-400">{copy}</p>
+    </div>
+  );
+}
+
+function TabButton({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        active
+          ? "rounded-full bg-[#dce85d] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a]"
+          : "rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d]"
+      }
+    >
+      {label}
+    </button>
   );
 }
