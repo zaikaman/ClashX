@@ -159,6 +159,50 @@ class RuntimeFkSupabaseRestClient(FakeSupabaseRestClient):
         return super().insert(table, payload, upsert=upsert, on_conflict=on_conflict)
 
 
+class RetryableLedgerCacheSupabaseRestClient(FakeSupabaseRestClient):
+    def select(
+        self,
+        table: str,
+        *,
+        columns: str = "*",
+        filters: dict[str, Any] | None = None,
+        order: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if table in {"bot_trade_lots", "bot_trade_closures"}:
+            raise SupabaseRestError("temporary ledger cache outage", status_code=500)
+        return super().select(table, columns=columns, filters=filters, order=order, limit=limit)
+
+    def maybe_one(
+        self,
+        table: str,
+        *,
+        columns: str = "*",
+        filters: dict[str, Any] | None = None,
+        order: str | None = None,
+    ) -> dict[str, Any] | None:
+        if table == "bot_trade_sync_state":
+            raise SupabaseRestError("temporary ledger cache outage", status_code=500)
+        return super().maybe_one(table, columns=columns, filters=filters, order=order)
+
+    def insert(
+        self,
+        table: str,
+        payload: dict[str, Any] | list[dict[str, Any]],
+        *,
+        upsert: bool = False,
+        on_conflict: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if table in {"bot_trade_lots", "bot_trade_closures", "bot_trade_sync_state"}:
+            raise SupabaseRestError("temporary ledger cache outage", status_code=500)
+        return super().insert(table, payload, upsert=upsert, on_conflict=on_conflict)
+
+    def delete(self, table: str, *, filters: dict[str, Any]) -> None:
+        if table in {"bot_trade_lots", "bot_trade_closures", "bot_trade_sync_state"}:
+            raise SupabaseRestError("temporary ledger cache outage", status_code=500)
+        super().delete(table, filters=filters)
+
+
 class FakePacificaClient:
     def __init__(self) -> None:
         self.order_history_requests: list[int] = []
@@ -886,6 +930,32 @@ def test_runtime_performance_skips_ledger_persistence_when_runtime_is_deleted_mi
     performance = asyncio.run(service.calculate_runtime_performance(runtime_a))
 
     assert performance["pnl_total"] == 10.0
+    assert fake_supabase.tables.get("bot_trade_lots", []) == []
+    assert fake_supabase.tables.get("bot_trade_closures", []) == []
+    assert fake_supabase.tables.get("bot_trade_sync_state", []) == []
+
+
+def test_runtime_performance_ignores_retryable_ledger_cache_failures() -> None:
+    fake_supabase = RetryableLedgerCacheSupabaseRestClient(_tables())
+    fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = [
+        {
+            "symbol": "BTC",
+            "side": "bid",
+            "amount": 1.0,
+            "entry_price": 100.0,
+            "mark_price": 110.0,
+        }
+    ]
+    service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=fake_supabase)
+    runtime_a = fake_supabase.maybe_one("bot_runtimes", filters={"id": "runtime-a"})
+
+    performance = asyncio.run(service.calculate_runtime_performance(runtime_a))
+
+    assert performance["pnl_total"] == 10.0
+    assert performance["pnl_unrealized"] == 10.0
+    assert performance["positions"][0]["symbol"] == "BTC"
+    assert fake_pacifica.order_history_requests == [11]
     assert fake_supabase.tables.get("bot_trade_lots", []) == []
     assert fake_supabase.tables.get("bot_trade_closures", []) == []
     assert fake_supabase.tables.get("bot_trade_sync_state", []) == []

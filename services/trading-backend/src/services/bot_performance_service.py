@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -7,6 +8,9 @@ from typing import Any
 from src.services.bot_risk_service import BotRiskService
 from src.services.pacifica_client import PacificaClient, PacificaClientError, get_pacifica_client
 from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
+
+
+logger = logging.getLogger(__name__)
 
 
 class BotPerformanceService:
@@ -521,21 +525,27 @@ class BotPerformanceService:
         runtime_id = str(runtime.get("id") or "").strip()
         if not runtime_id:
             return None
-        sync_state = self._supabase.maybe_one("bot_trade_sync_state", filters={"runtime_id": runtime_id})
-        if sync_state is None:
-            return None
-        if int(sync_state.get("execution_events_count") or 0) != len(events):
-            return None
-        latest_event_at = events[-1].get("created_at") if events else None
-        if not self._timestamps_match(sync_state.get("last_execution_at"), latest_event_at):
-            return None
-        lots = self._supabase.select("bot_trade_lots", filters={"runtime_id": runtime_id})
-        closures = self._supabase.select("bot_trade_closures", filters={"runtime_id": runtime_id})
-        if self._has_live_position_drift(lots, live_position_lookup, live_positions_loaded):
-            return None
-        if self._has_manual_history_drift(runtime, sync_state, lots, manual_close_history):
-            return None
-        return lots, closures
+        try:
+            sync_state = self._supabase.maybe_one("bot_trade_sync_state", filters={"runtime_id": runtime_id})
+            if sync_state is None:
+                return None
+            if int(sync_state.get("execution_events_count") or 0) != len(events):
+                return None
+            latest_event_at = events[-1].get("created_at") if events else None
+            if not self._timestamps_match(sync_state.get("last_execution_at"), latest_event_at):
+                return None
+            lots = self._supabase.select("bot_trade_lots", filters={"runtime_id": runtime_id})
+            closures = self._supabase.select("bot_trade_closures", filters={"runtime_id": runtime_id})
+            if self._has_live_position_drift(lots, live_position_lookup, live_positions_loaded):
+                return None
+            if self._has_manual_history_drift(runtime, sync_state, lots, manual_close_history):
+                return None
+            return lots, closures
+        except SupabaseRestError as exc:
+            if self._is_retryable_ledger_cache_error(exc):
+                self._log_ledger_cache_warning("load", runtime_id, exc)
+                return None
+            raise
 
     def _has_live_position_drift(
         self,
@@ -668,9 +678,11 @@ class BotPerformanceService:
         closures: list[dict[str, Any]],
     ) -> None:
         runtime_id = str(runtime.get("id") or "").strip()
-        if not runtime_id or not self._runtime_exists(runtime_id):
+        if not runtime_id:
             return
         try:
+            if not self._runtime_exists(runtime_id):
+                return
             self._supabase.delete("bot_trade_closures", filters={"runtime_id": runtime_id})
             self._supabase.delete("bot_trade_lots", filters={"runtime_id": runtime_id})
             self._supabase.delete("bot_trade_sync_state", filters={"runtime_id": runtime_id})
@@ -702,10 +714,21 @@ class BotPerformanceService:
         except SupabaseRestError as exc:
             if self._is_missing_runtime_fk_violation(exc):
                 return
+            if self._is_retryable_ledger_cache_error(exc):
+                self._log_ledger_cache_warning("persist", runtime_id, exc)
+                return
             raise
 
     def _runtime_exists(self, runtime_id: str) -> bool:
         return self._supabase.maybe_one("bot_runtimes", columns="id", filters={"id": runtime_id}) is not None
+
+    @staticmethod
+    def _is_retryable_ledger_cache_error(exc: SupabaseRestError) -> bool:
+        return exc.is_retryable
+
+    @staticmethod
+    def _log_ledger_cache_warning(action: str, runtime_id: str, exc: SupabaseRestError) -> None:
+        logger.warning("Bot trade ledger cache %s failed for runtime %s: %s", action, runtime_id, exc)
 
     @staticmethod
     def _is_missing_runtime_fk_violation(exc: SupabaseRestError) -> bool:
