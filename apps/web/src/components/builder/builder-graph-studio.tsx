@@ -86,6 +86,11 @@ type BuilderAiRouteResponse = {
   reply: string;
   draft: BuilderAiDraft;
 };
+type DraftValidationResponse = {
+  valid?: boolean;
+  issues?: string[];
+  detail?: string;
+};
 type BuilderBotDefinition = {
   id: string;
   name: string;
@@ -1228,22 +1233,47 @@ export function BuilderGraphStudio({
   }
 
   async function persistBotDraft() {
+    const trimmedWalletAddress = walletAddress.trim();
+    const draftPayload = {
+      wallet_address: trimmedWalletAddress,
+      name: name.trim(),
+      description: description.trim(),
+      visibility,
+      market_scope: marketScope,
+      strategy_type: "rules",
+      authoring_mode: "visual",
+      rules_version: 1,
+      rules_json: rulesJson,
+    };
+    const validationResponse = await fetch(`${API_BASE_URL}/api/bots/validate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        authoring_mode: draftPayload.authoring_mode,
+        visibility: draftPayload.visibility,
+        rules_version: draftPayload.rules_version,
+        rules_json: draftPayload.rules_json,
+      }),
+    });
+    const validationPayload = (await validationResponse.json()) as DraftValidationResponse;
+    if (!validationResponse.ok) {
+      throw new Error(validationPayload.detail ?? "Bot validation failed");
+    }
+    const validationIssues = Array.isArray(validationPayload.issues)
+      ? validationPayload.issues.filter((issue): issue is string => typeof issue === "string" && issue.trim().length > 0)
+      : [];
+    if (validationIssues.length > 0 || validationPayload.valid === false) {
+      throw new Error(validationIssues.join("; ") || "Bot validation failed");
+    }
+
     const method = createdBotId ? "PATCH" : "POST";
-    const endpoint = createdBotId ? `${API_BASE_URL}/api/bots/${createdBotId}` : `${API_BASE_URL}/api/bots`;
+    const endpoint = createdBotId
+      ? `${API_BASE_URL}/api/bots/${createdBotId}?wallet_address=${encodeURIComponent(trimmedWalletAddress)}`
+      : `${API_BASE_URL}/api/bots`;
     const response = await fetch(endpoint, {
       method,
       headers: await getAuthHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({
-        wallet_address: walletAddress.trim(),
-        name: name.trim(),
-        description: description.trim(),
-        visibility,
-        market_scope: marketScope,
-        strategy_type: "rules",
-        authoring_mode: "visual",
-        rules_version: 1,
-        rules_json: rulesJson,
-      }),
+      body: JSON.stringify(draftPayload),
     });
     const payload = (await response.json()) as { id?: string; detail?: string };
     if (!response.ok || !payload.id) throw new Error(payload.detail ?? "Bot save failed");
