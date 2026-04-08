@@ -198,11 +198,11 @@ export const CONDITION_COPY: Record<string, { label: string; helper: string }> =
 };
 
 export const ACTION_COPY: Record<string, { label: string; helper: string }> = {
-  open_long: { label: "Open long", helper: "Enter a long position with size and leverage." },
-  open_short: { label: "Open short", helper: "Enter a short position with size and leverage." },
-  place_market_order: { label: "Market order", helper: "Send a custom market order with side, sizing, and slippage control." },
-  place_limit_order: { label: "Limit order", helper: "Work an entry or exit at a specific price with time-in-force controls." },
-  place_twap_order: { label: "TWAP execution", helper: "Drip size into the market over time instead of crossing all at once." },
+  open_long: { label: "Open long", helper: "Enter a long position with size and requested leverage." },
+  open_short: { label: "Open short", helper: "Enter a short position with size and requested leverage." },
+  place_market_order: { label: "Market order", helper: "Send a custom market order with side, requested leverage, sizing, and slippage control." },
+  place_limit_order: { label: "Limit order", helper: "Work an entry or exit at a specific price with requested leverage and time-in-force controls." },
+  place_twap_order: { label: "TWAP execution", helper: "Drip size into the market over time with a requested leverage target instead of crossing all at once." },
   close_position: { label: "Close position", helper: "Exit the current market position." },
   set_tpsl: { label: "Set TP / SL", helper: "Add take profit and stop loss levels." },
   update_leverage: { label: "Update leverage", helper: "Change leverage on an existing position." },

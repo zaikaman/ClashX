@@ -128,13 +128,13 @@ export function AdvancedSettingsPanel({
             Risk profile
           </span>
           <p className="text-sm leading-7 text-neutral-400">
-            Set the capital, leverage, and drawdown boundaries this runtime should respect.
+            Set the capital, leverage cap, and drawdown boundaries this runtime should respect.
           </p>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
           <label className={FIELD_LABEL_CLASS}>
-            Max leverage
+            Leverage cap
             <input type="number" min={1} value={maxLeverage} onChange={(event) => setMaxLeverage(Number(event.target.value))} className={INPUT_CLASS} />
           </label>
           <label className={FIELD_LABEL_CLASS}>

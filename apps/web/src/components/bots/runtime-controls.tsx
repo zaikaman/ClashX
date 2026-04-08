@@ -196,13 +196,13 @@ export function RuntimeControls({
         <div className="grid gap-1">
           <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Deploy profile</span>
           <p className="text-sm leading-7 text-neutral-400">
-            Set the live guardrails the bot will use the moment it starts trading.
+            Set the live guardrails the bot will use the moment it starts trading. Block-level leverage is not overwritten here; this value acts as a cap.
           </p>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           <label className={FIELD_LABEL_CLASS}>
-            Max leverage
+            Leverage cap
             <input
               type="number"
               min={1}

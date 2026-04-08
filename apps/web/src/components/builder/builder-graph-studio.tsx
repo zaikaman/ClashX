@@ -158,6 +158,14 @@ const SECONDARY_EDGE_COLOR = "rgba(255,255,255,0.22)";
 const TIMEFRAME_OPTIONS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"] as const;
 const SIDE_OPTIONS = ["long", "short"] as const;
 const TIF_OPTIONS = ["GTC", "IOC", "FOK"] as const;
+const ACTION_TYPES_WITH_LEVERAGE = new Set([
+  "open_long",
+  "open_short",
+  "place_market_order",
+  "place_limit_order",
+  "place_twap_order",
+  "update_leverage",
+]);
 
 const SIGNAL_CATEGORIES = [
   {
@@ -742,6 +750,60 @@ function findSelectedMarketLeverageCap(selectedSymbols: string[], markets: Build
   return tightestMarket;
 }
 
+function findActionLeverageBlocker(
+  nodes: BuilderFlowNode[],
+  runtimeControls: RuntimeControlsFormState,
+  selectedSymbols: string[],
+  markets: BuilderMarket[],
+) {
+  const normalizedSelectedSymbols = Array.from(
+    new Set(selectedSymbols.map((symbol) => normalizeMarketSymbol(symbol)).filter(Boolean)),
+  );
+  const marketLookup = new Map(
+    markets.map((market) => [normalizeMarketSymbol(market.symbol), { ...market, symbol: normalizeMarketSymbol(market.symbol) }]),
+  );
+
+  for (const node of nodes) {
+    if (node.data.kind !== "action") continue;
+    const action = node.data.action;
+    if (!ACTION_TYPES_WITH_LEVERAGE.has(action.type)) continue;
+
+    const requestedLeverage = Number(action.leverage ?? 1);
+    if (!Number.isFinite(requestedLeverage) || requestedLeverage <= 0) continue;
+
+    const targetSymbols = action.symbol === BOT_MARKET_UNIVERSE_SYMBOL
+      ? normalizedSelectedSymbols
+      : [normalizeMarketSymbol(action.symbol)].filter(Boolean);
+    if (targetSymbols.length === 0) continue;
+
+    let tightestMarket: { symbol: string; maxLeverage: number } | null = null;
+    for (const symbol of targetSymbols) {
+      const marketMaxLeverage = Number(marketLookup.get(symbol)?.max_leverage ?? 0);
+      if (marketMaxLeverage <= 0) continue;
+      if (!tightestMarket || marketMaxLeverage < tightestMarket.maxLeverage) {
+        tightestMarket = { symbol, maxLeverage: marketMaxLeverage };
+      }
+    }
+
+    const effectiveCap = tightestMarket
+      ? Math.min(runtimeControls.maxLeverage, tightestMarket.maxLeverage)
+      : runtimeControls.maxLeverage;
+
+    if (requestedLeverage <= effectiveCap) continue;
+
+    const actionLabel = actionTitle(action.type);
+    const marketLabel = action.symbol === BOT_MARKET_UNIVERSE_SYMBOL ? "Bot market universe" : targetSymbols[0] ?? "this market";
+
+    if (tightestMarket && tightestMarket.maxLeverage < runtimeControls.maxLeverage) {
+      return `${actionLabel} on ${marketLabel} requests ${requestedLeverage}x, but ${tightestMarket.symbol} only allows ${tightestMarket.maxLeverage}x. Lower the block leverage or remove that market from the deploy set.`;
+    }
+
+    return `${actionLabel} on ${marketLabel} requests ${requestedLeverage}x, but the deploy leverage cap is ${runtimeControls.maxLeverage}x. Lower the block leverage or raise the cap before deploying.`;
+  }
+
+  return null;
+}
+
 function buildRiskPolicyPayload(selectedSymbols: string[], runtimeControls: RuntimeControlsFormState) {
   return {
     max_leverage: runtimeControls.maxLeverage,
@@ -757,15 +819,18 @@ function buildRiskPolicyPayload(selectedSymbols: string[], runtimeControls: Runt
 function validateRuntimeControls(
   preset: RuntimeControlPreset | null,
   runtimeControls: RuntimeControlsFormState,
+  nodes: BuilderFlowNode[],
   selectedSymbols: string[],
   markets: BuilderMarket[],
 ) {
   if (!preset) return "Choose a runtime profile before deploying.";
-  if (runtimeControls.maxLeverage < 1) return "Max leverage must be at least 1.";
+  if (runtimeControls.maxLeverage < 1) return "Leverage cap must be at least 1.";
   const leverageCap = findSelectedMarketLeverageCap(selectedSymbols, markets);
   if (leverageCap && runtimeControls.maxLeverage > leverageCap.maxLeverage) {
-    return `Max leverage must be ${leverageCap.maxLeverage} or lower for ${leverageCap.symbol}.`;
+    return `Leverage cap must be ${leverageCap.maxLeverage} or lower for ${leverageCap.symbol}.`;
   }
+  const leverageBlocker = findActionLeverageBlocker(nodes, runtimeControls, selectedSymbols, markets);
+  if (leverageBlocker) return leverageBlocker;
   if (runtimeControls.maxOrderSizeUsd < 1) return "Max order size must be greater than 0.";
   if (runtimeControls.allocatedCapitalUsd < 1) return "Allocated capital must be greater than 0.";
   if (runtimeControls.cooldownSeconds < 0) return "Cooldown cannot be negative.";
@@ -1862,6 +1927,7 @@ export function BuilderGraphStudio({
     const runtimeBlocker = validateRuntimeControls(
       runtimePreset,
       runtimeControls,
+      nodes,
       selectedMarketSymbols,
       activeMarkets,
     );
@@ -2126,28 +2192,28 @@ export function BuilderGraphStudio({
           />
           <div className="relative z-10 flex w-full max-w-4xl flex-col overflow-hidden max-h-full rounded-[2rem] border border-[rgba(220,232,93,0.24)] bg-[linear-gradient(180deg,rgba(18,20,18,0.98),rgba(9,10,10,0.99))] shadow-[0_28px_90px_rgba(0,0,0,0.56)]">
             <div className="grid shrink-0 gap-6 border-b border-[rgba(255,255,255,0.06)] px-6 py-6 lg:grid-cols-[1.15fr_0.85fr]">
-              <div>
-                <div className="text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-[#dce85d]">Runtime controls</div>
-                <h2 className="mt-2 text-2xl font-semibold text-neutral-50">Choose how this bot behaves once it goes live.</h2>
-                <p className="mt-3 max-w-2xl text-sm leading-6 text-neutral-400">
-                  Pick a runtime profile, then fine-tune the guardrails. Deployment stays locked until you make that choice.
-                </p>
-              </div>
+                <div>
+                  <div className="text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-[#dce85d]">Runtime controls</div>
+                  <h2 className="mt-2 text-2xl font-semibold text-neutral-50">Choose how this bot behaves once it goes live.</h2>
+                  <p className="mt-3 max-w-2xl text-sm leading-6 text-neutral-400">
+                  Pick a runtime profile, then fine-tune the guardrails. Block-level leverage stays intact, and the deploy leverage cap only blocks requests above it.
+                  </p>
+                </div>
               <div className="rounded-[1.5rem] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] p-5">
                 <div className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">Launch summary</div>
                 <div className="mt-3 text-lg font-semibold text-neutral-50">{name.trim() || "Untitled bot"}</div>
                 <div className="mt-2 line-clamp-2 text-sm leading-6 text-neutral-400" title={selectedMarketSymbols.join(", ")}>
                   {selectedMarketSymbols.length > 0 ? selectedMarketSymbols.join(", ") : "No markets selected"}
                 </div>
-                <div className="mt-4 grid gap-2 text-xs text-neutral-500">
-                  <div className="flex items-center justify-between gap-4">
-                    <span>Capital at work</span>
-                    <span className="text-neutral-300">${runtimeControls.allocatedCapitalUsd}</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-4">
-                    <span>Max leverage</span>
-                    <span className="text-neutral-300">{runtimeControls.maxLeverage}x</span>
-                  </div>
+                  <div className="mt-4 grid gap-2 text-xs text-neutral-500">
+                    <div className="flex items-center justify-between gap-4">
+                      <span>Capital at work</span>
+                      <span className="text-neutral-300">${runtimeControls.allocatedCapitalUsd}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span>Leverage cap</span>
+                      <span className="text-neutral-300">{runtimeControls.maxLeverage}x</span>
+                    </div>
                   <div className="flex items-center justify-between gap-4">
                     <span>Cooldown</span>
                     <span className="text-neutral-300">{runtimeControls.cooldownSeconds}s</span>
@@ -2191,7 +2257,7 @@ export function BuilderGraphStudio({
 
                 <div className="mt-6 grid gap-3 sm:grid-cols-2">
                   <label className="grid gap-1.5 text-sm text-neutral-400">
-                    Max leverage
+                    Leverage cap
                     <input
                       type="number"
                       min={1}
@@ -2267,7 +2333,7 @@ export function BuilderGraphStudio({
                   <p className="mt-4 shrink-0 text-sm text-[#dce85d]">{runtimeControlsError}</p>
                 ) : (
                   <p className="mt-4 shrink-0 text-sm leading-6 text-neutral-500">
-                    These controls are sent with the deploy request and become the bot&apos;s live runtime guardrails.
+                    These controls are sent with the deploy request and become the bot&apos;s live runtime guardrails. Entry and order blocks keep their own requested leverage until they hit this cap.
                   </p>
                 )}
               </div>
@@ -3264,7 +3330,7 @@ export function BuilderGraphStudio({
                         />
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-neutral-400 mb-1.5">Leverage</label>
+                        <label className="block text-xs font-medium text-neutral-400 mb-1.5">Requested Leverage</label>
                         <input
                           value={selectedAction.leverage ?? ""}
                           onChange={(e) => updateActionNode(selectedAction.id, { leverage: parseOptionalNumber(e.target.value) })}
@@ -3293,7 +3359,7 @@ export function BuilderGraphStudio({
                           </select>
                         </div>
                         <div>
-                          <label className="block text-xs font-medium text-neutral-400 mb-1.5">Leverage</label>
+                          <label className="block text-xs font-medium text-neutral-400 mb-1.5">Requested Leverage</label>
                           <input
                             value={selectedAction.leverage ?? ""}
                             onChange={(e) => updateActionNode(selectedAction.id, { leverage: parseOptionalNumber(e.target.value) })}
@@ -3352,7 +3418,7 @@ export function BuilderGraphStudio({
                           </select>
                         </div>
                         <div>
-                          <label className="block text-xs font-medium text-neutral-400 mb-1.5">Leverage</label>
+                          <label className="block text-xs font-medium text-neutral-400 mb-1.5">Requested Leverage</label>
                           <input
                             value={selectedAction.leverage ?? ""}
                             onChange={(e) => updateActionNode(selectedAction.id, { leverage: parseOptionalNumber(e.target.value) })}
@@ -3436,7 +3502,7 @@ export function BuilderGraphStudio({
                           </select>
                         </div>
                         <div>
-                          <label className="block text-xs font-medium text-neutral-400 mb-1.5">Leverage</label>
+                          <label className="block text-xs font-medium text-neutral-400 mb-1.5">Requested Leverage</label>
                           <input
                             value={selectedAction.leverage ?? ""}
                             onChange={(e) => updateActionNode(selectedAction.id, { leverage: parseOptionalNumber(e.target.value) })}
