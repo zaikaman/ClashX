@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from src.services.pacifica_client import PacificaClient
+from src.services.pacifica_market_data_service import PacificaMarketDataService
 from src.workers.bot_runtime_worker import BotRuntimeWorker
 
 
@@ -172,6 +173,58 @@ class _ChunkedFakeHttpClient:
 
 async def _noop_throttle(**_: Any) -> None:
     return None
+
+
+def test_load_candle_lookup_backfills_sparse_windows_until_lookback_is_satisfied() -> None:
+    service = object.__new__(PacificaMarketDataService)
+    service._candle_cache = {}
+    service._candle_lock = asyncio.Lock()
+    step = 300_000
+
+    async def fake_load_candles(*, symbol: str, timeframe: str, start_time: int, end_time: int) -> list[dict[str, Any]]:
+        del symbol, timeframe
+        if end_time >= 10 * step:
+            opens = [37 * step, 38 * step, 39 * step]
+        else:
+            opens = [0, 1 * step, 2 * step, 3 * step, 4 * step]
+        return [
+            {
+                "open_time": open_time,
+                "close_time": open_time + step - 1,
+                "symbol": "BTC",
+                "interval": "5m",
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "volume": 42.0,
+                "trade_count": 7,
+            }
+            for open_time in opens
+            if start_time <= open_time <= end_time
+        ]
+
+    service._load_candles = fake_load_candles
+
+    candles = asyncio.run(
+        service._load_candles_with_backfill(
+            symbol="BTC",
+            timeframe="5m",
+            lookback=8,
+            boundary_end=(50 * step) - 1,
+        )
+    )
+
+    assert [item["open_time"] for item in candles] == [
+        0,
+        1 * step,
+        2 * step,
+        3 * step,
+        4 * step,
+        37 * step,
+        38 * step,
+        39 * step,
+    ]
 
 
 def test_normalize_payload_preserves_tick_level_without_injecting_user_alias() -> None:

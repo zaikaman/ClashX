@@ -17,6 +17,8 @@ from src.services.pacifica_client import PacificaClient, PacificaClientError, ge
 logger = logging.getLogger(__name__)
 INITIAL_RECONNECT_DELAY_SECONDS = 2.0
 MAX_RECONNECT_DELAY_SECONDS = 30.0
+MIN_CANDLE_BACKFILL_WINDOW_CANDLES = 40
+MAX_CANDLE_BACKFILL_WINDOWS = 12
 TIMEFRAME_TO_MS: dict[str, int] = {
     "1m": 60_000,
     "5m": 300_000,
@@ -109,19 +111,17 @@ class PacificaMarketDataService:
             cached = self._candle_cache.get(cache_key)
             if cached is not None and cached.boundary_end == boundary_end and cached.lookback >= lookback:
                 continue
-            timeframe_ms = TIMEFRAME_TO_MS[timeframe]
-            start_time = boundary_end - timeframe_ms * lookback
             pending_fetches.append(
                 (
                     cache_key,
                     lookback,
                     boundary_end,
                     asyncio.create_task(
-                        self._load_candles(
+                        self._load_candles_with_backfill(
                             symbol=symbol,
                             timeframe=timeframe,
-                            start_time=start_time,
-                            end_time=boundary_end,
+                            lookback=lookback,
+                            boundary_end=boundary_end,
                         )
                     ),
                 )
@@ -133,7 +133,7 @@ class PacificaMarketDataService:
                 for (cache_key, lookback, boundary_end, _), candles in zip(pending_fetches, resolved_candles, strict=False):
                     self._candle_cache[cache_key] = _CandleCacheEntry(
                         candles=candles,
-                        lookback=lookback,
+                        lookback=len(candles),
                         boundary_end=boundary_end,
                     )
 
@@ -191,6 +191,51 @@ class PacificaMarketDataService:
             )
         except PacificaClientError:
             return []
+
+    async def _load_candles_with_backfill(
+        self,
+        *,
+        symbol: str,
+        timeframe: str,
+        lookback: int,
+        boundary_end: int,
+    ) -> list[dict[str, Any]]:
+        timeframe_ms = TIMEFRAME_TO_MS.get(timeframe)
+        if timeframe_ms is None:
+            return []
+
+        window_candles = max(lookback, MIN_CANDLE_BACKFILL_WINDOW_CANDLES)
+        candles_by_open_time: dict[int, dict[str, Any]] = {}
+        window_end = boundary_end
+        empty_windows = 0
+
+        for _ in range(MAX_CANDLE_BACKFILL_WINDOWS):
+            start_time = window_end - timeframe_ms * window_candles
+            candles = await self._load_candles(
+                symbol=symbol,
+                timeframe=timeframe,
+                start_time=start_time,
+                end_time=window_end,
+            )
+            if candles:
+                empty_windows = 0
+                for candle in candles:
+                    open_time = self._coerce_int(candle.get("open_time"), -1)
+                    if open_time < 0:
+                        continue
+                    candles_by_open_time[open_time] = candle
+                if len(candles_by_open_time) >= lookback:
+                    break
+            else:
+                empty_windows += 1
+                if empty_windows >= 3 and candles_by_open_time:
+                    break
+
+            if start_time <= 0:
+                break
+            window_end = start_time - 1
+
+        return [candles_by_open_time[key] for key in sorted(candles_by_open_time)]
 
     async def _run_price_subscription(self) -> None:
         reconnect_delay = INITIAL_RECONNECT_DELAY_SECONDS
