@@ -121,6 +121,12 @@ type PortableBuilderEdge = {
   source: string;
   target: string;
 };
+type PortableBuilderGraph = {
+  version?: number;
+  entry?: string;
+  nodes: PortableBuilderNode[];
+  edges: PortableBuilderEdge[];
+};
 type PortableBuilderDraft = {
   format: "clashx-builder-draft";
   version: 1;
@@ -132,10 +138,7 @@ type PortableBuilderDraft = {
     selected_market_symbols: string[];
     active_template_id?: string;
     builder_mode?: BuilderChatMode;
-    graph: {
-      nodes: PortableBuilderNode[];
-      edges: PortableBuilderEdge[];
-    };
+    graph: PortableBuilderGraph;
   };
 };
 type RuntimeControlPreset = "guarded" | "balanced" | "aggressive";
@@ -331,10 +334,7 @@ function sanitizeDraftFileName(value: string) {
   return base || "clashx-bot-draft";
 }
 
-function buildCanvasFromSerializedGraph(graph: {
-  nodes: PortableBuilderNode[];
-  edges: PortableBuilderEdge[];
-}) {
+function buildCanvasFromSerializedGraph(graph: PortableBuilderGraph) {
   const nextNodes: BuilderFlowNode[] = [];
   const nextEdges: BuilderFlowEdge[] = [];
   const nodeIdMap = new Map<string, string>();
@@ -415,8 +415,26 @@ function buildCanvasFromSerializedGraph(graph: {
   };
 }
 
+function isPortableBuilderGraph(value: unknown): value is PortableBuilderGraph {
+  return isRecord(value) && Array.isArray(value.nodes) && Array.isArray(value.edges);
+}
+
 function normalizeMarketSymbol(symbol: string) {
   return symbol.trim().toUpperCase().replace("-PERP", "");
+}
+
+function parseStoredSelectedMarketSymbols(rulesJson: Record<string, unknown>) {
+  if (!Array.isArray(rulesJson.selected_market_symbols)) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      rulesJson.selected_market_symbols
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => normalizeMarketSymbol(value))
+        .filter(Boolean),
+    ),
+  );
 }
 
 function parseMarketScopeSelection(scope: string) {
@@ -446,6 +464,266 @@ function summarizeMarketScope(selectedSymbols: string[], availableSymbols: strin
     return `Pacifica perpetuals / ${selectedSymbols.join(", ")}`;
   }
   return `${selectedSymbols.length} Pacifica markets`;
+}
+
+function collectGraphSymbols(graph: PortableBuilderGraph) {
+  return Array.from(
+    new Set(
+      graph.nodes
+        .filter((node) => node.kind !== "entry")
+        .map((node) => (typeof node.config?.symbol === "string" ? normalizeMarketSymbol(node.config.symbol) : ""))
+        .filter((symbol) => Boolean(symbol) && symbol !== BOT_MARKET_UNIVERSE_SYMBOL),
+    ),
+  );
+}
+
+function inferExpandedUniverseSymbols(graph: PortableBuilderGraph) {
+  const groups = new Map<string, PortableBuilderNode[]>();
+
+  graph.nodes.forEach((node) => {
+    if (node.kind === "entry") {
+      return;
+    }
+    const separatorIndex = node.id.lastIndexOf("::");
+    if (separatorIndex < 0) {
+      return;
+    }
+    const baseId = node.id.slice(0, separatorIndex);
+    groups.set(baseId, [...(groups.get(baseId) ?? []), node]);
+  });
+
+  let bestSymbols: string[] = [];
+
+  groups.forEach((groupNodes) => {
+    if (groupNodes.length <= 1) {
+      return;
+    }
+
+    const firstNode = groupNodes[0];
+    const firstConfig = { ...(firstNode.config ?? {}) };
+    delete firstConfig.symbol;
+    const firstConfigSignature = JSON.stringify(firstConfig);
+    const seenSymbols = new Set<string>();
+
+    const isExpandedUniverseGroup = groupNodes.every((node) => {
+      if (node.kind !== firstNode.kind) {
+        return false;
+      }
+      if (node.position.x !== firstNode.position.x || node.position.y !== firstNode.position.y) {
+        return false;
+      }
+
+      const comparableConfig = { ...(node.config ?? {}) };
+      delete comparableConfig.symbol;
+      if (JSON.stringify(comparableConfig) !== firstConfigSignature) {
+        return false;
+      }
+
+      const symbol = typeof node.config?.symbol === "string" ? normalizeMarketSymbol(node.config.symbol) : "";
+      if (!symbol) {
+        return false;
+      }
+      seenSymbols.add(symbol);
+      return true;
+    });
+
+    if (!isExpandedUniverseGroup) {
+      return;
+    }
+
+    const symbols = Array.from(seenSymbols);
+    if (symbols.length > bestSymbols.length) {
+      bestSymbols = symbols;
+    }
+  });
+
+  return bestSymbols;
+}
+
+function resolveLoadedSelectedMarkets(
+  rulesJson: Record<string, unknown>,
+  marketScope: string,
+  availableSymbols: string[],
+  inferredUniverseSymbols: string[],
+  fallbackGraphSymbols: string[],
+) {
+  const storedSymbols = parseStoredSelectedMarketSymbols(rulesJson);
+  if (storedSymbols.length > 0) {
+    return storedSymbols;
+  }
+
+  if (inferredUniverseSymbols.length > 1) {
+    return inferredUniverseSymbols;
+  }
+
+  const scopeSymbols = parseMarketScopeSelection(marketScope);
+  if (scopeSymbols.length > 0) {
+    return scopeSymbols;
+  }
+
+  if (marketScope.trim().toLowerCase().includes("all pacifica")) {
+    const normalizedAvailableSymbols = Array.from(
+      new Set(availableSymbols.map((symbol) => normalizeMarketSymbol(symbol)).filter(Boolean)),
+    );
+    if (normalizedAvailableSymbols.length > 0) {
+      return normalizedAvailableSymbols;
+    }
+  }
+
+  if (fallbackGraphSymbols.length > 0) {
+    return fallbackGraphSymbols;
+  }
+
+  return ["BTC"];
+}
+
+function splitExpandedUniverseId(id: string, selectedSymbols: Set<string>) {
+  const separatorIndex = id.lastIndexOf("::");
+  if (separatorIndex < 0) {
+    return null;
+  }
+  const symbol = normalizeMarketSymbol(id.slice(separatorIndex + 2));
+  if (!selectedSymbols.has(symbol)) {
+    return null;
+  }
+  return {
+    baseId: id.slice(0, separatorIndex),
+    symbol,
+  };
+}
+
+function normalizeGraphForEditing(graph: PortableBuilderGraph, selectedSymbols: string[]): PortableBuilderGraph {
+  const normalizedSelectedSymbols = Array.from(
+    new Set(selectedSymbols.map((symbol) => normalizeMarketSymbol(symbol)).filter(Boolean)),
+  );
+  if (normalizedSelectedSymbols.length <= 1) {
+    return graph;
+  }
+
+  const selectedSymbolSet = new Set(normalizedSelectedSymbols);
+  const candidateGroups = new Map<string, PortableBuilderNode[]>();
+
+  graph.nodes.forEach((node) => {
+    if (node.kind === "entry") {
+      return;
+    }
+    const splitId = splitExpandedUniverseId(node.id, selectedSymbolSet);
+    if (!splitId) {
+      return;
+    }
+    candidateGroups.set(splitId.baseId, [...(candidateGroups.get(splitId.baseId) ?? []), node]);
+  });
+
+  const collapsedNodeIds = new Set<string>();
+  candidateGroups.forEach((groupNodes, baseId) => {
+    if (groupNodes.length !== normalizedSelectedSymbols.length) {
+      return;
+    }
+
+    const firstNode = groupNodes[0];
+    const firstConfig = { ...(firstNode.config ?? {}) };
+    delete firstConfig.symbol;
+    const firstConfigSignature = JSON.stringify(firstConfig);
+    const seenSymbols = new Set<string>();
+
+    const canCollapse = groupNodes.every((node) => {
+      const splitId = splitExpandedUniverseId(node.id, selectedSymbolSet);
+      if (!splitId || splitId.baseId !== baseId) {
+        return false;
+      }
+      if (node.kind !== firstNode.kind) {
+        return false;
+      }
+      if (node.position.x !== firstNode.position.x || node.position.y !== firstNode.position.y) {
+        return false;
+      }
+
+      const comparableConfig = { ...(node.config ?? {}) };
+      delete comparableConfig.symbol;
+      if (JSON.stringify(comparableConfig) !== firstConfigSignature) {
+        return false;
+      }
+
+      const symbol = typeof node.config?.symbol === "string" ? normalizeMarketSymbol(node.config.symbol) : "";
+      if (symbol !== splitId.symbol) {
+        return false;
+      }
+      seenSymbols.add(symbol);
+      return true;
+    });
+
+    if (!canCollapse) {
+      return;
+    }
+    if (seenSymbols.size !== selectedSymbolSet.size) {
+      return;
+    }
+    if (!normalizedSelectedSymbols.every((symbol) => seenSymbols.has(symbol))) {
+      return;
+    }
+
+    collapsedNodeIds.add(baseId);
+  });
+
+  if (collapsedNodeIds.size === 0) {
+    return graph;
+  }
+
+  const nextNodes: PortableBuilderNode[] = [];
+  const emittedNodeIds = new Set<string>();
+  graph.nodes.forEach((node) => {
+    if (node.kind === "entry") {
+      nextNodes.push(node);
+      return;
+    }
+
+    const splitId = splitExpandedUniverseId(node.id, selectedSymbolSet);
+    if (!splitId || !collapsedNodeIds.has(splitId.baseId)) {
+      nextNodes.push(node);
+      return;
+    }
+
+    if (emittedNodeIds.has(splitId.baseId)) {
+      return;
+    }
+
+    emittedNodeIds.add(splitId.baseId);
+    nextNodes.push({
+      ...node,
+      id: splitId.baseId,
+      config: node.config ? { ...node.config, symbol: BOT_MARKET_UNIVERSE_SYMBOL } : undefined,
+    });
+  });
+
+  const nextEdges: PortableBuilderEdge[] = [];
+  const seenEdges = new Set<string>();
+  graph.edges.forEach((edge) => {
+    const splitSource = splitExpandedUniverseId(edge.source, selectedSymbolSet);
+    const splitTarget = splitExpandedUniverseId(edge.target, selectedSymbolSet);
+    const source = splitSource && collapsedNodeIds.has(splitSource.baseId) ? splitSource.baseId : edge.source;
+    const target = splitTarget && collapsedNodeIds.has(splitTarget.baseId) ? splitTarget.baseId : edge.target;
+    if (source === target) {
+      return;
+    }
+
+    const edgeKey = `${source}->${target}`;
+    if (seenEdges.has(edgeKey)) {
+      return;
+    }
+    seenEdges.add(edgeKey);
+
+    nextEdges.push({
+      id: typeof edge.id === "string" ? edge.id.split("::")[0] : undefined,
+      source,
+      target,
+    });
+  });
+
+  return {
+    ...graph,
+    nodes: nextNodes,
+    edges: nextEdges,
+  };
 }
 
 function findSelectedMarketLeverageCap(selectedSymbols: string[], markets: BuilderMarket[]) {
@@ -621,6 +899,15 @@ function buildPersistedGraph(nodes: BuilderFlowNode[], edges: BuilderFlowEdge[],
   };
 }
 
+function buildEditableGraph(nodes: BuilderFlowNode[], edges: BuilderFlowEdge[]): PortableBuilderGraph {
+  return {
+    version: 1,
+    entry: ENTRY_NODE_ID,
+    nodes: nodes.map((node) => serializeGraphNode(node) as PortableBuilderNode),
+    edges: edges.map(({ id, source, target }) => ({ id, source, target })),
+  };
+}
+
 export function BuilderGraphStudio({
   onNotice,
   onboardingStatus,
@@ -782,8 +1069,26 @@ export function BuilderGraphStudio({
       }
 
       const bot = payload as BuilderBotDefinition;
-      const graphPayload = isRecord(bot.rules_json.graph) ? bot.rules_json.graph : null;
-      if (!graphPayload || !Array.isArray(graphPayload.nodes) || !Array.isArray(graphPayload.edges)) {
+      const persistedGraph = isPortableBuilderGraph(bot.rules_json.graph) ? bot.rules_json.graph : null;
+      const editorGraph = isPortableBuilderGraph(bot.rules_json.editor_graph) ? bot.rules_json.editor_graph : null;
+      const activeMarketSymbols = Array.from(
+        new Set(
+          markets
+            .filter((market) => market.status === "active")
+            .map((market) => normalizeMarketSymbol(market.symbol))
+            .filter(Boolean),
+        ),
+      );
+      const inferredUniverseSymbols = persistedGraph ? inferExpandedUniverseSymbols(persistedGraph) : [];
+      const selectedSymbols = resolveLoadedSelectedMarkets(
+        bot.rules_json,
+        bot.market_scope,
+        activeMarketSymbols,
+        inferredUniverseSymbols,
+        persistedGraph ? collectGraphSymbols(persistedGraph) : [],
+      );
+      const graphPayload = editorGraph ?? (persistedGraph ? normalizeGraphForEditing(persistedGraph, selectedSymbols) : null);
+      if (!graphPayload) {
         throw new Error("This saved bot does not include an editable builder graph.");
       }
 
@@ -800,11 +1105,7 @@ export function BuilderGraphStudio({
       setName(bot.name);
       setDescription(bot.description);
       setVisibility(bot.visibility);
-      setSelectedMarketSymbols(
-        parseMarketScopeSelection(bot.market_scope).length
-          ? parseMarketScopeSelection(bot.market_scope)
-          : ["BTC"],
-      );
+      setSelectedMarketSymbols(selectedSymbols);
       setCreatedBotId(bot.id);
       setLoadedBotId(bot.id);
       setRuntimeStatus(null);
@@ -826,7 +1127,7 @@ export function BuilderGraphStudio({
     } finally {
       setLoadingBotId(null);
     }
-  }, [authenticated, flow, getAuthHeaders, login, onNotice, setEdges, setNodes, walletAddress]);
+  }, [authenticated, flow, getAuthHeaders, login, markets, onNotice, setEdges, setNodes, walletAddress]);
 
   useEffect(() => {
     if (!authenticated || !walletAddress || !requestedBotId || requestedBotId === loadedBotId || requestedBotId === loadingBotId) {
@@ -982,16 +1283,19 @@ export function BuilderGraphStudio({
     const persistedActions = persistedGraph.nodes
       .filter((node) => node.kind === "action" && node.config)
       .map((node) => node.config as Record<string, unknown>);
+    const editableGraph = buildEditableGraph(nodes, edges);
 
     return {
       conditions: persistedConditions,
       actions: persistedActions,
+      selected_market_symbols: selectedMarketSymbols,
       graph: {
         version: 1,
         entry: ENTRY_NODE_ID,
         nodes: persistedGraph.nodes,
         edges: persistedGraph.edges,
       },
+      editor_graph: editableGraph,
     };
   }, [nodes, edges, selectedMarketSymbols]);
   const readyCount = [
