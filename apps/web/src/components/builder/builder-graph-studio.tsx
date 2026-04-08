@@ -91,6 +91,12 @@ type DraftValidationResponse = {
   issues?: string[];
   detail?: string;
 };
+type LiveDraftIssue = {
+  id: string;
+  message: string;
+  nodeId?: string;
+  source: "draft" | "runtime" | "schema";
+};
 type BuilderBotDefinition = {
   id: string;
   name: string;
@@ -750,12 +756,12 @@ function findSelectedMarketLeverageCap(selectedSymbols: string[], markets: Build
   return tightestMarket;
 }
 
-function findActionLeverageBlocker(
+function findActionLeverageIssue(
   nodes: BuilderFlowNode[],
-  runtimeControls: RuntimeControlsFormState,
+  runtimeCap: number | null,
   selectedSymbols: string[],
   markets: BuilderMarket[],
-) {
+): LiveDraftIssue | null {
   const normalizedSelectedSymbols = Array.from(
     new Set(selectedSymbols.map((symbol) => normalizeMarketSymbol(symbol)).filter(Boolean)),
   );
@@ -785,23 +791,118 @@ function findActionLeverageBlocker(
       }
     }
 
-    const effectiveCap = tightestMarket
-      ? Math.min(runtimeControls.maxLeverage, tightestMarket.maxLeverage)
-      : runtimeControls.maxLeverage;
+    const effectiveCap = tightestMarket && runtimeCap !== null
+      ? Math.min(runtimeCap, tightestMarket.maxLeverage)
+      : tightestMarket
+        ? tightestMarket.maxLeverage
+        : runtimeCap;
+
+    if (effectiveCap === null) continue;
 
     if (requestedLeverage <= effectiveCap) continue;
 
     const actionLabel = actionTitle(action.type);
     const marketLabel = action.symbol === BOT_MARKET_UNIVERSE_SYMBOL ? "Bot market universe" : targetSymbols[0] ?? "this market";
 
-    if (tightestMarket && tightestMarket.maxLeverage < runtimeControls.maxLeverage) {
-      return `${actionLabel} on ${marketLabel} requests ${requestedLeverage}x, but ${tightestMarket.symbol} only allows ${tightestMarket.maxLeverage}x. Lower the block leverage or remove that market from the deploy set.`;
+    if (tightestMarket && (runtimeCap === null || tightestMarket.maxLeverage < runtimeCap)) {
+      return {
+        id: `action-leverage:${node.id}`,
+        nodeId: node.id,
+        source: "runtime",
+        message: `${actionLabel} on ${marketLabel} requests ${requestedLeverage}x, but ${tightestMarket.symbol} only allows ${tightestMarket.maxLeverage}x. Lower the block leverage or remove that market from the deploy set.`,
+      };
     }
 
-    return `${actionLabel} on ${marketLabel} requests ${requestedLeverage}x, but the deploy leverage cap is ${runtimeControls.maxLeverage}x. Lower the block leverage or raise the cap before deploying.`;
+    return {
+      id: `action-leverage:${node.id}`,
+      nodeId: node.id,
+      source: "runtime",
+      message: `${actionLabel} on ${marketLabel} requests ${requestedLeverage}x, but the deploy leverage cap is ${runtimeCap}x. Lower the block leverage or raise the cap before deploying.`,
+    };
   }
 
   return null;
+}
+
+function collectLiveDraftIssues({
+  name,
+  description,
+  route,
+  nodes,
+  edges,
+  hasUniverseNodes,
+  selectedSymbols,
+  runtimePreset,
+  runtimeControls,
+  markets,
+}: {
+  name: string;
+  description: string;
+  route: ReturnType<typeof buildPrimaryRoute>;
+  nodes: BuilderFlowNode[];
+  edges: BuilderFlowEdge[];
+  hasUniverseNodes: boolean;
+  selectedSymbols: string[];
+  runtimePreset: RuntimeControlPreset | null;
+  runtimeControls: RuntimeControlsFormState;
+  markets: BuilderMarket[];
+}): LiveDraftIssue[] {
+  const issues: LiveDraftIssue[] = [];
+
+  if (!name.trim()) {
+    issues.push({ id: "draft-name", source: "draft", message: "Add a strategy name so the draft is identifiable before you save or deploy." });
+  }
+  if (!description.trim()) {
+    issues.push({ id: "draft-description", source: "draft", message: "Add a short description so the bot intent is clear before you save or deploy." });
+  }
+  if (hasUniverseNodes && selectedSymbols.length === 0) {
+    issues.push({ id: "draft-market-selection", source: "draft", message: "Choose at least one market because one or more blocks target the bot market universe." });
+  }
+
+  const marketExpansionBlocker = getMarketExpansionBlocker(nodes, edges, selectedSymbols);
+  if (marketExpansionBlocker) {
+    issues.push({ id: "draft-market-expansion", source: "draft", message: marketExpansionBlocker });
+  }
+  if (route.conditions.length === 0) {
+    issues.push({ id: "draft-conditions", source: "draft", message: "Add at least one trigger condition so the bot has a reason to act." });
+  }
+  if (route.actions.length === 0) {
+    issues.push({ id: "draft-actions", source: "draft", message: "Add at least one action so the bot has something to execute after a trigger." });
+  }
+
+  if (runtimePreset) {
+    if (runtimeControls.maxLeverage < 1) {
+      issues.push({ id: "runtime-cap-min", source: "runtime", message: "Leverage cap must be at least 1." });
+    }
+    const leverageCap = findSelectedMarketLeverageCap(selectedSymbols, markets);
+    if (leverageCap && runtimeControls.maxLeverage > leverageCap.maxLeverage) {
+      issues.push({
+        id: "runtime-market-cap",
+        source: "runtime",
+        message: `Leverage cap must be ${leverageCap.maxLeverage} or lower for ${leverageCap.symbol}.`,
+      });
+    }
+  }
+
+  const leverageIssue = findActionLeverageIssue(nodes, runtimePreset ? runtimeControls.maxLeverage : null, selectedSymbols, markets);
+  if (leverageIssue) {
+    issues.push(leverageIssue);
+  }
+
+  if (runtimeControls.maxOrderSizeUsd < 1) {
+    issues.push({ id: "runtime-order-size", source: "runtime", message: "Max order size must be greater than 0." });
+  }
+  if (runtimeControls.allocatedCapitalUsd < 1) {
+    issues.push({ id: "runtime-capital", source: "runtime", message: "Allocated capital must be greater than 0." });
+  }
+  if (runtimeControls.cooldownSeconds < 0) {
+    issues.push({ id: "runtime-cooldown", source: "runtime", message: "Cooldown cannot be negative." });
+  }
+  if (runtimeControls.maxDrawdownPct < 0) {
+    issues.push({ id: "runtime-drawdown", source: "runtime", message: "Max drawdown cannot be negative." });
+  }
+
+  return issues;
 }
 
 function buildRiskPolicyPayload(selectedSymbols: string[], runtimeControls: RuntimeControlsFormState) {
@@ -829,8 +930,8 @@ function validateRuntimeControls(
   if (leverageCap && runtimeControls.maxLeverage > leverageCap.maxLeverage) {
     return `Leverage cap must be ${leverageCap.maxLeverage} or lower for ${leverageCap.symbol}.`;
   }
-  const leverageBlocker = findActionLeverageBlocker(nodes, runtimeControls, selectedSymbols, markets);
-  if (leverageBlocker) return leverageBlocker;
+  const leverageIssue = findActionLeverageIssue(nodes, runtimeControls.maxLeverage, selectedSymbols, markets);
+  if (leverageIssue) return leverageIssue.message;
   if (runtimeControls.maxOrderSizeUsd < 1) return "Max order size must be greater than 0.";
   if (runtimeControls.allocatedCapitalUsd < 1) return "Allocated capital must be greater than 0.";
   if (runtimeControls.cooldownSeconds < 0) return "Cooldown cannot be negative.";
@@ -1032,6 +1133,10 @@ export function BuilderGraphStudio({
   const [runtimePreset, setRuntimePreset] = useState<RuntimeControlPreset | null>(null);
   const [runtimeControls, setRuntimeControls] = useState<RuntimeControlsFormState>({ ...DEFAULT_RUNTIME_CONTROLS });
   const [runtimeControlsError, setRuntimeControlsError] = useState<string | null>(null);
+  const [liveSchemaIssues, setLiveSchemaIssues] = useState<string[]>([]);
+  const [liveSchemaStatus, setLiveSchemaStatus] = useState<"idle" | "checking" | "error">("idle");
+  const [liveSchemaError, setLiveSchemaError] = useState<string | null>(null);
+  const [issueDrawerOpen, setIssueDrawerOpen] = useState(false);
 
   useEffect(() => {
     if (authenticatedWallet) setWalletAddress(authenticatedWallet);
@@ -1244,27 +1349,6 @@ export function BuilderGraphStudio({
     [catalogTemplates],
   );
 
-  const flowNodes = useMemo(
-    () =>
-      nodes.map((node) => ({
-        ...node,
-        data: {
-          ...node.data,
-          active: node.id === selectedNodeId,
-          primary: node.data.kind === "entry" ? true : primaryNodeIds.has(node.id),
-          branchCount: outgoingCounts.get(node.id) ?? 0,
-          stageLabel: node.data.kind === "entry"
-            ? "Start"
-            : !primaryNodeIds.has(node.id)
-              ? "Branch"
-              : node.data.kind === "condition"
-                ? "Signal"
-                : "Action",
-        },
-      })),
-    [nodes, selectedNodeId, primaryNodeIds, outgoingCounts],
-  );
-
   const flowEdges = useMemo(
     () =>
       edges.map((edge) => {
@@ -1379,11 +1463,120 @@ export function BuilderGraphStudio({
     ? trimSentence(actionSummary(route.actions[0]))
     : "Add a first action";
   const strategyReadout = `${triggerReadout}. ${executionReadout}.`;
+  const liveDraftIssues = useMemo(
+    () =>
+      collectLiveDraftIssues({
+        name,
+        description,
+        route,
+        nodes,
+        edges,
+        hasUniverseNodes,
+        selectedSymbols: selectedMarketSymbols,
+        runtimePreset,
+        runtimeControls,
+        markets: activeMarkets,
+      }),
+    [activeMarkets, description, edges, hasUniverseNodes, name, nodes, route, runtimeControls, runtimePreset, selectedMarketSymbols],
+  );
+  const canvasIssues = useMemo(() => {
+    const merged = new Map<string, LiveDraftIssue>();
+    for (const issue of liveDraftIssues) {
+      merged.set(issue.message, issue);
+    }
+    for (const issue of liveSchemaIssues) {
+      if (!merged.has(issue)) {
+        merged.set(issue, {
+          id: `schema:${issue}`,
+          source: "schema",
+          message: issue,
+        });
+      }
+    }
+    return Array.from(merged.values());
+  }, [liveDraftIssues, liveSchemaIssues]);
+  const liveValidationTone = canvasIssues.length > 0 ? "warning" : liveSchemaStatus === "error" ? "error" : "ready";
+  const liveValidationSummary = canvasIssues.length > 0
+    ? `${canvasIssues.length} live issue${canvasIssues.length === 1 ? "" : "s"}`
+    : liveSchemaStatus === "checking"
+      ? "Checking draft..."
+      : liveSchemaStatus === "error"
+        ? "Schema check unavailable"
+        : "No live blockers";
+  const issueNodeCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const issue of canvasIssues) {
+      if (!issue.nodeId) continue;
+      counts.set(issue.nodeId, (counts.get(issue.nodeId) ?? 0) + 1);
+    }
+    return counts;
+  }, [canvasIssues]);
+  const flowNodes = useMemo(
+    () =>
+      nodes.map((node) => ({
+        ...node,
+        data: {
+          ...node.data,
+          active: node.id === selectedNodeId,
+          primary: node.data.kind === "entry" ? true : primaryNodeIds.has(node.id),
+          branchCount: outgoingCounts.get(node.id) ?? 0,
+          stageLabel: node.data.kind === "entry"
+            ? "Start"
+            : !primaryNodeIds.has(node.id)
+              ? "Branch"
+              : node.data.kind === "condition"
+                ? "Signal"
+                : "Action",
+          issueCount: issueNodeCounts.get(node.id) ?? 0,
+        },
+      })),
+    [issueNodeCounts, nodes, selectedNodeId, primaryNodeIds, outgoingCounts],
+  );
 
   const filteredConditions = CONDITION_OPTIONS.filter((option) =>
     conditionTitle(option).toLowerCase().includes(blockSearch.toLowerCase()) ||
     conditionHelper(option).toLowerCase().includes(blockSearch.toLowerCase())
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    const timeoutId = window.setTimeout(async () => {
+      setLiveSchemaStatus("checking");
+      setLiveSchemaError(null);
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/bots/validate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            authoring_mode: "visual",
+            visibility,
+            rules_version: 1,
+            rules_json: rulesJson,
+          }),
+        });
+        const payload = (await response.json()) as DraftValidationResponse;
+        if (cancelled) return;
+        if (!response.ok) {
+          throw new Error(payload.detail ?? "Live validation failed");
+        }
+        const issues = Array.isArray(payload.issues)
+          ? payload.issues.filter((issue): issue is string => typeof issue === "string" && issue.trim().length > 0)
+          : [];
+        setLiveSchemaIssues(issues);
+        setLiveSchemaStatus("idle");
+      } catch (validationError) {
+        if (cancelled) return;
+        setLiveSchemaIssues([]);
+        setLiveSchemaError(validationError instanceof Error ? validationError.message : "Live validation failed");
+        setLiveSchemaStatus("error");
+      }
+    }, 450);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [rulesJson, visibility]);
 
   const filteredActions = ACTION_OPTIONS.filter((option) =>
     actionTitle(option).toLowerCase().includes(blockSearch.toLowerCase()) ||
@@ -2553,9 +2746,9 @@ export function BuilderGraphStudio({
           onDragOver={handlePaneDragOver}
           onDrop={onPaneDrop}
         >
-          <div className="absolute inset-x-4 top-4 z-10 flex flex-wrap items-start justify-between gap-3">
-            <div className="max-w-xl rounded-xl border border-[rgba(255,255,255,0.08)] bg-[rgba(15,16,17,0.9)] px-4 py-3 shadow-[0_18px_40px_rgba(0,0,0,0.28)] backdrop-blur-sm">
-              <div className="flex flex-wrap items-center gap-2">
+          <div className="absolute inset-x-4 top-4 z-10 flex items-start justify-between gap-3">
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(15,16,17,0.88)] px-4 py-3 shadow-[0_18px_40px_rgba(0,0,0,0.28)] backdrop-blur-sm">
                 <span className="text-[0.58rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">Strategy</span>
                 <span className="rounded-full border border-[rgba(255,255,255,0.08)] px-2 py-0.5 text-[0.55rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
                   {activeTemplateLabel}
@@ -2563,35 +2756,106 @@ export function BuilderGraphStudio({
                 <span className="rounded-full border border-[rgba(255,255,255,0.08)] px-2 py-0.5 text-[0.55rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
                   {marketScope}
                 </span>
+                <span className="min-w-0 flex-1 truncate text-sm text-neutral-300">{strategyReadout}</span>
               </div>
-              <p className="mt-2 text-sm leading-6 text-neutral-300">{strategyReadout}</p>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIssueDrawerOpen((current) => !current)}
+                  className={clsx(
+                    "inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] shadow-[0_12px_28px_rgba(0,0,0,0.18)] backdrop-blur-sm transition",
+                    liveValidationTone === "ready"
+                      ? "border-[rgba(116,185,127,0.28)] bg-[rgba(116,185,127,0.12)] text-[#9ed5a6]"
+                      : liveValidationTone === "error"
+                        ? "border-[#e06c6e]/30 bg-[#e06c6e]/10 text-[#f0a5a6]"
+                        : "border-[#dce85d]/30 bg-[#dce85d]/10 text-[#dce85d]",
+                  )}
+                >
+                  <span>Flight Check</span>
+                  <span>{liveValidationSummary}</span>
+                  <span className="text-[0.6rem] text-neutral-400">{issueDrawerOpen ? "hide" : "show"}</span>
+                </button>
+                {liveSchemaStatus === "checking" ? (
+                  <span className="rounded-full border border-[rgba(255,255,255,0.08)] bg-[rgba(15,16,17,0.88)] px-3 py-2 text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 shadow-[0_12px_28px_rgba(0,0,0,0.18)] backdrop-blur-sm">
+                    refreshing
+                  </span>
+                ) : null}
+              </div>
             </div>
 
-            <div className="rounded-xl border border-[rgba(255,255,255,0.08)] bg-[rgba(15,16,17,0.9)] px-3 py-3 shadow-[0_18px_40px_rgba(0,0,0,0.28)] backdrop-blur-sm">
-              <div className="grid gap-2 text-xs text-neutral-300">
-                <div className="flex items-center justify-between gap-4">
-                  <span>Signals</span>
-                  <span className="font-semibold text-neutral-50">{nodes.filter((node) => node.data.kind === "condition").length}</span>
+            <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(15,16,17,0.88)] px-3 py-3 shadow-[0_18px_40px_rgba(0,0,0,0.28)] backdrop-blur-sm">
+              {[
+                { label: "Signals", value: nodes.filter((node) => node.data.kind === "condition").length },
+                { label: "Actions", value: nodes.filter((node) => node.data.kind === "action").length },
+                { label: "Branches", value: branchSourceCount },
+                { label: "Ready", value: `${readyCount}/4`, tone: "text-[#dce85d]" },
+              ].map((item) => (
+                <div key={item.label} className="min-w-[4.75rem] rounded-xl border border-[rgba(255,255,255,0.05)] bg-[rgba(255,255,255,0.02)] px-3 py-2">
+                  <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">{item.label}</div>
+                  <div className={clsx("mt-1 text-sm font-semibold text-neutral-50", item.tone)}>{item.value}</div>
                 </div>
-                <div className="flex items-center justify-between gap-4">
-                  <span>Actions</span>
-                  <span className="font-semibold text-neutral-50">{nodes.filter((node) => node.data.kind === "action").length}</span>
-                </div>
-                <div className="flex items-center justify-between gap-4">
-                  <span>Branches</span>
-                  <span className="font-semibold text-neutral-50">{branchSourceCount}</span>
-                </div>
-                <div className="flex items-center justify-between gap-4">
-                  <span>Ready</span>
-                  <span className="font-semibold text-[#dce85d]">{readyCount}/4</span>
-                </div>
-              </div>
+              ))}
             </div>
           </div>
 
-          {error ? (
-            <div className="absolute left-4 top-28 z-10 rounded-lg border border-[#e06c6e]/30 bg-[#e06c6e]/10 px-3 py-2">
-              <span className="text-xs font-medium text-[#f0a5a6]">{error}</span>
+          {issueDrawerOpen || error ? (
+            <div className="absolute left-4 top-24 z-10 flex w-[min(28rem,calc(100%-2rem))] flex-col gap-2">
+              {canvasIssues.length > 0 || liveSchemaError ? (
+                <div className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[rgba(15,16,17,0.94)] px-4 py-4 shadow-[0_18px_40px_rgba(0,0,0,0.28)] backdrop-blur-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[0.58rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">Live Issues</div>
+                      <div className="mt-1 text-sm font-semibold text-neutral-50">
+                        {canvasIssues.length > 0 ? `${canvasIssues.length} blocker${canvasIssues.length === 1 ? "" : "s"} in the current draft` : "No graph blockers"}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIssueDrawerOpen(false)}
+                      className="rounded-full border border-[rgba(255,255,255,0.08)] px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-white hover:text-white"
+                    >
+                      Close
+                    </button>
+                  </div>
+                  {canvasIssues.length > 0 ? (
+                    <div className="mt-3 grid gap-2">
+                      {canvasIssues.map((issue) => (
+                        <button
+                          key={issue.id}
+                          type="button"
+                          disabled={!issue.nodeId}
+                          onClick={() => {
+                            if (issue.nodeId) setSelectedNodeId(issue.nodeId);
+                          }}
+                          className={clsx(
+                            "rounded-xl border border-[rgba(255,255,255,0.06)] px-3 py-2.5 text-left text-xs leading-5 text-neutral-100 transition",
+                            issue.nodeId
+                              ? "bg-[rgba(255,255,255,0.04)] hover:border-[rgba(220,232,93,0.28)] hover:bg-[rgba(255,255,255,0.06)]"
+                              : "cursor-default bg-[rgba(255,255,255,0.02)]",
+                          )}
+                        >
+                          <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">{issue.source}</div>
+                          <div className="mt-1">{issue.message}</div>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-xs leading-5 text-neutral-300">
+                      The current draft has no live blockers.
+                    </p>
+                  )}
+                  {liveSchemaError ? (
+                    <p className="mt-3 text-xs leading-5 text-neutral-400">Schema validation is temporarily unavailable: {liveSchemaError}</p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {error ? (
+                <div className="rounded-xl border border-[#e06c6e]/30 bg-[#e06c6e]/10 px-3 py-2.5 shadow-[0_18px_40px_rgba(0,0,0,0.24)]">
+                  <span className="text-xs font-medium text-[#f0a5a6]">{error}</span>
+                </div>
+              ) : null}
             </div>
           ) : null}
 

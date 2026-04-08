@@ -1,7 +1,7 @@
 "use client";
 
 import { Handle, type NodeProps, Position, useReactFlow } from "@xyflow/react";
-import { X } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 
 import {
   actionSummary,
@@ -36,6 +36,8 @@ export function BuilderFlowNodeCard({ data, id }: NodeProps<BuilderFlowNode>) {
   const { setNodes, setEdges } = useReactFlow();
   const isEntry = data.kind === "entry";
   const isCondition = data.kind === "condition";
+  const issueCount = Number(data.issueCount ?? 0);
+  const hasIssue = issueCount > 0;
 
   const kicker = data.stageLabel ?? (isEntry ? "Start" : isCondition ? "Signal node" : "Action node");
   const badgeTone = isEntry
@@ -59,9 +61,11 @@ export function BuilderFlowNodeCard({ data, id }: NodeProps<BuilderFlowNode>) {
     <div
       className={`relative min-w-[16.25rem] max-w-[17.5rem] rounded-2xl border px-4 py-4 shadow-[0_18px_42px_rgba(0,0,0,0.18)] transition group ${data.active
         ? "border-[#dce85d] bg-[#dce85d]/10"
-        : data.primary
-          ? "border-[color:color-mix(in_oklch,var(--mint)_46%,var(--line))] bg-[color:color-mix(in_oklch,var(--bg-raised)_78%,var(--mint)_22%)]"
-          : "border-[rgba(255,255,255,0.06)] bg-[#16181a]"
+        : hasIssue
+          ? "border-[#dce85d]/55 bg-[#231f10] shadow-[0_18px_42px_rgba(220,232,93,0.12)]"
+          : data.primary
+            ? "border-[color:color-mix(in_oklch,var(--mint)_46%,var(--line))] bg-[color:color-mix(in_oklch,var(--bg-raised)_78%,var(--mint)_22%)]"
+            : "border-[rgba(255,255,255,0.06)] bg-[#16181a]"
         }`}
     >
       {!isEntry ? (
@@ -99,6 +103,12 @@ export function BuilderFlowNodeCard({ data, id }: NodeProps<BuilderFlowNode>) {
         <p className="text-sm leading-6 text-neutral-400">{nodeSummary(data)}</p>
 
         <div className="flex flex-wrap gap-2">
+          {hasIssue ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-[#dce85d]/35 bg-[#dce85d]/10 px-2 py-1 text-[0.55rem] font-semibold uppercase tracking-[0.16em] text-[#dce85d]">
+              <AlertTriangle className="h-3 w-3" />
+              {issueCount} issue{issueCount === 1 ? "" : "s"}
+            </span>
+          ) : null}
           {data.branchCount > 1 ? (
             <span className="rounded-full border border-[rgba(255,255,255,0.06)] px-2 py-1 text-[0.55rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
               {data.branchCount} branches

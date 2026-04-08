@@ -42,6 +42,7 @@ export type EntryNodeData = {
   primary: boolean;
   branchCount: number;
   stageLabel?: string;
+  issueCount?: number;
 };
 
 export type ConditionNodeData = {
@@ -51,6 +52,7 @@ export type ConditionNodeData = {
   primary: boolean;
   branchCount: number;
   stageLabel?: string;
+  issueCount?: number;
 };
 
 export type ActionNodeData = {
@@ -60,6 +62,7 @@ export type ActionNodeData = {
   primary: boolean;
   branchCount: number;
   stageLabel?: string;
+  issueCount?: number;
 };
 
 export type BuilderNodeData = EntryNodeData | ConditionNodeData | ActionNodeData;
