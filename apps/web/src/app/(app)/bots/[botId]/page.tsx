@@ -7,6 +7,12 @@ import { use, useEffect, useMemo, useState } from "react";
 import { BotPerformancePanel } from "@/components/bots/bot-performance-panel";
 import { RuntimeFailurePanel } from "@/components/bots/runtime-failure-panel";
 import { RuntimeHealthCard } from "@/components/bots/runtime-health-card";
+import {
+  DEFAULT_RUNTIME_POLICY,
+  type RuntimePolicyDraft,
+  runtimePolicyDraftFromPolicy,
+  runtimePolicyDraftToPayload,
+} from "@/components/bots/runtime-policy";
 import { useClashxAuth } from "@/lib/clashx-auth";
 import type { BotPerformance } from "@/lib/bot-performance";
 import type { PublishingSettings } from "@/lib/public-bots";
@@ -92,6 +98,13 @@ type BotExecutionEvent = {
   created_at: string;
 };
 
+type RuntimeRiskStateResponse = {
+  runtime_id: string;
+  risk_policy_json: Record<string, unknown>;
+  runtime_state: Record<string, unknown>;
+  updated_at: string;
+};
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const EVENTS_PAGE_SIZE = 40;
 const REFRESH_INTERVAL_MS = 15000;
@@ -144,8 +157,13 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
   const [activityRefreshToken, setActivityRefreshToken] = useState(0);
   const [performanceRefreshToken, setPerformanceRefreshToken] = useState(0);
   const [activeTab, setActiveTab] = useState<"overview" | "operate" | "activity">("overview");
+  const [runtimePolicy, setRuntimePolicy] = useState<RuntimePolicyDraft>(DEFAULT_RUNTIME_POLICY);
+  const [runtimePolicyStatus, setRuntimePolicyStatus] = useState<"idle" | "loading" | "saving">("idle");
+  const [runtimePolicyError, setRuntimePolicyError] = useState<string | null>(null);
+  const [runtimePolicyRuntimeId, setRuntimePolicyRuntimeId] = useState<string | null>(null);
 
   const sessionActive = authenticated && Boolean(walletAddress);
+  const activeRuntimeId = runtimeOverview?.health.runtime_id ?? null;
 
   useEffect(() => {
     if (!sessionActive || !walletAddress) {
@@ -162,6 +180,10 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
       setRuntimeRefreshToken(0);
       setActivityRefreshToken(0);
       setPerformanceRefreshToken(0);
+      setRuntimePolicy(DEFAULT_RUNTIME_POLICY);
+      setRuntimePolicyStatus("idle");
+      setRuntimePolicyError(null);
+      setRuntimePolicyRuntimeId(null);
       return;
     }
 
@@ -182,6 +204,10 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
       setRuntimeRefreshToken(0);
       setActivityRefreshToken(0);
       setPerformanceRefreshToken(0);
+      setRuntimePolicy(DEFAULT_RUNTIME_POLICY);
+      setRuntimePolicyStatus("idle");
+      setRuntimePolicyError(null);
+      setRuntimePolicyRuntimeId(null);
 
       try {
         const headers = await getAuthHeaders();
@@ -387,6 +413,69 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
     return () => window.clearInterval(interval);
   }, [activeTab, primaryLoading, sessionActive, walletAddress]);
 
+  useEffect(() => {
+    if (!sessionActive || !walletAddress || activeTab !== "operate") {
+      return;
+    }
+
+    if (!activeRuntimeId) {
+      setRuntimePolicyStatus("idle");
+      setRuntimePolicyError(null);
+      setRuntimePolicyRuntimeId(null);
+      return;
+    }
+
+    if (runtimePolicyRuntimeId === activeRuntimeId) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const resolvedWallet = walletAddress;
+
+    async function loadRuntimePolicy() {
+      setRuntimePolicyStatus("loading");
+      setRuntimePolicyError(null);
+      try {
+        const headers = await getAuthHeaders();
+        const walletQuery = encodeURIComponent(resolvedWallet);
+        const response = await fetch(
+          `${API_BASE_URL}/api/bots/${params.botId}/risk-state?wallet_address=${walletQuery}`,
+          {
+            cache: "no-store",
+            headers,
+            signal: controller.signal,
+          },
+        );
+        const payload = await unwrapResponse<RuntimeRiskStateResponse>(response, "Could not load runtime policy");
+
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setRuntimePolicy(runtimePolicyDraftFromPolicy(payload.risk_policy_json));
+        setRuntimePolicyRuntimeId(payload.runtime_id);
+        setRuntimePolicyStatus("idle");
+      } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setRuntimePolicyError(loadError instanceof Error ? loadError.message : "Could not load runtime policy");
+        setRuntimePolicyStatus("idle");
+      }
+    }
+
+    void loadRuntimePolicy();
+    return () => controller.abort();
+  }, [
+    activeRuntimeId,
+    activeTab,
+    getAuthHeaders,
+    params.botId,
+    runtimePolicyRuntimeId,
+    sessionActive,
+    walletAddress,
+  ]);
+
   const visibleBot = sessionActive ? bot : null;
   const visibleRuntimeOverview = sessionActive ? runtimeOverview : null;
   const visibleError = sessionActive ? error : null;
@@ -433,6 +522,34 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
     }
     if (activeTab === "activity") {
       setActivityRefreshToken((value) => value + 1);
+    }
+  }
+
+  async function saveRuntimePolicy() {
+    if (!walletAddress || !activeRuntimeId) {
+      return;
+    }
+
+    setRuntimePolicyStatus("saving");
+    setRuntimePolicyError(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/bots/${params.botId}/risk-state`, {
+        method: "PATCH",
+        headers: await getAuthHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          wallet_address: walletAddress,
+          risk_policy_json: runtimePolicyDraftToPayload(runtimePolicy),
+        }),
+      });
+      const payload = await unwrapResponse<RuntimeRiskStateResponse>(response, "Could not save runtime policy");
+      setRuntimePolicy(runtimePolicyDraftFromPolicy(payload.risk_policy_json));
+      setRuntimePolicyRuntimeId(payload.runtime_id);
+      setRuntimePolicyStatus("idle");
+      refreshRuntimeData();
+    } catch (saveError) {
+      setRuntimePolicyError(saveError instanceof Error ? saveError.message : "Could not save runtime policy");
+      setRuntimePolicyStatus("idle");
     }
   }
 
@@ -583,6 +700,8 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
                 <RuntimeControls
                   botId={params.botId}
                   walletAddress={walletAddress}
+                  riskPolicy={runtimePolicy}
+                  policyLoading={runtimePolicyStatus === "loading"}
                   getAuthHeaders={getAuthHeaders}
                   onRuntimeUpdate={refreshRuntimeData}
                 />
@@ -646,21 +765,20 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
                     <div className="grid gap-3">
                       <SectionIntro
                         eyebrow="Advanced settings"
-                        title="Refine live guardrails"
-                        copy="Tighten execution boundaries after deployment."
+                        title="Runtime policy"
+                        copy="The deploy controls and live policy editor both use this same policy source."
                       />
-                      {visibleRuntimeOverview?.health.runtime_id ? (
-                        <AdvancedSettingsPanel
-                          botId={params.botId}
-                          walletAddress={walletAddress}
-                          getAuthHeaders={getAuthHeaders}
-                          onSaved={refreshRuntimeData}
-                        />
-                      ) : (
-                        <article className="rounded-[1.8rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-5 py-5 text-sm leading-7 text-neutral-400">
-                          Deploy this bot to unlock advanced runtime policy controls.
-                        </article>
-                      )}
+                      <AdvancedSettingsPanel
+                        policy={runtimePolicy}
+                        status={runtimePolicyStatus}
+                        error={runtimePolicyError}
+                        isDeployed={Boolean(activeRuntimeId)}
+                        onPolicyChange={(nextPolicy) => {
+                          setRuntimePolicy(nextPolicy);
+                          setRuntimePolicyError(null);
+                        }}
+                        onSave={saveRuntimePolicy}
+                      />
                     </div>
                   </div>
                 </div>

@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  type RuntimePolicyDraft,
+  runtimePolicyDraftToPayload,
+} from "@/components/bots/runtime-policy";
+import {
   PacificaOnboardingChecklist,
   type PacificaOnboardingStatus,
 } from "@/components/pacifica/onboarding-checklist";
@@ -12,6 +16,7 @@ import {
   fetchPacificaReadiness,
   type PacificaReadinessPayload,
 } from "@/lib/pacifica-readiness";
+
 type RuntimeResponse = {
   id: string;
   status: string;
@@ -20,31 +25,27 @@ type RuntimeResponse = {
   deployed_at?: string | null;
   stopped_at?: string | null;
 };
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-const FIELD_LABEL_CLASS = "grid gap-2 text-sm text-neutral-400";
-const INPUT_CLASS =
-  "rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]";
 const SECTION_CARD_CLASS =
   "grid gap-4 rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] p-4";
 
 export function RuntimeControls({
   botId,
   walletAddress,
+  riskPolicy,
+  policyLoading = false,
   getAuthHeaders,
   onRuntimeUpdate,
 }: {
   botId: string;
   walletAddress: string;
+  riskPolicy: RuntimePolicyDraft;
+  policyLoading?: boolean;
   getAuthHeaders: (headersInit?: HeadersInit) => Promise<Headers>;
   onRuntimeUpdate?: (runtime: RuntimeResponse) => void;
 }) {
   const { authenticated } = useClashxAuth();
-  const [maxLeverage, setMaxLeverage] = useState(5);
-  const [maxOrderSizeUsd, setMaxOrderSizeUsd] = useState(200);
-  const [allocatedCapitalUsd, setAllocatedCapitalUsd] = useState(200);
-  const [cooldownSeconds, setCooldownSeconds] = useState(45);
-  const [maxDrawdownPct, setMaxDrawdownPct] = useState(18);
-  const [maxOpenPositions, setMaxOpenPositions] = useState(1);
   const [showRawPolicy, setShowRawPolicy] = useState(false);
   const [status, setStatus] = useState<"idle" | "deploy" | "pause" | "resume" | "stop">("idle");
   const [error, setError] = useState<string | null>(null);
@@ -59,24 +60,7 @@ export function RuntimeControls({
     agentAuthorized: false,
   });
 
-  const riskPolicy = useMemo(
-    () => ({
-      max_leverage: maxLeverage,
-      max_order_size_usd: maxOrderSizeUsd,
-      allocated_capital_usd: allocatedCapitalUsd,
-      cooldown_seconds: cooldownSeconds,
-      max_drawdown_pct: maxDrawdownPct,
-      max_open_positions: maxOpenPositions,
-    }),
-    [
-      allocatedCapitalUsd,
-      cooldownSeconds,
-      maxDrawdownPct,
-      maxLeverage,
-      maxOpenPositions,
-      maxOrderSizeUsd,
-    ],
-  );
+  const serializedRiskPolicy = useMemo(() => runtimePolicyDraftToPayload(riskPolicy), [riskPolicy]);
 
   useEffect(() => {
     if (!authenticated || !walletAddress) {
@@ -116,6 +100,9 @@ export function RuntimeControls({
     if (!walletAddress) {
       return "Connect the wallet you want ClashX to trade with.";
     }
+    if (policyLoading) {
+      return "Loading the shared runtime policy.";
+    }
     if (readinessStatus === "loading") {
       return "Checking Pacifica readiness.";
     }
@@ -123,15 +110,17 @@ export function RuntimeControls({
       return "Unable to verify Pacifica readiness right now.";
     }
     return readiness?.blockers[0] ?? null;
-  }, [authenticated, readiness?.blockers, readinessStatus, walletAddress]);
+  }, [authenticated, policyLoading, readiness?.blockers, readinessStatus, walletAddress]);
 
   async function invoke(action: "deploy" | "pause" | "resume" | "stop") {
     if (action === "deploy" && !setupStatus.ready) {
       setSetupOpen(true);
       return;
     }
+
     setStatus(action);
     setError(null);
+
     try {
       if (action === "deploy") {
         await fetchPacificaReadiness(walletAddress, getAuthHeaders).then((payload) => {
@@ -145,7 +134,7 @@ export function RuntimeControls({
       const endpoint = `${API_BASE_URL}/api/bots/${botId}/${action}`;
       const body =
         action === "deploy"
-          ? { wallet_address: walletAddress, risk_policy_json: riskPolicy }
+          ? { wallet_address: walletAddress, risk_policy_json: serializedRiskPolicy }
           : undefined;
 
       const response = await fetch(endpoint, {
@@ -186,7 +175,7 @@ export function RuntimeControls({
             Run this bot live
           </h3>
           <p className="max-w-3xl text-sm leading-7 text-neutral-400">
-            Set guardrails, check deployment readiness, and control the runtime from one place.
+            Check deployment readiness, review the shared runtime policy, and control the live runtime from one place.
           </p>
         </div>
         <span className="text-xs text-neutral-500">wallet-bound live deployment</span>
@@ -194,79 +183,38 @@ export function RuntimeControls({
 
       <div className={SECTION_CARD_CLASS}>
         <div className="grid gap-1">
-          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Deploy profile</span>
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
+            Shared runtime policy
+          </span>
           <p className="text-sm leading-7 text-neutral-400">
-            Set the live guardrails the bot will use the moment it starts trading. Block-level leverage is not overwritten here; this value acts as a cap.
+            Deploy uses the runtime policy configured below in the runtime policy editor. This panel is read-only so the operate tab has one policy source instead of competing forms.
           </p>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          <label className={FIELD_LABEL_CLASS}>
-            Leverage cap
-            <input
-              type="number"
-              min={1}
-              value={maxLeverage}
-              onChange={(event) => setMaxLeverage(Number(event.target.value))}
-              className={INPUT_CLASS}
+        {policyLoading ? (
+          <div className="rounded-[1.2rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-3 text-sm text-neutral-400">
+            Loading the current runtime policy before the next deploy.
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <PolicyStat label="Leverage cap" value={`${riskPolicy.maxLeverage}x`} />
+            <PolicyStat label="Max order size" value={`$${riskPolicy.maxOrderSizeUsd}`} />
+            <PolicyStat label="Allocated capital" value={`$${riskPolicy.allocatedCapitalUsd}`} />
+            <PolicyStat label="Max open positions" value={`${riskPolicy.maxOpenPositions}`} />
+            <PolicyStat label="Cooldown" value={`${riskPolicy.cooldownSeconds}s`} />
+            <PolicyStat label="Max drawdown" value={`${riskPolicy.maxDrawdownPct}%`} />
+            <PolicyStat
+              label="Market scope"
+              value={riskPolicy.allowedSymbols.trim().length > 0 ? riskPolicy.allowedSymbols : "All supported"}
             />
-          </label>
-          <label className={FIELD_LABEL_CLASS}>
-            Max order size
-            <input
-              type="number"
-              min={1}
-              value={maxOrderSizeUsd}
-              onChange={(event) => setMaxOrderSizeUsd(Number(event.target.value))}
-              className={INPUT_CLASS}
-            />
-          </label>
-          <label className={FIELD_LABEL_CLASS}>
-            Allocated capital
-            <input
-              type="number"
-              min={1}
-              value={allocatedCapitalUsd}
-              onChange={(event) => setAllocatedCapitalUsd(Number(event.target.value))}
-              className={INPUT_CLASS}
-            />
-          </label>
-          <label className={FIELD_LABEL_CLASS}>
-            Cooldown
-            <input
-              type="number"
-              min={0}
-              value={cooldownSeconds}
-              onChange={(event) => setCooldownSeconds(Number(event.target.value))}
-              className={INPUT_CLASS}
-            />
-          </label>
-          <label className={FIELD_LABEL_CLASS}>
-            Max drawdown %
-            <input
-              type="number"
-              min={0}
-              step="0.1"
-              value={maxDrawdownPct}
-              onChange={(event) => setMaxDrawdownPct(Number(event.target.value))}
-              className={INPUT_CLASS}
-            />
-          </label>
-          <label className={FIELD_LABEL_CLASS}>
-            Open positions allowed
-            <input
-              type="number"
-              min={1}
-              value={maxOpenPositions}
-              onChange={(event) => setMaxOpenPositions(Number(event.target.value))}
-              className={INPUT_CLASS}
-            />
-          </label>
-        </div>
+            <PolicyStat label="Sizing mode" value={riskPolicy.sizingMode.replaceAll("_", " ")} />
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-[1.2rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-3">
           <p className="text-xs leading-6 text-neutral-500">
-            With this profile, the bot can hold up to {maxOpenPositions} live position{maxOpenPositions === 1 ? "" : "s"} and waits {cooldownSeconds}s before the next fresh entry.
+            With this profile, the bot can hold up to {riskPolicy.maxOpenPositions} live position
+            {riskPolicy.maxOpenPositions === 1 ? "" : "s"} and waits {riskPolicy.cooldownSeconds}s before the next fresh entry.
           </p>
           <button
             type="button"
@@ -279,14 +227,16 @@ export function RuntimeControls({
 
         {showRawPolicy ? (
           <pre className="overflow-x-auto rounded-[1.2rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-3 text-xs leading-6 text-neutral-300">
-            {JSON.stringify(riskPolicy, null, 2)}
+            {JSON.stringify(serializedRiskPolicy, null, 2)}
           </pre>
         ) : null}
       </div>
 
       {readinessBlocker && status !== "deploy" ? (
         <div className="rounded-[1.2rem] border border-[rgba(220,232,93,0.18)] bg-[rgba(220,232,93,0.08)] px-4 py-3 text-sm leading-6 text-neutral-200">
-          <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#dce85d]">Deploy blocked</div>
+          <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#dce85d]">
+            Deploy blocked
+          </div>
           <div className="mt-1">{readinessBlocker}</div>
         </div>
       ) : null}
@@ -297,10 +247,10 @@ export function RuntimeControls({
         <button
           type="button"
           onClick={() => void invoke("deploy")}
-          disabled={status !== "idle"}
+          disabled={status !== "idle" || policyLoading}
           className="bg-[#dce85d] px-4 py-2.5 font-mono text-[0.62rem] font-semibold uppercase tracking-wider text-[#090a0a] transition hover:bg-[#e8f06d] disabled:opacity-60"
         >
-          {status === "deploy" ? "deploying…" : "deploy"}
+          {status === "deploy" ? "deploying..." : "deploy"}
         </button>
         <button
           type="button"
@@ -328,5 +278,14 @@ export function RuntimeControls({
         </button>
       </div>
     </article>
+  );
+}
+
+function PolicyStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-[1.2rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-3">
+      <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">{label}</div>
+      <div className="mt-2 text-sm text-neutral-200">{value}</div>
+    </div>
   );
 }
