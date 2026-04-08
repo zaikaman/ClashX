@@ -101,6 +101,21 @@ class CreatorMarketplaceService:
             "creators": self._build_creator_highlights(public_rows=public_rows, limit=creator_limit),
         }
 
+    async def list_candidate_bots(self, *, limit: int = 24) -> list[dict[str, Any]]:
+        rows = await self._load_marketplace_overview_rows(limit=max(limit, 60))
+        return [
+            {
+                "runtime_id": row["runtime_id"],
+                "bot_definition_id": row["bot_definition_id"],
+                "bot_name": row["bot_name"],
+                "strategy_type": row["strategy_type"],
+                "rank": row["rank"],
+                "drawdown": row["drawdown"],
+                "trust": row["trust"],
+            }
+            for row in rows[:limit]
+        ]
+
     async def start_background_warmup(self) -> None:
         task = self._background_warm_task
         if task is not None and not task.done():
@@ -299,9 +314,8 @@ class CreatorMarketplaceService:
     async def _load_public_leaderboard_rows(self, *, limit: int) -> list[dict[str, Any]]:
         latest = self.supabase.maybe_one("bot_leaderboard_snapshots", order="captured_at.desc")
         if latest is None:
-            rows = await self.leaderboard_engine.refresh_public_leaderboard(None, limit=max(limit, 60))
-            self._clear_marketplace_cache()
-            return rows
+            self._schedule_public_leaderboard_refresh(limit=max(limit, 60))
+            return self._fallback_public_leaderboard_rows(limit=limit)
         if self._snapshot_is_stale(latest.get("captured_at")):
             self._schedule_public_leaderboard_refresh(limit=max(limit, 60))
 
@@ -345,7 +359,50 @@ class CreatorMarketplaceService:
                     "drawdown": snapshot["drawdown"],
                     "captured_at": snapshot["captured_at"],
                 }
+        )
+        return rows
+
+    def _fallback_public_leaderboard_rows(self, *, limit: int) -> list[dict[str, Any]]:
+        runtimes = self.supabase.select("bot_runtimes", filters={"status": "active"}, order="updated_at.desc", limit=max(limit, 60))
+        definition_ids = [str(runtime["bot_definition_id"]) for runtime in runtimes]
+        definitions = (
+            {
+                row["id"]: row
+                for row in self.supabase.select(
+                    "bot_definitions",
+                    filters={"id": ("in", definition_ids), "visibility": "public"},
+                )
+            }
+            if definition_ids
+            else {}
+        )
+        captured_at = datetime.now(tz=UTC).isoformat()
+        rows: list[dict[str, Any]] = []
+        rank = 1
+        for runtime in runtimes:
+            definition = definitions.get(runtime["bot_definition_id"])
+            if definition is None:
+                continue
+            state = runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {}
+            runtime_state = state.get("_runtime_state") if isinstance(state.get("_runtime_state"), dict) else {}
+            rows.append(
+                {
+                    "runtime_id": runtime["id"],
+                    "bot_definition_id": definition["id"],
+                    "bot_name": definition["name"],
+                    "strategy_type": definition["strategy_type"],
+                    "authoring_mode": definition["authoring_mode"],
+                    "rank": rank,
+                    "pnl_total": float(runtime_state.get("pnl_total_usd") or 0.0),
+                    "pnl_unrealized": float(runtime_state.get("pnl_unrealized_usd") or 0.0),
+                    "win_streak": int(runtime_state.get("win_streak") or 0),
+                    "drawdown": float(runtime_state.get("drawdown_pct") or 0.0),
+                    "captured_at": captured_at,
+                }
             )
+            rank += 1
+            if len(rows) >= limit:
+                break
         return rows
 
     async def _load_public_leaderboard(self, *, limit: int) -> list[dict[str, Any]]:

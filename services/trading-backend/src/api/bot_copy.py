@@ -9,10 +9,12 @@ from typing import Any as Session
 from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authenticated_user
 from src.db.session import get_db
 from src.services.bot_copy_engine import BotCopyEngine
+from src.services.creator_marketplace_service import CreatorMarketplaceService
 from src.services.pacifica_client import PacificaClientError
 
 router = APIRouter(prefix="/api/bot-copy", tags=["bot-copy"])
 bot_copy_engine = BotCopyEngine()
+marketplace_service = CreatorMarketplaceService()
 
 
 def _require_owned_bot_copy_relationship(relationship_id: str, user: AuthenticatedUser) -> None:
@@ -298,13 +300,9 @@ async def list_public_bot_leaderboard_candidates(
     limit: int = Query(default=24, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> list[BotLeaderboardCandidateRow]:
+    del db
     response.headers["Cache-Control"] = "public, max-age=30, stale-while-revalidate=120"
-    rows = await bot_copy_engine.get_or_refresh_leaderboard(
-        db,
-        limit=limit,
-        include_creator=False,
-        include_passport=False,
-    )
+    rows = await marketplace_service.list_candidate_bots(limit=limit)
     return [BotLeaderboardCandidateRow.model_validate(row) for row in rows]
 
 
