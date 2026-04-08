@@ -105,3 +105,19 @@ def test_assess_action_blocks_reduce_only_twap_without_managed_position() -> Non
     )
 
     assert issues == ["bot does not manage an open position on BTC"]
+
+
+def test_normalize_policy_includes_runtime_sizing_fields() -> None:
+    service = BotRiskService()
+
+    policy = service.normalize_policy(
+        {
+            "sizing_mode": "risk_adjusted",
+            "fixed_usd_amount": 125,
+            "risk_per_trade_pct": 1.5,
+        }
+    )
+
+    assert policy["sizing_mode"] == "risk_adjusted"
+    assert policy["fixed_usd_amount"] == 125.0
+    assert policy["risk_per_trade_pct"] == 1.5

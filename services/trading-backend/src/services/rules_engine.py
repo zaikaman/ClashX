@@ -39,6 +39,13 @@ class _GraphInspection:
 
 
 class RulesEngine:
+    ENTRY_ACTION_TYPES = {
+        "open_long",
+        "open_short",
+        "place_market_order",
+        "place_limit_order",
+        "place_twap_order",
+    }
     APPROVED_CONDITIONS = {
         "price_above",
         "price_below",
@@ -140,6 +147,49 @@ class RulesEngine:
 
         return issues
 
+    def risk_adjusted_sizing_issues(self, *, rules_json: dict[str, Any]) -> list[str]:
+        if not isinstance(rules_json, dict):
+            return ["rules_json must be an object"]
+
+        if "graph" in rules_json:
+            inspection = self._inspect_graph(rules_json.get("graph"))
+            if inspection.issues:
+                return []
+            issues: list[str] = []
+            for node in inspection.nodes.values():
+                if node.kind != "action":
+                    continue
+                action_type = str(node.config.get("type") or "").strip()
+                if action_type not in self.ENTRY_ACTION_TYPES:
+                    continue
+                symbol = normalize_symbol(node.config.get("symbol"))
+                if not self._graph_entry_has_protective_stop(
+                    inspection=inspection,
+                    node_id=node.id,
+                    symbol=symbol,
+                    trail=(),
+                ):
+                    issues.append(
+                        f"risk_adjusted sizing requires entry action {node.id} ({symbol or 'unknown market'}) "
+                        "to have a downstream Set TP / SL block with stop loss > 0 on every path"
+                    )
+            return issues
+
+        actions = rules_json.get("actions") if isinstance(rules_json.get("actions"), list) else []
+        normalized_actions = [action for action in (self._normalize_action(item) for item in actions) if action is not None]
+        issues: list[str] = []
+        for index, action in enumerate(normalized_actions):
+            action_type = str(action.get("type") or "").strip()
+            if action_type not in self.ENTRY_ACTION_TYPES:
+                continue
+            symbol = normalize_symbol(action.get("symbol"))
+            if not self._flat_entry_has_protective_stop(actions=normalized_actions, start_index=index + 1, symbol=symbol):
+                issues.append(
+                    f"risk_adjusted sizing requires entry action {index + 1} ({symbol or 'unknown market'}) "
+                    "to be followed by Set TP / SL with stop loss > 0 before the next entry"
+                )
+        return issues
+
     def evaluate(self, *, rules_json: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(rules_json, dict):
             return {
@@ -210,6 +260,89 @@ class RulesEngine:
             "actions": actions,
             "evaluated_conditions": evaluated_conditions,
         }
+
+    def _graph_entry_has_protective_stop(
+        self,
+        *,
+        inspection: _GraphInspection,
+        node_id: str,
+        symbol: str,
+        trail: tuple[str, ...],
+    ) -> bool:
+        if node_id in trail:
+            return False
+        outgoing_edges = inspection.outgoing.get(node_id, [])
+        if not outgoing_edges:
+            return False
+
+        next_trail = (*trail, node_id)
+        for edge in outgoing_edges:
+            if not self._graph_path_has_protective_stop(
+                inspection=inspection,
+                node_id=edge.target,
+                symbol=symbol,
+                trail=next_trail,
+            ):
+                return False
+        return True
+
+    def _graph_path_has_protective_stop(
+        self,
+        *,
+        inspection: _GraphInspection,
+        node_id: str,
+        symbol: str,
+        trail: tuple[str, ...],
+    ) -> bool:
+        if node_id in trail:
+            return False
+
+        node = inspection.nodes.get(node_id)
+        if node is None:
+            return False
+
+        if node.kind == "action":
+            action_type = str(node.config.get("type") or "").strip()
+            if action_type == "set_tpsl":
+                action_symbol = normalize_symbol(node.config.get("symbol"))
+                stop_loss_pct = self._to_float(node.config.get("stop_loss_pct"), 0.0)
+                if action_symbol == symbol and stop_loss_pct > 0:
+                    return True
+            if action_type in self.ENTRY_ACTION_TYPES:
+                return False
+
+        outgoing_edges = inspection.outgoing.get(node_id, [])
+        if not outgoing_edges:
+            return False
+
+        next_trail = (*trail, node_id)
+        return all(
+            self._graph_path_has_protective_stop(
+                inspection=inspection,
+                node_id=edge.target,
+                symbol=symbol,
+                trail=next_trail,
+            )
+            for edge in outgoing_edges
+        )
+
+    def _flat_entry_has_protective_stop(
+        self,
+        *,
+        actions: list[dict[str, Any]],
+        start_index: int,
+        symbol: str,
+    ) -> bool:
+        for action in actions[start_index:]:
+            action_type = str(action.get("type") or "").strip()
+            if action_type == "set_tpsl":
+                action_symbol = normalize_symbol(action.get("symbol"))
+                stop_loss_pct = self._to_float(action.get("stop_loss_pct"), 0.0)
+                if action_symbol == symbol and stop_loss_pct > 0:
+                    return True
+            if action_type in self.ENTRY_ACTION_TYPES:
+                return False
+        return False
 
     def _reachable_graph_actions(self, inspection: _GraphInspection) -> list[dict[str, Any]]:
         reachable_actions: list[dict[str, Any]] = []

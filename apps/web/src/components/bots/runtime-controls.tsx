@@ -208,6 +208,14 @@ export function RuntimeControls({
               value={riskPolicy.allowedSymbols.trim().length > 0 ? riskPolicy.allowedSymbols : "All supported"}
             />
             <PolicyStat label="Sizing mode" value={riskPolicy.sizingMode.replaceAll("_", " ")} />
+            <PolicyStat
+              label={riskPolicy.sizingMode === "fixed_usd" ? "USD per trade" : "Risk per trade"}
+              value={
+                riskPolicy.sizingMode === "fixed_usd"
+                  ? `$${riskPolicy.fixedUsdAmount}`
+                  : `${riskPolicy.riskPerTradePct}% (builder SL)`
+              }
+            />
           </div>
         )}
 

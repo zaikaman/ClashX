@@ -201,11 +201,11 @@ export const CONDITION_COPY: Record<string, { label: string; helper: string }> =
 };
 
 export const ACTION_COPY: Record<string, { label: string; helper: string }> = {
-  open_long: { label: "Open long", helper: "Enter a long position with size and requested leverage." },
-  open_short: { label: "Open short", helper: "Enter a short position with size and requested leverage." },
-  place_market_order: { label: "Market order", helper: "Send a custom market order with side, requested leverage, sizing, and slippage control." },
-  place_limit_order: { label: "Limit order", helper: "Work an entry or exit at a specific price with requested leverage and time-in-force controls." },
-  place_twap_order: { label: "TWAP execution", helper: "Drip size into the market over time with a requested leverage target instead of crossing all at once." },
+  open_long: { label: "Open long", helper: "Enter a long position using the live runtime leverage and sizing policy." },
+  open_short: { label: "Open short", helper: "Enter a short position using the live runtime leverage and sizing policy." },
+  place_market_order: { label: "Market order", helper: "Send a custom market order. Live entries inherit runtime leverage and sizing, while reduce-only exits can set their own amount." },
+  place_limit_order: { label: "Limit order", helper: "Work an entry or exit at a specific price. Live entries inherit runtime leverage and sizing, while reduce-only exits can set their own amount." },
+  place_twap_order: { label: "TWAP execution", helper: "Drip into the market over time. Live entries inherit runtime leverage and sizing, while reduce-only exits can set their own amount." },
   close_position: { label: "Close position", helper: "Exit the current market position." },
   set_tpsl: { label: "Set TP / SL", helper: "Add take profit and stop loss levels." },
   update_leverage: { label: "Update leverage", helper: "Change leverage on an existing position." },
@@ -609,19 +609,28 @@ export function actionSummary(action: VisualAction) {
   const marketLabel = formatMarketReference(action.symbol);
   const reduceOnlySuffix = action.reduce_only ? " as a reduce-only exit" : "";
   if (action.type === "open_long") {
-    return `Open long on ${marketLabel} for ${action.size_usd ?? 0} USD at ${action.leverage ?? 0}x.`;
+    return `Open long on ${marketLabel} using the live runtime sizing and leverage policy.`;
   }
   if (action.type === "open_short") {
-    return `Open short on ${marketLabel} for ${action.size_usd ?? 0} USD at ${action.leverage ?? 0}x.`;
+    return `Open short on ${marketLabel} using the live runtime sizing and leverage policy.`;
   }
   if (action.type === "place_market_order") {
-    return `Send a ${action.side ?? "long"} market order on ${marketLabel} for ${action.size_usd ?? 0} USD at ${action.leverage ?? 0}x with ${action.slippage_percent ?? 0}% slippage${reduceOnlySuffix}.`;
+    if (action.reduce_only) {
+      return `Send a ${action.side ?? "long"} reduce-only market order on ${marketLabel} for ${action.size_usd ?? 0} USD with ${action.slippage_percent ?? 0}% slippage.`;
+    }
+    return `Send a ${action.side ?? "long"} market order on ${marketLabel} using the live runtime sizing and leverage policy with ${action.slippage_percent ?? 0}% slippage${reduceOnlySuffix}.`;
   }
   if (action.type === "place_limit_order") {
-    return `Work a ${action.side ?? "long"} limit order on ${marketLabel} for ${action.quantity ?? 0} contracts at ${action.price ?? 0} (${action.tif ?? "GTC"})${reduceOnlySuffix}.`;
+    if (action.reduce_only) {
+      return `Work a ${action.side ?? "long"} reduce-only limit order on ${marketLabel} for ${action.quantity ?? 0} contracts at ${action.price ?? 0} (${action.tif ?? "GTC"}).`;
+    }
+    return `Work a ${action.side ?? "long"} limit order on ${marketLabel} at ${action.price ?? 0} (${action.tif ?? "GTC"}) using the live runtime sizing and leverage policy${reduceOnlySuffix}.`;
   }
   if (action.type === "place_twap_order") {
-    return `Slice ${action.quantity ?? 0} contracts into ${marketLabel} over ${action.duration_seconds ?? 0}s on the ${action.side ?? "long"} side${reduceOnlySuffix}.`;
+    if (action.reduce_only) {
+      return `Slice ${action.quantity ?? 0} contracts out of ${marketLabel} over ${action.duration_seconds ?? 0}s on the ${action.side ?? "long"} side as a reduce-only exit.`;
+    }
+    return `Slice into ${marketLabel} over ${action.duration_seconds ?? 0}s on the ${action.side ?? "long"} side using the live runtime sizing and leverage policy${reduceOnlySuffix}.`;
   }
   if (action.type === "close_position") {
     return `Close the ${marketLabel} position.`;

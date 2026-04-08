@@ -5,6 +5,7 @@ from typing import Any
 
 
 class BotRiskService:
+    VALID_SIZING_MODES = {"fixed_usd", "risk_adjusted"}
     DEFAULT_POLICY = {
         "max_leverage": 5,
         "max_order_size_usd": 200,
@@ -13,6 +14,9 @@ class BotRiskService:
         "cooldown_seconds": 30,
         "max_drawdown_pct": 25,
         "allowed_symbols": [],
+        "sizing_mode": "fixed_usd",
+        "fixed_usd_amount": 200,
+        "risk_per_trade_pct": 1,
     }
 
     def normalize_policy(self, policy: dict[str, Any] | None) -> dict[str, Any]:
@@ -44,6 +48,22 @@ class BotRiskService:
         )
         merged["max_drawdown_pct"] = self._to_float(
             merged.get("max_drawdown_pct"), self.DEFAULT_POLICY["max_drawdown_pct"]
+        )
+        sizing_mode = str(merged.get("sizing_mode") or self.DEFAULT_POLICY["sizing_mode"]).strip().lower()
+        merged["sizing_mode"] = sizing_mode if sizing_mode in self.VALID_SIZING_MODES else self.DEFAULT_POLICY["sizing_mode"]
+        merged["fixed_usd_amount"] = max(
+            1.0,
+            self._to_float(
+                merged.get("fixed_usd_amount"),
+                self.DEFAULT_POLICY["fixed_usd_amount"],
+            ),
+        )
+        merged["risk_per_trade_pct"] = max(
+            0.1,
+            self._to_float(
+                merged.get("risk_per_trade_pct"),
+                self.DEFAULT_POLICY["risk_per_trade_pct"],
+            ),
         )
         allowed_symbols = merged.get("allowed_symbols")
         if not isinstance(allowed_symbols, list):

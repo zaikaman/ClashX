@@ -379,7 +379,13 @@ class BotRuntimeWorker:
             if not runtime_touched:
                 return
             return
-        for action in actions:
+        for action_index, raw_action in enumerate(actions):
+            action = self._apply_runtime_sizing_policy(
+                action=raw_action,
+                runtime_policy=runtime_policy,
+                route_actions=actions,
+                action_index=action_index,
+            )
             issues = self._risk.assess_action(
                 policy=runtime_policy,
                 action=action,
@@ -546,7 +552,13 @@ class BotRuntimeWorker:
         if len(actions) < 2 or any(str(action.get("type") or "") not in batchable_types for action in actions):
             return None
 
-        for action in actions:
+        for action_index, raw_action in enumerate(actions):
+            action = self._apply_runtime_sizing_policy(
+                action=raw_action,
+                runtime_policy=runtime_policy,
+                route_actions=actions,
+                action_index=action_index,
+            )
             issues = self._risk.assess_action(
                 policy=runtime_policy,
                 action=action,
@@ -559,7 +571,13 @@ class BotRuntimeWorker:
                 return None
 
         batch_items: list[dict[str, Any]] = []
-        for action in actions:
+        for action_index, raw_action in enumerate(actions):
+            action = self._apply_runtime_sizing_policy(
+                action=raw_action,
+                runtime_policy=runtime_policy,
+                route_actions=actions,
+                action_index=action_index,
+            )
             idempotency_key = self._build_idempotency_key(
                 runtime_id=runtime["id"],
                 action=action,
@@ -1699,12 +1717,86 @@ class BotRuntimeWorker:
         size_usd = float(action.get("size_usd") or 0)
         if size_usd <= 0:
             raise ValueError("Action requires size_usd or quantity greater than zero")
-        leverage = max(1, int(float(action.get("leverage") or 1)))
+        leverage = 1 if self._to_bool(action.get("reduce_only"), False) else max(1, int(float(action.get("leverage") or 1)))
         return self._normalize_order_quantity(
             (size_usd * leverage) / resolved_price,
             lot_size=float(market.get("lot_size") or 0),
             symbol=symbol,
         )
+
+    def _apply_runtime_sizing_policy(
+        self,
+        *,
+        action: dict[str, Any],
+        runtime_policy: dict[str, Any],
+        route_actions: list[dict[str, Any]],
+        action_index: int,
+    ) -> dict[str, Any]:
+        action_type = str(action.get("type") or "")
+        if action_type not in ENTRY_ACTION_TYPES or self._to_bool(action.get("reduce_only"), False):
+            return dict(action)
+
+        normalized_policy = self._risk.normalize_policy(runtime_policy)
+        sizing_mode = str(normalized_policy.get("sizing_mode") or "fixed_usd")
+        leverage = max(1, int(float(normalized_policy.get("max_leverage") or 1)))
+        resolved_action = dict(action)
+        resolved_action["leverage"] = leverage
+
+        if sizing_mode == "fixed_usd":
+            resolved_action.pop("quantity", None)
+            resolved_action["size_usd"] = float(normalized_policy.get("fixed_usd_amount") or 0.0)
+            resolved_action["_sizing_mode"] = "fixed_usd"
+            return resolved_action
+
+        if sizing_mode != "risk_adjusted":
+            return resolved_action
+
+        symbol = self._normalize_symbol(action.get("symbol"))
+        stop_loss_pct = self._resolve_route_stop_loss_pct(
+            symbol=symbol,
+            route_actions=route_actions,
+            action_index=action_index,
+        )
+        if stop_loss_pct is None or stop_loss_pct <= 0:
+            raise ValueError(
+                f"Risk-adjusted sizing requires a downstream Set TP/SL block with stop loss > 0 for {symbol}."
+            )
+
+        risk_per_trade_pct = float(normalized_policy.get("risk_per_trade_pct") or 0.0)
+        allocated_capital_usd = float(normalized_policy.get("allocated_capital_usd") or 0.0)
+        risk_budget_usd = allocated_capital_usd * (risk_per_trade_pct / 100.0)
+        stop_fraction = stop_loss_pct / 100.0
+        if stop_fraction <= 0:
+            raise ValueError(f"Risk-adjusted sizing requires stop loss > 0 for {symbol}.")
+
+        size_usd = risk_budget_usd / (stop_fraction * leverage)
+        resolved_action.pop("quantity", None)
+        resolved_action["size_usd"] = size_usd
+        resolved_action["_sizing_mode"] = "risk_adjusted"
+        resolved_action["_stop_loss_pct"] = stop_loss_pct
+        resolved_action["_risk_budget_usd"] = round(risk_budget_usd, 8)
+        return resolved_action
+
+    def _resolve_route_stop_loss_pct(
+        self,
+        *,
+        symbol: str,
+        route_actions: list[dict[str, Any]],
+        action_index: int,
+    ) -> float | None:
+        for next_action in route_actions[action_index + 1:]:
+            action_type = str(next_action.get("type") or "")
+            if action_type in ENTRY_ACTION_TYPES:
+                return None
+            if action_type != "set_tpsl":
+                continue
+            action_symbol = self._normalize_symbol(next_action.get("symbol"))
+            if action_symbol != symbol:
+                continue
+            stop_loss_pct = float(next_action.get("stop_loss_pct") or 0.0)
+            if stop_loss_pct > 0:
+                return stop_loss_pct
+        return None
 
     @staticmethod
     def _extract_order_identifier(action: dict[str, Any]) -> dict[str, Any]:

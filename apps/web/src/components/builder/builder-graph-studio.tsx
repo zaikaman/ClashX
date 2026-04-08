@@ -155,6 +155,8 @@ type RuntimeControlsFormState = {
   cooldownSeconds: number;
   maxDrawdownPct: number;
   sizingMode: "fixed_usd" | "risk_adjusted";
+  fixedUsdAmount: number;
+  riskPerTradePct: number;
 };
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -164,14 +166,7 @@ const SECONDARY_EDGE_COLOR = "rgba(255,255,255,0.22)";
 const TIMEFRAME_OPTIONS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"] as const;
 const SIDE_OPTIONS = ["long", "short"] as const;
 const TIF_OPTIONS = ["GTC", "IOC", "FOK"] as const;
-const ACTION_TYPES_WITH_LEVERAGE = new Set([
-  "open_long",
-  "open_short",
-  "place_market_order",
-  "place_limit_order",
-  "place_twap_order",
-  "update_leverage",
-]);
+const ACTION_TYPES_WITH_LEVERAGE = new Set(["update_leverage"]);
 
 const SIGNAL_CATEGORIES = [
   {
@@ -205,6 +200,8 @@ const DEFAULT_RUNTIME_CONTROLS: RuntimeControlsFormState = {
   cooldownSeconds: 45,
   maxDrawdownPct: 18,
   sizingMode: "fixed_usd",
+  fixedUsdAmount: 200,
+  riskPerTradePct: 1,
 };
 const RUNTIME_CONTROL_PRESETS: Array<{
   id: RuntimeControlPreset;
@@ -223,6 +220,8 @@ const RUNTIME_CONTROL_PRESETS: Array<{
         cooldownSeconds: 120,
         maxDrawdownPct: 10,
         sizingMode: "fixed_usd",
+        fixedUsdAmount: 120,
+        riskPerTradePct: 0.75,
       },
     },
     {
@@ -242,6 +241,8 @@ const RUNTIME_CONTROL_PRESETS: Array<{
         cooldownSeconds: 20,
         maxDrawdownPct: 24,
         sizingMode: "risk_adjusted",
+        fixedUsdAmount: 250,
+        riskPerTradePct: 1.5,
       },
     },
   ];
@@ -892,6 +893,12 @@ function collectLiveDraftIssues({
   if (runtimeControls.maxOrderSizeUsd < 1) {
     issues.push({ id: "runtime-order-size", source: "runtime", message: "Max order size must be greater than 0." });
   }
+  if (runtimeControls.sizingMode === "fixed_usd" && runtimeControls.fixedUsdAmount < 1) {
+    issues.push({ id: "runtime-fixed-size", source: "runtime", message: "USD per trade must be greater than 0." });
+  }
+  if (runtimeControls.sizingMode === "risk_adjusted" && runtimeControls.riskPerTradePct <= 0) {
+    issues.push({ id: "runtime-risk-per-trade", source: "runtime", message: "Risk % per trade must be greater than 0." });
+  }
   if (runtimeControls.allocatedCapitalUsd < 1) {
     issues.push({ id: "runtime-capital", source: "runtime", message: "Allocated capital must be greater than 0." });
   }
@@ -914,6 +921,8 @@ function buildRiskPolicyPayload(selectedSymbols: string[], runtimeControls: Runt
     max_drawdown_pct: runtimeControls.maxDrawdownPct,
     allowed_symbols: selectedSymbols,
     sizing_mode: runtimeControls.sizingMode,
+    fixed_usd_amount: runtimeControls.fixedUsdAmount,
+    risk_per_trade_pct: runtimeControls.riskPerTradePct,
   };
 }
 
@@ -933,6 +942,12 @@ function validateRuntimeControls(
   const leverageIssue = findActionLeverageIssue(nodes, runtimeControls.maxLeverage, selectedSymbols, markets);
   if (leverageIssue) return leverageIssue.message;
   if (runtimeControls.maxOrderSizeUsd < 1) return "Max order size must be greater than 0.";
+  if (runtimeControls.sizingMode === "fixed_usd" && runtimeControls.fixedUsdAmount < 1) {
+    return "USD per trade must be greater than 0.";
+  }
+  if (runtimeControls.sizingMode === "risk_adjusted" && runtimeControls.riskPerTradePct <= 0) {
+    return "Risk % per trade must be greater than 0.";
+  }
   if (runtimeControls.allocatedCapitalUsd < 1) return "Allocated capital must be greater than 0.";
   if (runtimeControls.cooldownSeconds < 0) return "Cooldown cannot be negative.";
   if (runtimeControls.maxDrawdownPct < 0) return "Max drawdown cannot be negative.";
@@ -2389,7 +2404,7 @@ export function BuilderGraphStudio({
                   <div className="text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-[#dce85d]">Runtime controls</div>
                   <h2 className="mt-2 text-2xl font-semibold text-neutral-50">Choose how this bot behaves once it goes live.</h2>
                   <p className="mt-3 max-w-2xl text-sm leading-6 text-neutral-400">
-                  Pick a runtime profile, then fine-tune the guardrails. Block-level leverage stays intact, and the deploy leverage cap only blocks requests above it.
+                  Pick a runtime profile, then fine-tune the live leverage and sizing policy. Entry blocks inherit these controls once the bot is deployed.
                   </p>
                 </div>
               <div className="rounded-[1.5rem] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] p-5">
@@ -2407,6 +2422,14 @@ export function BuilderGraphStudio({
                       <span>Leverage cap</span>
                       <span className="text-neutral-300">{runtimeControls.maxLeverage}x</span>
                     </div>
+                  <div className="flex items-center justify-between gap-4">
+                    <span>Sizing</span>
+                    <span className="text-neutral-300">
+                      {runtimeControls.sizingMode === "fixed_usd"
+                        ? `$${runtimeControls.fixedUsdAmount} / trade`
+                        : `${runtimeControls.riskPerTradePct}% risk`}
+                    </span>
+                  </div>
                   <div className="flex items-center justify-between gap-4">
                     <span>Cooldown</span>
                     <span className="text-neutral-300">{runtimeControls.cooldownSeconds}s</span>
@@ -2511,6 +2534,33 @@ export function BuilderGraphStudio({
                       <option value="risk_adjusted">risk adjusted</option>
                     </select>
                   </label>
+                  {runtimeControls.sizingMode === "fixed_usd" ? (
+                    <label className="grid gap-1.5 text-sm text-neutral-400">
+                      USD per trade
+                      <input
+                        type="number"
+                        min={1}
+                        value={runtimeControls.fixedUsdAmount}
+                        onChange={(event) => updateRuntimeControl("fixedUsdAmount", Number(event.target.value))}
+                        className="w-full rounded-xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+                      />
+                    </label>
+                  ) : (
+                    <div className="grid gap-1.5 text-sm text-neutral-400">
+                      <label className="grid gap-1.5">
+                        Risk % per trade
+                        <input
+                          type="number"
+                          min={0.1}
+                          step="0.1"
+                          value={runtimeControls.riskPerTradePct}
+                          onChange={(event) => updateRuntimeControl("riskPerTradePct", Number(event.target.value))}
+                          className="w-full rounded-xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3 py-2.5 text-neutral-50 outline-none transition focus:border-[#dce85d]"
+                        />
+                      </label>
+                      <p className="text-xs leading-5 text-neutral-500">Uses the downstream builder stop loss on the matching TP / SL block.</p>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -2526,7 +2576,7 @@ export function BuilderGraphStudio({
                   <p className="mt-4 shrink-0 text-sm text-[#dce85d]">{runtimeControlsError}</p>
                 ) : (
                   <p className="mt-4 shrink-0 text-sm leading-6 text-neutral-500">
-                    These controls are sent with the deploy request and become the bot&apos;s live runtime guardrails. Entry and order blocks keep their own requested leverage until they hit this cap.
+                    These controls are sent with the deploy request and become the bot&apos;s live runtime policy. Entry blocks inherit this leverage and sizing, while reduce-only orders can still define their own exit amount inside the block.
                   </p>
                 )}
               </div>
@@ -3583,25 +3633,8 @@ export function BuilderGraphStudio({
                   </div>
 
                   {selectedAction.type === "open_long" || selectedAction.type === "open_short" ? (
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-medium text-neutral-400 mb-1.5">Size USD</label>
-                        <input
-                          value={selectedAction.size_usd ?? ""}
-                          onChange={(e) => updateActionNode(selectedAction.id, { size_usd: parseOptionalNumber(e.target.value) })}
-                          placeholder="150"
-                          className="w-full px-3 py-2 bg-neutral-800 border border-[rgba(255,255,255,0.06)] rounded-md text-neutral-50 text-xs focus:outline-none focus:border-[#dce85d] transition-colors"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-neutral-400 mb-1.5">Requested Leverage</label>
-                        <input
-                          value={selectedAction.leverage ?? ""}
-                          onChange={(e) => updateActionNode(selectedAction.id, { leverage: parseOptionalNumber(e.target.value) })}
-                          placeholder="3"
-                          className="w-full px-3 py-2 bg-neutral-800 border border-[rgba(255,255,255,0.06)] rounded-md text-neutral-50 text-xs focus:outline-none focus:border-[#dce85d] transition-colors"
-                        />
-                      </div>
+                    <div className="rounded-md border border-[rgba(255,255,255,0.06)] bg-neutral-800 px-3 py-2 text-xs leading-6 text-neutral-400">
+                      Live entries inherit leverage and position sizing from runtime controls at deploy time.
                     </div>
                   ) : null}
 
@@ -3623,26 +3656,6 @@ export function BuilderGraphStudio({
                           </select>
                         </div>
                         <div>
-                          <label className="block text-xs font-medium text-neutral-400 mb-1.5">Requested Leverage</label>
-                          <input
-                            value={selectedAction.leverage ?? ""}
-                            onChange={(e) => updateActionNode(selectedAction.id, { leverage: parseOptionalNumber(e.target.value) })}
-                            placeholder="3"
-                            className="w-full px-3 py-2 bg-neutral-800 border border-[rgba(255,255,255,0.06)] rounded-md text-neutral-50 text-xs focus:outline-none focus:border-[#dce85d] transition-colors"
-                          />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-xs font-medium text-neutral-400 mb-1.5">Size USD</label>
-                          <input
-                            value={selectedAction.size_usd ?? ""}
-                            onChange={(e) => updateActionNode(selectedAction.id, { size_usd: parseOptionalNumber(e.target.value) })}
-                            placeholder="180"
-                            className="w-full px-3 py-2 bg-neutral-800 border border-[rgba(255,255,255,0.06)] rounded-md text-neutral-50 text-xs focus:outline-none focus:border-[#dce85d] transition-colors"
-                          />
-                        </div>
-                        <div>
                           <label className="block text-xs font-medium text-neutral-400 mb-1.5">Slippage %</label>
                           <input
                             value={selectedAction.slippage_percent ?? ""}
@@ -3652,6 +3665,21 @@ export function BuilderGraphStudio({
                           />
                         </div>
                       </div>
+                      {selectedAction.reduce_only ? (
+                        <div>
+                          <label className="block text-xs font-medium text-neutral-400 mb-1.5">Exit Size USD</label>
+                          <input
+                            value={selectedAction.size_usd ?? ""}
+                            onChange={(e) => updateActionNode(selectedAction.id, { size_usd: parseOptionalNumber(e.target.value) })}
+                            placeholder="180"
+                            className="w-full px-3 py-2 bg-neutral-800 border border-[rgba(255,255,255,0.06)] rounded-md text-neutral-50 text-xs focus:outline-none focus:border-[#dce85d] transition-colors"
+                          />
+                        </div>
+                      ) : (
+                        <div className="rounded-md border border-[rgba(255,255,255,0.06)] bg-neutral-800 px-3 py-2 text-xs leading-6 text-neutral-400">
+                          Live entry sizing and leverage come from runtime controls. Turn on reduce-only to define a custom exit amount here.
+                        </div>
+                      )}
                       <label className="flex items-center justify-between rounded-md border border-[rgba(255,255,255,0.06)] bg-neutral-800 px-3 py-2 text-xs text-neutral-300">
                         <span>Reduce-Only Exit</span>
                         <input
@@ -3682,26 +3710,6 @@ export function BuilderGraphStudio({
                           </select>
                         </div>
                         <div>
-                          <label className="block text-xs font-medium text-neutral-400 mb-1.5">Requested Leverage</label>
-                          <input
-                            value={selectedAction.leverage ?? ""}
-                            onChange={(e) => updateActionNode(selectedAction.id, { leverage: parseOptionalNumber(e.target.value) })}
-                            placeholder="3"
-                            className="w-full px-3 py-2 bg-neutral-800 border border-[rgba(255,255,255,0.06)] rounded-md text-neutral-50 text-xs focus:outline-none focus:border-[#dce85d] transition-colors"
-                          />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-xs font-medium text-neutral-400 mb-1.5">Quantity</label>
-                          <input
-                            value={selectedAction.quantity ?? ""}
-                            onChange={(e) => updateActionNode(selectedAction.id, { quantity: parseOptionalNumber(e.target.value) })}
-                            placeholder="0.01"
-                            className="w-full px-3 py-2 bg-neutral-800 border border-[rgba(255,255,255,0.06)] rounded-md text-neutral-50 text-xs focus:outline-none focus:border-[#dce85d] transition-colors"
-                          />
-                        </div>
-                        <div>
                           <label className="block text-xs font-medium text-neutral-400 mb-1.5">Limit Price</label>
                           <input
                             value={selectedAction.price ?? ""}
@@ -3711,6 +3719,21 @@ export function BuilderGraphStudio({
                           />
                         </div>
                       </div>
+                      {selectedAction.reduce_only ? (
+                        <div>
+                          <label className="block text-xs font-medium text-neutral-400 mb-1.5">Exit Quantity</label>
+                          <input
+                            value={selectedAction.quantity ?? ""}
+                            onChange={(e) => updateActionNode(selectedAction.id, { quantity: parseOptionalNumber(e.target.value) })}
+                            placeholder="0.01"
+                            className="w-full px-3 py-2 bg-neutral-800 border border-[rgba(255,255,255,0.06)] rounded-md text-neutral-50 text-xs focus:outline-none focus:border-[#dce85d] transition-colors"
+                          />
+                        </div>
+                      ) : (
+                        <div className="rounded-md border border-[rgba(255,255,255,0.06)] bg-neutral-800 px-3 py-2 text-xs leading-6 text-neutral-400">
+                          Live entry sizing and leverage come from runtime controls. Turn on reduce-only to define a custom exit quantity here.
+                        </div>
+                      )}
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="block text-xs font-medium text-neutral-400 mb-1.5">Time in Force</label>
@@ -3766,26 +3789,6 @@ export function BuilderGraphStudio({
                           </select>
                         </div>
                         <div>
-                          <label className="block text-xs font-medium text-neutral-400 mb-1.5">Requested Leverage</label>
-                          <input
-                            value={selectedAction.leverage ?? ""}
-                            onChange={(e) => updateActionNode(selectedAction.id, { leverage: parseOptionalNumber(e.target.value) })}
-                            placeholder="2"
-                            className="w-full px-3 py-2 bg-neutral-800 border border-[rgba(255,255,255,0.06)] rounded-md text-neutral-50 text-xs focus:outline-none focus:border-[#dce85d] transition-colors"
-                          />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-xs font-medium text-neutral-400 mb-1.5">Quantity</label>
-                          <input
-                            value={selectedAction.quantity ?? ""}
-                            onChange={(e) => updateActionNode(selectedAction.id, { quantity: parseOptionalNumber(e.target.value) })}
-                            placeholder="0.03"
-                            className="w-full px-3 py-2 bg-neutral-800 border border-[rgba(255,255,255,0.06)] rounded-md text-neutral-50 text-xs focus:outline-none focus:border-[#dce85d] transition-colors"
-                          />
-                        </div>
-                        <div>
                           <label className="block text-xs font-medium text-neutral-400 mb-1.5">Duration Seconds</label>
                           <input
                             value={selectedAction.duration_seconds ?? ""}
@@ -3795,6 +3798,21 @@ export function BuilderGraphStudio({
                           />
                         </div>
                       </div>
+                      {selectedAction.reduce_only ? (
+                        <div>
+                          <label className="block text-xs font-medium text-neutral-400 mb-1.5">Exit Quantity</label>
+                          <input
+                            value={selectedAction.quantity ?? ""}
+                            onChange={(e) => updateActionNode(selectedAction.id, { quantity: parseOptionalNumber(e.target.value) })}
+                            placeholder="0.03"
+                            className="w-full px-3 py-2 bg-neutral-800 border border-[rgba(255,255,255,0.06)] rounded-md text-neutral-50 text-xs focus:outline-none focus:border-[#dce85d] transition-colors"
+                          />
+                        </div>
+                      ) : (
+                        <div className="rounded-md border border-[rgba(255,255,255,0.06)] bg-neutral-800 px-3 py-2 text-xs leading-6 text-neutral-400">
+                          Live TWAP entries inherit leverage and sizing from runtime controls. Turn on reduce-only to define a custom exit quantity here.
+                        </div>
+                      )}
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="block text-xs font-medium text-neutral-400 mb-1.5">Slippage %</label>

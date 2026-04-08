@@ -170,6 +170,32 @@ export function AdvancedSettingsPanel({
               <option value="risk_adjusted">risk adjusted</option>
             </select>
           </label>
+          {policy.sizingMode === "fixed_usd" ? (
+            <label className={FIELD_LABEL_CLASS}>
+              USD per trade
+              <input
+                type="number"
+                min={1}
+                value={policy.fixedUsdAmount}
+                onChange={(event) => updatePolicy({ fixedUsdAmount: Number(event.target.value) })}
+                className={INPUT_CLASS}
+                disabled={inputsDisabled}
+              />
+            </label>
+          ) : (
+            <label className={FIELD_LABEL_CLASS}>
+              Risk % per trade
+              <input
+                type="number"
+                min={0.1}
+                step="0.1"
+                value={policy.riskPerTradePct}
+                onChange={(event) => updatePolicy({ riskPerTradePct: Number(event.target.value) })}
+                className={INPUT_CLASS}
+                disabled={inputsDisabled}
+              />
+            </label>
+          )}
         </div>
 
         <p className="text-xs leading-6 text-neutral-500">
@@ -177,6 +203,11 @@ export function AdvancedSettingsPanel({
           {policy.allocatedCapitalUsd || 0} allocated reaches a {policy.maxDrawdownPct}% loss budget, it is stopped
           automatically. Open positions are capped at {policy.maxOpenPositions} so the runtime cannot keep stacking
           fresh entries indefinitely.
+        </p>
+        <p className="text-xs leading-6 text-neutral-500">
+          {policy.sizingMode === "fixed_usd"
+            ? `Each fresh entry uses ${policy.fixedUsdAmount || 0} USD before leverage.`
+            : `Each fresh entry risks ${policy.riskPerTradePct || 0}% of the allocated capital, using the builder stop loss on the matching TP / SL block.`}
         </p>
       </div>
 

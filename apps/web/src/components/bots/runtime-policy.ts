@@ -7,6 +7,8 @@ export type RuntimePolicyDraft = {
   maxDrawdownPct: number;
   allowedSymbols: string;
   sizingMode: string;
+  fixedUsdAmount: number;
+  riskPerTradePct: number;
 };
 
 export const DEFAULT_RUNTIME_POLICY: RuntimePolicyDraft = {
@@ -18,6 +20,8 @@ export const DEFAULT_RUNTIME_POLICY: RuntimePolicyDraft = {
   maxDrawdownPct: 18,
   allowedSymbols: "BTC,ETH,SOL",
   sizingMode: "fixed_usd",
+  fixedUsdAmount: 200,
+  riskPerTradePct: 1,
 };
 
 function toNumber(value: unknown, fallback: number): number {
@@ -43,6 +47,8 @@ export function runtimePolicyDraftFromPolicy(
       typeof source.sizing_mode === "string" && source.sizing_mode.length > 0
         ? source.sizing_mode
         : DEFAULT_RUNTIME_POLICY.sizingMode,
+    fixedUsdAmount: toNumber(source.fixed_usd_amount, DEFAULT_RUNTIME_POLICY.fixedUsdAmount),
+    riskPerTradePct: toNumber(source.risk_per_trade_pct, DEFAULT_RUNTIME_POLICY.riskPerTradePct),
   };
 }
 
@@ -59,5 +65,7 @@ export function runtimePolicyDraftToPayload(draft: RuntimePolicyDraft): Record<s
       .map((value) => value.trim().toUpperCase())
       .filter(Boolean),
     sizing_mode: draft.sizingMode,
+    fixed_usd_amount: draft.fixedUsdAmount,
+    risk_per_trade_pct: draft.riskPerTradePct,
   };
 }

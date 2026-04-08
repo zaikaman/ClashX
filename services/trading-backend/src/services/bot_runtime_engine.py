@@ -11,6 +11,7 @@ from src.services.bot_risk_service import BotRiskService
 from src.services.event_broadcaster import broadcaster
 from src.services.pacifica_auth_service import PacificaAuthService
 from src.services.pacifica_readiness_service import PacificaReadinessService
+from src.services.rules_engine import RulesEngine
 from src.services.supabase_rest import SupabaseRestClient
 
 
@@ -20,6 +21,7 @@ class BotRuntimeEngine:
         self._auth = PacificaAuthService()
         self._readiness = PacificaReadinessService()
         self._risk = BotRiskService()
+        self._rules = RulesEngine()
 
     def deploy_runtime(
         self,
@@ -37,6 +39,7 @@ class BotRuntimeEngine:
 
         now = datetime.now(tz=UTC).isoformat()
         normalized_policy = self._risk.normalize_policy(risk_policy_json)
+        self._validate_runtime_policy(bot=bot, risk_policy_json=normalized_policy)
         if runtime is None:
             runtime = self._supabase.insert(
                 "bot_runtimes",
@@ -264,6 +267,14 @@ class BotRuntimeEngine:
                 "created_at": datetime.now(tz=UTC).isoformat(),
             },
         )
+
+    def _validate_runtime_policy(self, *, bot: dict[str, Any], risk_policy_json: dict[str, Any]) -> None:
+        if str(risk_policy_json.get("sizing_mode") or "fixed_usd") != "risk_adjusted":
+            return
+        rules_json = bot.get("rules_json") if isinstance(bot.get("rules_json"), dict) else {}
+        issues = self._rules.risk_adjusted_sizing_issues(rules_json=rules_json)
+        if issues:
+            raise ValueError("Risk-adjusted sizing is not available for this bot: " + "; ".join(issues))
 
     def _require_runtime_readiness(self, wallet_address: str) -> dict[str, Any]:
         try:

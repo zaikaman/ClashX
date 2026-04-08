@@ -186,3 +186,77 @@ def test_indicator_conditions_use_candle_context_for_rsi_and_ema_cross() -> None
     assert [action["type"] for action in result["actions"]] == ["open_long"]
     assert any("RSI" in reason for reason in result["reasons"])
     assert any("crossed above" in reason for reason in result["reasons"])
+
+
+def test_risk_adjusted_sizing_requires_downstream_stop_loss() -> None:
+    engine = RulesEngine()
+    rules_json = {
+        "graph": {
+            "version": 1,
+            "entry": "builder-entry",
+            "nodes": [
+                {"id": "builder-entry", "kind": "entry", "position": {"x": 0, "y": 0}},
+                {
+                    "id": "condition-breakout",
+                    "kind": "condition",
+                    "position": {"x": 80, "y": 60},
+                    "config": {"type": "price_above", "symbol": "BTC", "value": 100000},
+                },
+                {
+                    "id": "action-open-long",
+                    "kind": "action",
+                    "position": {"x": 240, "y": 60},
+                    "config": {"type": "open_long", "symbol": "BTC", "size_usd": 150, "leverage": 3},
+                },
+            ],
+            "edges": [
+                {"id": "edge-entry-condition", "source": "builder-entry", "target": "condition-breakout"},
+                {"id": "edge-condition-action", "source": "condition-breakout", "target": "action-open-long"},
+            ],
+        }
+    }
+
+    issues = engine.risk_adjusted_sizing_issues(rules_json=rules_json)
+
+    assert len(issues) == 1
+    assert "downstream Set TP / SL" in issues[0]
+
+
+def test_risk_adjusted_sizing_accepts_positive_downstream_stop_loss() -> None:
+    engine = RulesEngine()
+    rules_json = {
+        "graph": {
+            "version": 1,
+            "entry": "builder-entry",
+            "nodes": [
+                {"id": "builder-entry", "kind": "entry", "position": {"x": 0, "y": 0}},
+                {
+                    "id": "condition-breakout",
+                    "kind": "condition",
+                    "position": {"x": 80, "y": 60},
+                    "config": {"type": "price_above", "symbol": "BTC", "value": 100000},
+                },
+                {
+                    "id": "action-open-long",
+                    "kind": "action",
+                    "position": {"x": 240, "y": 60},
+                    "config": {"type": "open_long", "symbol": "BTC", "size_usd": 150, "leverage": 3},
+                },
+                {
+                    "id": "action-protect",
+                    "kind": "action",
+                    "position": {"x": 440, "y": 60},
+                    "config": {"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.5, "stop_loss_pct": 0.8},
+                },
+            ],
+            "edges": [
+                {"id": "edge-entry-condition", "source": "builder-entry", "target": "condition-breakout"},
+                {"id": "edge-condition-action", "source": "condition-breakout", "target": "action-open-long"},
+                {"id": "edge-action-protect", "source": "action-open-long", "target": "action-protect"},
+            ],
+        }
+    }
+
+    issues = engine.risk_adjusted_sizing_issues(rules_json=rules_json)
+
+    assert issues == []

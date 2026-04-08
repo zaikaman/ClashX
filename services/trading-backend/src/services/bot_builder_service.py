@@ -142,6 +142,13 @@ class BotBuilderService:
             rules_version=int(next_payload["rules_version"]),
             rules_json=next_payload["rules_json"],
         )
+        runtime = self.supabase.maybe_one(
+            "bot_runtimes",
+            filters={"bot_definition_id": bot_id, "wallet_address": wallet_address},
+        )
+        runtime_policy = runtime.get("risk_policy_json") if isinstance(runtime, dict) and isinstance(runtime.get("risk_policy_json"), dict) else {}
+        if str(runtime_policy.get("sizing_mode") or "fixed_usd") == "risk_adjusted":
+            issues.extend(self.rules_engine.risk_adjusted_sizing_issues(rules_json=next_payload["rules_json"]))
         if issues:
             raise ValueError("Invalid bot definition: " + "; ".join(issues))
         row = self.supabase.update(
