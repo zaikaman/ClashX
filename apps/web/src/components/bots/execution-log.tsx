@@ -5,10 +5,13 @@ type BotExecutionEvent = {
   runtime_id: string;
   event_type: string;
   decision_summary: string;
-  request_payload: Record<string, unknown>;
-  result_payload: Record<string, unknown>;
+  action_type?: string | null;
+  symbol?: string | null;
+  leverage?: number | null;
+  size_usd?: number | null;
   status: string;
   error_reason?: string | null;
+  outcome_summary: string;
   created_at: string;
 };
 
@@ -17,12 +20,16 @@ type DisplayEvent = BotExecutionEvent & {
   grouped_until: string;
 };
 
+const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
 function summarizeAction(event: BotExecutionEvent) {
-  const actionType = typeof event.request_payload.type === "string" ? event.request_payload.type : event.event_type;
-  const symbol = typeof event.request_payload.symbol === "string" ? event.request_payload.symbol : null;
-  const leverage = typeof event.request_payload.leverage === "number" ? `${event.request_payload.leverage}x` : null;
-  const sizeUsd =
-    typeof event.request_payload.size_usd === "number" ? `$${event.request_payload.size_usd.toFixed(0)}` : null;
+  const actionType = typeof event.action_type === "string" ? event.action_type : event.event_type;
+  const symbol = typeof event.symbol === "string" ? event.symbol : null;
+  const leverage = typeof event.leverage === "number" ? `${event.leverage}x` : null;
+  const sizeUsd = typeof event.size_usd === "number" ? `$${event.size_usd.toFixed(0)}` : null;
   return [actionType, symbol, leverage, sizeUsd].filter(Boolean).join(" / ");
 }
 
@@ -37,14 +44,17 @@ function statusTone(status: string) {
 }
 
 function buildEventSignature(event: BotExecutionEvent) {
-  return JSON.stringify({
-    event_type: event.event_type,
-    status: event.status,
-    decision_summary: event.decision_summary,
-    error_reason: event.error_reason ?? null,
-    request_payload: event.request_payload,
-    result_payload: event.result_payload,
-  });
+  return [
+    event.event_type,
+    event.status,
+    event.decision_summary,
+    event.error_reason ?? "",
+    event.action_type ?? "",
+    event.symbol ?? "",
+    event.leverage?.toString() ?? "",
+    event.size_usd?.toString() ?? "",
+    event.outcome_summary,
+  ].join("|");
 }
 
 function collapseEvents(events: BotExecutionEvent[]): DisplayEvent[] {
@@ -75,9 +85,7 @@ function collapseEvents(events: BotExecutionEvent[]): DisplayEvent[] {
 }
 
 function renderOutcome(event: DisplayEvent) {
-  const summary =
-    event.error_reason ??
-    (Object.keys(event.result_payload).length > 0 ? JSON.stringify(event.result_payload) : "No additional payload recorded.");
+  const summary = event.outcome_summary;
 
   if (event.grouped_count <= 1) {
     return summary;
@@ -86,7 +94,13 @@ function renderOutcome(event: DisplayEvent) {
   return `${summary} Collapsed ${event.grouped_count} repeated checks into one item.`;
 }
 
+function formatTimestamp(value: string) {
+  return dateTimeFormatter.format(new Date(value));
+}
+
 export function ExecutionLog({ events }: { events: BotExecutionEvent[] }) {
+  const displayEvents = useMemo(() => collapseEvents(events), [events]);
+
   if (!events.length) {
     return (
       <div className="rounded-[1.6rem] bg-[#16181a] px-5 py-6 text-sm leading-6 text-neutral-400">
@@ -94,8 +108,6 @@ export function ExecutionLog({ events }: { events: BotExecutionEvent[] }) {
       </div>
     );
   }
-
-  const displayEvents = useMemo(() => collapseEvents(events), [events]);
 
   return (
     <div className="grid gap-3">
@@ -121,9 +133,9 @@ export function ExecutionLog({ events }: { events: BotExecutionEvent[] }) {
                   {event.grouped_count} similar checks
                 </span>
               ) : null}
-              <span className="text-[0.68rem] text-neutral-500">{new Date(event.created_at).toLocaleString()}</span>
+              <span className="text-[0.68rem] text-neutral-500">{formatTimestamp(event.created_at)}</span>
               {event.grouped_count > 1 ? (
-                <span className="text-[0.68rem] text-neutral-600">through {new Date(event.grouped_until).toLocaleString()}</span>
+                <span className="text-[0.68rem] text-neutral-600">through {formatTimestamp(event.grouped_until)}</span>
               ) : null}
             </div>
           </div>

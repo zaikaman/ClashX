@@ -129,8 +129,14 @@ class BotRuntimeEngine:
         runtime = self._resolve_runtime(bot_definition_id=bot["id"], wallet_address=wallet_address)
         if runtime is None:
             return []
-        rows = self._supabase.select("bot_execution_events", filters={"runtime_id": runtime["id"]}, order="created_at.desc", limit=limit)
-        return [self.serialize_event(row) for row in rows]
+        rows = self._supabase.select(
+            "bot_execution_events",
+            columns="id,runtime_id,event_type,decision_summary,request_payload,status,error_reason,created_at",
+            filters={"runtime_id": runtime["id"]},
+            order="created_at.desc",
+            limit=limit,
+        )
+        return [self.serialize_event_summary(row) for row in rows]
 
     def list_runtimes_for_wallet(self, db: Any, *, wallet_address: str, user_id: str) -> list[dict[str, Any]]:
         del db, user_id
@@ -209,6 +215,24 @@ class BotRuntimeEngine:
             "created_at": event["created_at"],
         }
 
+    @classmethod
+    def serialize_event_summary(cls, event: dict[str, Any]) -> dict[str, Any]:
+        request_payload = event["request_payload"] if isinstance(event.get("request_payload"), dict) else {}
+        return {
+            "id": event["id"],
+            "runtime_id": event["runtime_id"],
+            "event_type": event["event_type"],
+            "decision_summary": event["decision_summary"],
+            "action_type": cls._read_text(request_payload.get("type")) or cls._read_text(event.get("event_type")),
+            "symbol": cls._read_text(request_payload.get("symbol")),
+            "leverage": cls._read_number(request_payload.get("leverage")),
+            "size_usd": cls._read_number(request_payload.get("size_usd")),
+            "status": event["status"],
+            "error_reason": event.get("error_reason"),
+            "outcome_summary": cls._build_event_outcome_summary(event),
+            "created_at": event["created_at"],
+        }
+
     def _require_runtime(self, *, bot_id: str, wallet_address: str, user_id: str) -> dict[str, Any]:
         bot = self._resolve_bot(bot_id=bot_id, wallet_address=wallet_address, user_id=user_id)
         runtime = self._resolve_runtime(bot_definition_id=bot["id"], wallet_address=wallet_address)
@@ -255,3 +279,42 @@ class BotRuntimeEngine:
         except RuntimeError:
             return
         loop.create_task(broadcaster.publish(channel=f"user:{user_id}", event=event, payload=payload))
+
+    @staticmethod
+    def _build_event_outcome_summary(event: dict[str, Any]) -> str:
+        error_reason = BotRuntimeEngine._read_text(event.get("error_reason"))
+        if error_reason:
+            return error_reason
+
+        event_type = BotRuntimeEngine._read_text(event.get("event_type")) or "event"
+        status = BotRuntimeEngine._read_text(event.get("status")) or "pending"
+
+        if event_type.startswith("runtime."):
+            return "Runtime state updated successfully."
+        if status == "success":
+            return "Action executed successfully."
+        if status == "skipped":
+            return "Action skipped by the current runtime guardrails."
+        if status == "error":
+            return "Action failed during runtime execution."
+        return "Event recorded."
+
+    @staticmethod
+    def _read_text(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @staticmethod
+    def _read_number(value: Any) -> float | None:
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                return None
+        return None

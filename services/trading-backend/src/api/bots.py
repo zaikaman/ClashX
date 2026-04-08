@@ -124,6 +124,21 @@ class BotExecutionEventResponse(BaseModel):
     created_at: datetime
 
 
+class BotExecutionEventSummaryResponse(BaseModel):
+    id: str
+    runtime_id: str
+    event_type: str
+    decision_summary: str
+    action_type: str | None = None
+    symbol: str | None = None
+    leverage: float | None = None
+    size_usd: float | None = None
+    status: str
+    error_reason: str | None = None
+    outcome_summary: str
+    created_at: datetime
+
+
 class BotDeployRequest(BaseModel):
     wallet_address: str | None = Field(default=None, min_length=8)
     risk_policy_json: dict[str, Any] = Field(default_factory=dict)
@@ -512,14 +527,16 @@ def stop_bot_runtime(
     return BotRuntimeResponse.model_validate(runtime)
 
 
-@router.get("/{bot_id}/events", response_model=list[BotExecutionEventResponse])
+@router.get("/{bot_id}/events", response_model=list[BotExecutionEventSummaryResponse])
 def list_bot_runtime_events(
     bot_id: str,
+    response: Response,
     wallet_address: str | None = Query(default=None, min_length=8),
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
-) -> list[BotExecutionEventResponse]:
+) -> list[BotExecutionEventSummaryResponse]:
+    response.headers["Cache-Control"] = "private, max-age=2, stale-while-revalidate=8"
     resolved_wallet = _resolve_wallet(user, wallet_address)
     try:
         rows = bot_runtime_engine.list_runtime_events(
@@ -531,7 +548,7 @@ def list_bot_runtime_events(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return [BotExecutionEventResponse.model_validate(row) for row in rows]
+    return [BotExecutionEventSummaryResponse.model_validate(row) for row in rows]
 
 
 @router.get("/{bot_id}/health", response_model=RuntimeHealthResponse)

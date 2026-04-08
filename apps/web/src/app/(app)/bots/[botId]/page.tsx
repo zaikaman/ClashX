@@ -5,7 +5,6 @@ import Link from "next/link";
 import { use, useEffect, useMemo, useState } from "react";
 
 import { BotPerformancePanel } from "@/components/bots/bot-performance-panel";
-import { ExecutionLog } from "@/components/bots/execution-log";
 import { RuntimeFailurePanel } from "@/components/bots/runtime-failure-panel";
 import { RuntimeHealthCard } from "@/components/bots/runtime-health-card";
 import { useClashxAuth } from "@/lib/clashx-auth";
@@ -52,6 +51,19 @@ const RuntimeControls = dynamic(
   },
 );
 
+const ExecutionLog = dynamic(
+  () => import("@/components/bots/execution-log").then((module) => module.ExecutionLog),
+  {
+    loading: () => (
+      <DeferredPanelPlaceholder
+        eyebrow="Activity stream"
+        title="Loading recent activity"
+        body="Recent runtime decisions are loading on demand."
+      />
+    ),
+  },
+);
+
 type BotDefinition = {
   id: string;
   name: string;
@@ -70,10 +82,13 @@ type BotExecutionEvent = {
   runtime_id: string;
   event_type: string;
   decision_summary: string;
-  request_payload: Record<string, unknown>;
-  result_payload: Record<string, unknown>;
+  action_type?: string | null;
+  symbol?: string | null;
+  leverage?: number | null;
+  size_usd?: number | null;
   status: string;
   error_reason?: string | null;
+  outcome_summary: string;
   created_at: string;
 };
 
@@ -123,9 +138,11 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
   const [eventsError, setEventsError] = useState<string | null>(null);
   const [performanceError, setPerformanceError] = useState<string | null>(null);
   const [primaryLoading, setPrimaryLoading] = useState(false);
-  const [secondaryLoading, setSecondaryLoading] = useState(false);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [performanceLoading, setPerformanceLoading] = useState(false);
   const [runtimeRefreshToken, setRuntimeRefreshToken] = useState(0);
-  const [secondaryRefreshToken, setSecondaryRefreshToken] = useState(0);
+  const [activityRefreshToken, setActivityRefreshToken] = useState(0);
+  const [performanceRefreshToken, setPerformanceRefreshToken] = useState(0);
   const [activeTab, setActiveTab] = useState<"overview" | "operate" | "activity">("overview");
 
   const sessionActive = authenticated && Boolean(walletAddress);
@@ -140,9 +157,11 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
       setEventsError(null);
       setPerformanceError(null);
       setPrimaryLoading(false);
-      setSecondaryLoading(false);
+      setActivityLoading(false);
+      setPerformanceLoading(false);
       setRuntimeRefreshToken(0);
-      setSecondaryRefreshToken(0);
+      setActivityRefreshToken(0);
+      setPerformanceRefreshToken(0);
       return;
     }
 
@@ -151,7 +170,8 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
 
     async function loadPrimary() {
       setPrimaryLoading(true);
-      setSecondaryLoading(false);
+      setActivityLoading(false);
+      setPerformanceLoading(false);
       setBot(null);
       setEvents([]);
       setRuntimeOverview(null);
@@ -160,7 +180,8 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
       setEventsError(null);
       setPerformanceError(null);
       setRuntimeRefreshToken(0);
-      setSecondaryRefreshToken(0);
+      setActivityRefreshToken(0);
+      setPerformanceRefreshToken(0);
 
       try {
         const headers = await getAuthHeaders();
@@ -189,8 +210,6 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
         setBot(nextBot);
         setRuntimeOverview(nextOverview);
         setError(null);
-        setSecondaryLoading(true);
-        setSecondaryRefreshToken(1);
       } catch (loadError) {
         if (controller.signal.aborted) {
           return;
@@ -249,82 +268,106 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
   }, [getAuthHeaders, params.botId, runtimeRefreshToken, sessionActive, walletAddress]);
 
   useEffect(() => {
-    if (!sessionActive || !walletAddress || secondaryRefreshToken === 0) {
+    if (primaryLoading || !sessionActive || !walletAddress) {
+      return;
+    }
+
+    if (activeTab === "overview" && performanceRefreshToken === 0) {
+      setPerformanceRefreshToken(1);
+    }
+
+    if (activeTab === "activity" && activityRefreshToken === 0) {
+      setActivityRefreshToken(1);
+    }
+  }, [activeTab, activityRefreshToken, performanceRefreshToken, primaryLoading, sessionActive, walletAddress]);
+
+  useEffect(() => {
+    if (!sessionActive || !walletAddress || activeTab !== "overview" || performanceRefreshToken === 0) {
       return;
     }
 
     const resolvedWallet = walletAddress;
     const controller = new AbortController();
 
-    async function loadSecondary() {
-      setSecondaryLoading(true);
+    async function loadPerformance() {
+      setPerformanceLoading(true);
       try {
         const headers = await getAuthHeaders();
         const walletQuery = encodeURIComponent(resolvedWallet);
-
-        const [eventsResult, performanceResult] = await Promise.allSettled([
-          (async () => {
-            const response = await fetch(
-              `${API_BASE_URL}/api/bots/${params.botId}/events?wallet_address=${walletQuery}&limit=${EVENTS_PAGE_SIZE}`,
-              {
-                cache: "no-store",
-                headers,
-                signal: controller.signal,
-              },
-            );
-            return unwrapResponse<BotExecutionEvent[]>(response, "Could not load activity stream");
-          })(),
-          (async () => {
-            const response = await fetch(
-              `${API_BASE_URL}/api/bots/${params.botId}/runtime-overview?wallet_address=${walletQuery}&include_performance=true&performance_mode=fast`,
-              {
-                headers,
-                signal: controller.signal,
-              },
-            );
-            const overview = await unwrapResponse<RuntimeOverview>(
-              response,
-              "Could not load performance snapshot",
-            );
-            return overview.performance;
-          })(),
-        ]);
+        const response = await fetch(
+          `${API_BASE_URL}/api/bots/${params.botId}/runtime-overview?wallet_address=${walletQuery}&include_performance=true&performance_mode=fast`,
+          {
+            headers,
+            signal: controller.signal,
+          },
+        );
+        const overview = await unwrapResponse<RuntimeOverview>(response, "Could not load performance snapshot");
 
         if (controller.signal.aborted) {
           return;
         }
 
-        if (eventsResult.status === "fulfilled") {
-          setEvents(eventsResult.value);
-          setEventsError(null);
-        } else {
-          setEventsError(
-            eventsResult.reason instanceof Error
-              ? eventsResult.reason.message
-              : "Could not load activity stream",
-          );
+        setPerformance(overview.performance ?? null);
+        setPerformanceError(null);
+      } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
         }
-
-        if (performanceResult.status === "fulfilled") {
-          setPerformance(performanceResult.value ?? null);
-          setPerformanceError(null);
-        } else {
-          setPerformanceError(
-            performanceResult.reason instanceof Error
-              ? performanceResult.reason.message
-              : "Could not load performance snapshot",
-          );
-        }
+        setPerformanceError(loadError instanceof Error ? loadError.message : "Could not load performance snapshot");
       } finally {
         if (!controller.signal.aborted) {
-          setSecondaryLoading(false);
+          setPerformanceLoading(false);
         }
       }
     }
 
-    void loadSecondary();
+    void loadPerformance();
     return () => controller.abort();
-  }, [getAuthHeaders, params.botId, secondaryRefreshToken, sessionActive, walletAddress]);
+  }, [activeTab, getAuthHeaders, params.botId, performanceRefreshToken, sessionActive, walletAddress]);
+
+  useEffect(() => {
+    if (!sessionActive || !walletAddress || activeTab !== "activity" || activityRefreshToken === 0) {
+      return;
+    }
+
+    const resolvedWallet = walletAddress;
+    const controller = new AbortController();
+
+    async function loadActivity() {
+      setActivityLoading(true);
+      try {
+        const headers = await getAuthHeaders();
+        const walletQuery = encodeURIComponent(resolvedWallet);
+        const response = await fetch(
+          `${API_BASE_URL}/api/bots/${params.botId}/events?wallet_address=${walletQuery}&limit=${EVENTS_PAGE_SIZE}`,
+          {
+            headers,
+            signal: controller.signal,
+          },
+        );
+        const nextEvents = await unwrapResponse<BotExecutionEvent[]>(response, "Could not load activity stream");
+
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setEvents(nextEvents);
+        setEventsError(null);
+      } catch (loadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setEventsError(loadError instanceof Error ? loadError.message : "Could not load activity stream");
+      } finally {
+        if (!controller.signal.aborted) {
+          setActivityLoading(false);
+        }
+      }
+    }
+
+    void loadActivity();
+    return () => controller.abort();
+  }, [activeTab, activityRefreshToken, getAuthHeaders, params.botId, sessionActive, walletAddress]);
 
   useEffect(() => {
     if (!sessionActive || !walletAddress || primaryLoading) {
@@ -333,37 +376,20 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
 
     const interval = window.setInterval(() => {
       setRuntimeRefreshToken((value) => value + 1);
-      setSecondaryRefreshToken((value) => value + 1);
+      if (activeTab === "overview") {
+        setPerformanceRefreshToken((value) => value + 1);
+      }
+      if (activeTab === "activity") {
+        setActivityRefreshToken((value) => value + 1);
+      }
     }, REFRESH_INTERVAL_MS);
 
     return () => window.clearInterval(interval);
-  }, [primaryLoading, sessionActive, walletAddress]);
+  }, [activeTab, primaryLoading, sessionActive, walletAddress]);
 
   const visibleBot = sessionActive ? bot : null;
   const visibleRuntimeOverview = sessionActive ? runtimeOverview : null;
   const visibleError = sessionActive ? error : null;
-  const runtime = useMemo(() => {
-    if (!visibleRuntimeOverview?.health.runtime_id) {
-      return null;
-    }
-    return {
-      status: visibleRuntimeOverview.health.status,
-      mode: visibleRuntimeOverview.health.mode,
-      updated_at:
-        visibleRuntimeOverview.health.last_runtime_update ??
-        visibleRuntimeOverview.metrics.last_event_at ??
-        "",
-    };
-  }, [visibleRuntimeOverview]);
-
-  const runtimeHealth = visibleRuntimeOverview?.health.health ?? "not deployed";
-  const runtimeReasons = (visibleRuntimeOverview?.health.reasons ?? []).slice(0, 2);
-  const successRate = visibleRuntimeOverview?.metrics
-    ? `${(visibleRuntimeOverview.metrics.success_rate * 100).toFixed(1)}%`
-    : "--";
-  const lastRuntimeEvent = runtime?.updated_at
-    ? new Date(runtime.updated_at).toLocaleString()
-    : "No runtime event yet";
 
   const initialPublishingSettings = useMemo<PublishingSettings | null>(() => {
     if (!visibleBot) {
@@ -402,7 +428,12 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
 
   function refreshRuntimeData() {
     setRuntimeRefreshToken((value) => value + 1);
-    setSecondaryRefreshToken((value) => value + 1);
+    if (activeTab === "overview") {
+      setPerformanceRefreshToken((value) => value + 1);
+    }
+    if (activeTab === "activity") {
+      setActivityRefreshToken((value) => value + 1);
+    }
   }
 
   return (
@@ -466,12 +497,6 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
         </article>
       ) : null}
 
-      {performanceError && !performance ? (
-        <article className="rounded-2xl border border-[#dce85d]/30 bg-[#dce85d]/10 px-5 py-4 text-sm text-neutral-50">
-          {performanceError}
-        </article>
-      ) : null}
-
       <section className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4 md:p-5">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="grid gap-1">
@@ -513,11 +538,16 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
                 title="Runtime snapshot"
                 copy="A compact view of performance, health, and failure signals."
               />
-              {secondaryLoading && !performance ? (
+              {performanceError && !performance ? (
+                <article className="rounded-2xl border border-[#dce85d]/30 bg-[#dce85d]/10 px-5 py-4 text-sm text-neutral-50">
+                  {performanceError}
+                </article>
+              ) : null}
+              {performanceLoading && !performance ? (
                 <DeferredPanelPlaceholder
                   eyebrow="Performance"
                   title="Loading live performance"
-                  body="PnL and open position metrics are loading after the primary view."
+                  body="PnL and open position metrics are loading only when the overview desk is active."
                 />
               ) : (
                 <BotPerformancePanel performance={sessionActive ? performance : null} />
@@ -658,11 +688,11 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
               </article>
             ) : null}
 
-            {secondaryLoading && events.length === 0 ? (
+            {activityLoading && events.length === 0 ? (
               <DeferredPanelPlaceholder
                 eyebrow="Activity stream"
                 title="Loading recent activity"
-                body="Recent runtime decisions are loading after the primary view."
+                body="Recent runtime decisions are loading only when you open the activity desk."
               />
             ) : (
               <ExecutionLog events={sessionActive ? events : []} />
