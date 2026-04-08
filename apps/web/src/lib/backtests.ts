@@ -124,7 +124,7 @@ export type BacktestRunDetail = BacktestRunSummary & {
 export type BacktestRunRequestPayload = {
   wallet_address: string;
   bot_id: string;
-  interval: string;
+  interval?: string;
   start_time: number;
   end_time: number;
   initial_capital_usd: number;
@@ -138,6 +138,7 @@ export type BacktestsBootstrapPayload = {
     description: string;
     strategy_type: string;
     market_scope: string;
+    inferred_backtest_interval: string;
     updated_at: string;
   }>;
   runs: BacktestRunSummary[];

@@ -25,7 +25,7 @@ class BacktestAssumptionConfigRequest(BaseModel):
 class BacktestRunRequest(BaseModel):
     wallet_address: str | None = Field(default=None, min_length=8)
     bot_id: str = Field(min_length=2)
-    interval: str = Field(default="15m")
+    interval: str | None = Field(default=None)
     start_time: int = Field(ge=0)
     end_time: int = Field(ge=0)
     initial_capital_usd: float = Field(default=10_000, gt=0)
@@ -69,6 +69,7 @@ class BacktestBotOptionResponse(BaseModel):
     description: str
     strategy_type: str
     market_scope: str
+    inferred_backtest_interval: str
     updated_at: str
 
 

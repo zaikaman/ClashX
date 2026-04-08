@@ -22,6 +22,7 @@ type SavedBot = {
   description: string;
   strategy_type: string;
   market_scope: string;
+  inferred_backtest_interval: string;
   updated_at: string;
 };
 
@@ -29,7 +30,6 @@ type HistoryFilter = "all" | "completed" | "failed";
 type HistoryScope = "all" | "selected";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-const INTERVAL_OPTIONS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"] as const;
 const INSPECTOR_PAGE_SIZE = 12;
 const COMPARE_COLORS = ["#dce85d", "#74b97f", "#8ec5ff", "#f59e0b"];
 const DATE_PRESETS = [
@@ -149,7 +149,6 @@ export function BacktestingLabPage() {
   const [runs, setRuns] = useState<BacktestRunSummary[]>([]);
   const [runCache, setRunCache] = useState<Record<string, BacktestRunDetail>>({});
   const [selectedBotId, setSelectedBotId] = useState("");
-  const [interval, setInterval] = useState<(typeof INTERVAL_OPTIONS)[number]>("15m");
   const [datePreset, setDatePreset] = useState<(typeof DATE_PRESETS)[number]["id"]>("30d");
   const [startDate, setStartDate] = useState(initialRange.start);
   const [endDate, setEndDate] = useState(initialRange.end);
@@ -397,7 +396,6 @@ export function BacktestingLabPage() {
     const payload: BacktestRunRequestPayload = {
       wallet_address: walletAddress,
       bot_id: selectedBotId,
-      interval,
       start_time: start,
       end_time: end,
       initial_capital_usd: readNumericInput(initialCapitalUsd),
@@ -594,7 +592,7 @@ export function BacktestingLabPage() {
             <div className="grid gap-2">
               <span className="label text-[#74b97f]">Run controls</span>
               <p className="text-sm leading-7 text-neutral-400">
-                Pick a saved bot, set the replay window, and launch a synchronous historical run against Pacifica candle data.
+                Pick a saved bot, set the replay window, and launch a synchronous historical run against Pacifica candle data. Replay interval is inferred from the bot rules.
               </p>
             </div>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
@@ -613,20 +611,12 @@ export function BacktestingLabPage() {
                   ))}
                 </select>
               </label>
-              <label className="grid min-w-0 gap-1.5 text-sm text-neutral-400">
-                Interval
-                <select
-                  value={interval}
-                  onChange={(event) => setInterval(event.target.value as (typeof INTERVAL_OPTIONS)[number])}
-                  className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3.5 py-3 text-sm text-neutral-50 outline-none transition w-full focus:border-[#dce85d]"
-                >
-                  {INTERVAL_OPTIONS.map((value) => (
-                    <option key={value} value={value}>
-                      {value}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className="grid min-w-0 gap-1.5 text-sm text-neutral-400">
+                <span>Replay interval</span>
+                <div className="rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3.5 py-3 text-sm text-neutral-50">
+                  {selectedBot?.inferred_backtest_interval ?? "Pick a bot"}
+                </div>
+              </div>
               <label className="grid min-w-0 gap-1.5 text-sm text-neutral-400">
                 Initial capital
                 <input
@@ -702,7 +692,7 @@ export function BacktestingLabPage() {
                 />
               </label>
               <label className="grid min-w-0 gap-1.5 text-sm text-neutral-400">
-                Funding / bar (bps)
+                Funding / replay bar (bps)
                 <input
                   value={fundingBpsPerInterval}
                   onChange={(event) => setFundingBpsPerInterval(event.target.value)}
@@ -713,7 +703,9 @@ export function BacktestingLabPage() {
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[rgba(255,255,255,0.06)] pt-4">
               <div className="text-sm text-neutral-500">
-                {selectedBot ? `${selectedBot.strategy_type} / ${selectedBot.market_scope}` : "Pick a bot to unlock the replay settings."}
+                {selectedBot
+                  ? `${selectedBot.strategy_type} / ${selectedBot.market_scope} / ${selectedBot.inferred_backtest_interval} replay`
+                  : "Pick a bot to unlock the replay settings."}
               </div>
               <button
                 type="button"

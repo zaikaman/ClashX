@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.models import BotPublishSnapshotRecord, BotStrategyVersionRecord
+from src.services.bot_backtest_service import infer_backtest_interval_from_rules
 from src.services.rules_engine import RulesEngine
 from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
 
@@ -40,7 +41,7 @@ class BotBuilderService:
         del db
         rows = self.supabase.select(
             "bot_definitions",
-            columns="id,wallet_address,name,description,visibility,market_scope,strategy_type,authoring_mode,updated_at",
+            columns="id,wallet_address,name,description,visibility,market_scope,strategy_type,authoring_mode,rules_json,updated_at",
             filters={"wallet_address": wallet_address},
             order="updated_at.desc",
         )
@@ -348,6 +349,7 @@ class BotBuilderService:
             "market_scope": bot["market_scope"],
             "strategy_type": bot["strategy_type"],
             "authoring_mode": bot["authoring_mode"],
+            "inferred_backtest_interval": infer_backtest_interval_from_rules(bot.get("rules_json")),
             "updated_at": bot["updated_at"],
         }
 

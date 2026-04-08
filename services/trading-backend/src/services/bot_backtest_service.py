@@ -42,6 +42,23 @@ DEFAULT_BACKTEST_ASSUMPTIONS = {
     "slippage_bps": 0.0,
     "funding_bps_per_interval": 0.0,
 }
+DEFAULT_BACKTEST_INTERVAL = "15m"
+
+
+def infer_backtest_interval_from_rules(rules_json: dict[str, Any] | None) -> str:
+    if not isinstance(rules_json, dict):
+        return DEFAULT_BACKTEST_INTERVAL
+
+    requests = extract_candle_requests(rules_json)
+    supported_timeframes = {
+        str(request.get("timeframe") or "").strip().lower()
+        for request in requests
+        if str(request.get("timeframe") or "").strip().lower() in MAIN_TIMEFRAME_MS
+    }
+    if not supported_timeframes:
+        return DEFAULT_BACKTEST_INTERVAL
+
+    return min(supported_timeframes, key=lambda timeframe: MAIN_TIMEFRAME_MS[timeframe])
 
 
 class BotBacktestService:
@@ -62,7 +79,7 @@ class BotBacktestService:
         bot_id: str,
         wallet_address: str,
         user_id: str,
-        interval: str,
+        interval: str | None,
         start_time: int,
         end_time: int,
         initial_capital_usd: float,
@@ -71,11 +88,12 @@ class BotBacktestService:
         del db
         bot = self._resolve_bot(bot_id=bot_id, wallet_address=wallet_address, user_id=user_id)
         rules_snapshot = deepcopy(bot.get("rules_json") if isinstance(bot.get("rules_json"), dict) else {})
+        resolved_interval = str(interval or "").strip().lower() or infer_backtest_interval_from_rules(rules_snapshot)
         normalized_assumptions = self._normalize_assumptions(assumptions)
         placeholder_symbols = self._market_scope_symbols(str(bot.get("market_scope") or ""))
         preflight_issues = self._preflight_issues(
             bot=bot,
-            interval=interval,
+            interval=resolved_interval,
             start_time=start_time,
             end_time=end_time,
             initial_capital_usd=initial_capital_usd,
@@ -89,7 +107,7 @@ class BotBacktestService:
                 status = "failed"
                 result_json = self._failed_result(
                     bot=bot,
-                    interval=interval,
+                    interval=resolved_interval,
                     start_time=start_time,
                     end_time=end_time,
                     initial_capital_usd=initial_capital_usd,
@@ -100,7 +118,7 @@ class BotBacktestService:
                 result_json = await self._simulate(
                     bot=bot,
                     rules_snapshot=rules_snapshot,
-                    interval=interval,
+                    interval=resolved_interval,
                     start_time=start_time,
                     end_time=end_time,
                     initial_capital_usd=initial_capital_usd,
@@ -111,7 +129,7 @@ class BotBacktestService:
             status = "failed"
             result_json = self._failed_result(
                 bot=bot,
-                interval=interval,
+                interval=resolved_interval,
                 start_time=start_time,
                 end_time=end_time,
                 initial_capital_usd=initial_capital_usd,
@@ -133,7 +151,7 @@ class BotBacktestService:
                 "market_scope_snapshot": str(bot.get("market_scope") or ""),
                 "strategy_type_snapshot": str(bot.get("strategy_type") or ""),
                 "rules_snapshot_json": rules_snapshot,
-                "interval": interval,
+                "interval": resolved_interval,
                 "start_time": start_time,
                 "end_time": end_time,
                 "initial_capital_usd": initial_capital_usd,

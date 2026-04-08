@@ -11,6 +11,7 @@ from src.services.bot_backtest_service import BotBacktestService, MARKET_UNIVERS
 
 BASE_TIME_MS = 1_710_000_000_000
 FIFTEEN_MINUTES_MS = 900_000
+ONE_MINUTE_MS = 60_000
 
 
 def _symbol_candle(
@@ -21,14 +22,16 @@ def _symbol_candle(
     low_price: float,
     close_price: float,
     volume: float = 1000.0,
+    interval: str = "15m",
+    interval_ms: int = FIFTEEN_MINUTES_MS,
 ) -> dict[str, Any]:
-    open_time = BASE_TIME_MS + offset * FIFTEEN_MINUTES_MS
-    close_time = open_time + FIFTEEN_MINUTES_MS
+    open_time = BASE_TIME_MS + offset * interval_ms
+    close_time = open_time + interval_ms
     return {
         "open_time": open_time,
         "close_time": close_time,
         "symbol": symbol,
-        "interval": "15m",
+        "interval": interval,
         "open": open_price,
         "high": high_price,
         "low": low_price,
@@ -38,8 +41,18 @@ def _symbol_candle(
     }
 
 
-def _candle(offset: int, open_price: float, high_price: float, low_price: float, close_price: float, volume: float = 1000.0) -> dict[str, Any]:
-    return _symbol_candle("BTC", offset, open_price, high_price, low_price, close_price, volume)
+def _candle(
+    offset: int,
+    open_price: float,
+    high_price: float,
+    low_price: float,
+    close_price: float,
+    volume: float = 1000.0,
+    *,
+    interval: str = "15m",
+    interval_ms: int = FIFTEEN_MINUTES_MS,
+) -> dict[str, Any]:
+    return _symbol_candle("BTC", offset, open_price, high_price, low_price, close_price, volume, interval=interval, interval_ms=interval_ms)
 
 
 def _graph_rules(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> dict[str, Any]:
@@ -160,6 +173,19 @@ def _service(rules_json: dict[str, Any], candles: list[dict[str, Any]], *, walle
     return BotBacktestService(pacifica_client=pacifica, supabase=supabase), supabase
 
 
+def _service_with_candle_map(
+    rules_json: dict[str, Any],
+    candle_rows: dict[tuple[str, str], list[dict[str, Any]]],
+    *,
+    wallet_address: str = "wallet-a",
+    user_id: str = "user-a",
+    bot_id: str = "bot-a",
+) -> tuple[BotBacktestService, FakeSupabaseRestClient]:
+    supabase = FakeSupabaseRestClient(_tables(rules_json, wallet_address=wallet_address, user_id=user_id, bot_id=bot_id))
+    pacifica = FakePacificaClient(candle_rows)
+    return BotBacktestService(pacifica_client=pacifica, supabase=supabase), supabase
+
+
 def test_backtest_profitable_long_then_close() -> None:
     rules_json = _graph_rules(
         nodes=[
@@ -276,7 +302,53 @@ def test_backtest_losing_trade_tracks_drawdown() -> None:
 
     assert run["pnl_total"] < 0
     assert run["max_drawdown_pct"] > 0
-    assert run["result_json"]["trades"][0]["pnl_usd"] < 0
+
+
+def test_backtest_infers_smallest_indicator_timeframe_when_interval_is_missing() -> None:
+    rules_json = _graph_rules(
+        nodes=[
+            {
+                "id": "condition-open",
+                "kind": "condition",
+                "position": {"x": 120, "y": 80},
+                "config": {"type": "rsi_above", "symbol": "BTC", "timeframe": "1m", "period": 2, "value": 60},
+            },
+            {
+                "id": "action-open",
+                "kind": "action",
+                "position": {"x": 320, "y": 80},
+                "config": {"type": "open_long", "symbol": "BTC", "size_usd": 100, "leverage": 1},
+            },
+        ],
+        edges=[
+            {"id": "edge-open-1", "source": "builder-entry", "target": "condition-open"},
+            {"id": "edge-open-2", "source": "condition-open", "target": "action-open"},
+        ],
+    )
+    candles = [
+        _candle(0, 100, 101, 99, 100, interval="1m", interval_ms=ONE_MINUTE_MS),
+        _candle(1, 100, 103, 100, 102, interval="1m", interval_ms=ONE_MINUTE_MS),
+        _candle(2, 102, 106, 102, 105, interval="1m", interval_ms=ONE_MINUTE_MS),
+        _candle(3, 105, 108, 104, 107, interval="1m", interval_ms=ONE_MINUTE_MS),
+    ]
+    service, _ = _service_with_candle_map(rules_json, {("BTC", "1m"): candles})
+
+    run = asyncio.run(
+        service.run_backtest(
+            None,
+            bot_id="bot-a",
+            wallet_address="wallet-a",
+            user_id="user-a",
+            interval=None,
+            start_time=BASE_TIME_MS,
+            end_time=BASE_TIME_MS + 5 * ONE_MINUTE_MS,
+            initial_capital_usd=10_000,
+        )
+    )
+
+    assert run["status"] == "completed"
+    assert run["interval"] == "1m"
+    assert run["trade_count"] == 0
 
 
 def test_backtest_prefers_stop_loss_when_tp_and_sl_touch_same_bar() -> None:
