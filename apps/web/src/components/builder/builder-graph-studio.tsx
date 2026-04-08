@@ -495,6 +495,50 @@ function validateRuntimeControls(
   return null;
 }
 
+function nodeUsesSelectedMarkets(node: BuilderFlowNode) {
+  if (node.data.kind === "condition") {
+    return node.data.condition.symbol === BOT_MARKET_UNIVERSE_SYMBOL;
+  }
+  if (node.data.kind === "action") {
+    return node.data.action.symbol === BOT_MARKET_UNIVERSE_SYMBOL;
+  }
+  return false;
+}
+
+function describeBuilderNode(node: BuilderFlowNode) {
+  if (node.data.kind === "condition") {
+    return conditionTitle(node.data.condition.type);
+  }
+  if (node.data.kind === "action") {
+    return actionTitle(node.data.action.type);
+  }
+  return "Start";
+}
+
+function getMarketExpansionBlocker(
+  nodes: BuilderFlowNode[],
+  edges: BuilderFlowEdge[],
+  selectedSymbols: string[],
+) {
+  const normalizedSymbols = Array.from(
+    new Set(selectedSymbols.map((symbol) => normalizeMarketSymbol(symbol)).filter(Boolean)),
+  );
+  if (normalizedSymbols.length <= 1) return null;
+
+  const nodeLookup = new Map(nodes.map((node) => [node.id, node]));
+  for (const edge of edges) {
+    const sourceNode = nodeLookup.get(edge.source);
+    const targetNode = nodeLookup.get(edge.target);
+    if (!sourceNode || !targetNode) continue;
+    if (!nodeUsesSelectedMarkets(sourceNode) || nodeUsesSelectedMarkets(targetNode)) continue;
+    if (targetNode.data.kind === "entry") continue;
+
+    return `${describeBuilderNode(sourceNode)} is set to selected markets, but ${describeBuilderNode(targetNode)} targets one market. Choose a specific market on the upstream block, or switch the downstream block to selected markets too.`;
+  }
+
+  return null;
+}
+
 function buildPersistedGraph(nodes: BuilderFlowNode[], edges: BuilderFlowEdge[], selectedSymbols: string[]) {
   const serializedNodes = nodes.map((node) => serializeGraphNode(node));
   const universeSymbols = selectedSymbols.filter(Boolean);
@@ -984,6 +1028,8 @@ export function BuilderGraphStudio({
     if (hasUniverseNodes && selectedMarketSymbols.length === 0) {
       return `Choose at least one market before you ${actionLabel}.`;
     }
+    const marketExpansionBlocker = getMarketExpansionBlocker(nodes, edges, selectedMarketSymbols);
+    if (marketExpansionBlocker) return marketExpansionBlocker;
     if (route.conditions.length === 0) return `Add at least one trigger condition before you ${actionLabel}.`;
     if (route.actions.length === 0) return `Add at least one action before you ${actionLabel}.`;
     if (actionLabel === "deploy" && onboardingStatus.blocker) return onboardingStatus.blocker;
@@ -1234,6 +1280,10 @@ export function BuilderGraphStudio({
 
   async function persistBotDraft() {
     const trimmedWalletAddress = walletAddress.trim();
+    const marketExpansionBlocker = getMarketExpansionBlocker(nodes, edges, selectedMarketSymbols);
+    if (marketExpansionBlocker) {
+      throw new Error(marketExpansionBlocker);
+    }
     const draftPayload = {
       wallet_address: trimmedWalletAddress,
       name: name.trim(),
