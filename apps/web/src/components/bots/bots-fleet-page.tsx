@@ -12,7 +12,7 @@ import {
   SquareStack,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   PacificaOnboardingChecklist,
@@ -158,29 +158,6 @@ function isStoppableBot(bot: BotFleetItem) {
 function isDeletableBot(bot: BotFleetItem) {
   const status = getBotStatus(bot);
   return status === "draft" || status === "stopped";
-}
-
-function FleetStatCard({
-  icon,
-  eyebrow,
-  value,
-  detail,
-}: {
-  icon: ReactNode;
-  eyebrow: string;
-  value: string;
-  detail: string;
-}) {
-  return (
-    <article className="grid gap-2 rounded-[1.6rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
-      <div className="flex items-center justify-between">
-        <span className="label text-neutral-400">{eyebrow}</span>
-        <span className="text-neutral-500">{icon}</span>
-      </div>
-      <div className="font-mono text-2xl font-bold uppercase text-neutral-50">{value}</div>
-      <p className="text-sm leading-6 text-neutral-400">{detail}</p>
-    </article>
-  );
 }
 
 function FilterChip({
@@ -737,48 +714,31 @@ export function BotsFleetPage() {
         </article>
       ) : null}
 
-      <section className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(18rem,0.75fr)]">
-        <article className="relative overflow-hidden rounded-[2rem] border border-[#dce85d]/14 bg-[#16181a] p-6">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(220,232,93,0.14),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(116,185,127,0.12),transparent_30%)]" />
-          <div className="relative grid gap-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="label text-[#dce85d]">Fleet board</span>
-              <span className="rounded-full border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.18em] text-neutral-400">
-                {authenticated ? `${bots.length} bots loaded` : "Wallet locked"}
-              </span>
-            </div>
-            <div className="grid gap-3">
-              <h2 className="max-w-4xl font-mono text-3xl font-bold uppercase tracking-tight text-neutral-50 md:text-[2.35rem]">
-                Keep track of every bot in one place instead of opening each runtime one by one.
-              </h2>
-              <p className="max-w-3xl text-sm leading-7 text-neutral-400">
-                You can see what is live at a glance, filter the list quickly, and run bulk actions without guessing which bots are deployed.
-              </p>
-            </div>
-            <div className="grid gap-3 md:grid-cols-3">
-              <div className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#0f1112] px-4 py-4">
-                <div className="label text-[#74b97f]">Live right now</div>
-                <div className="mt-2 font-mono text-2xl font-bold uppercase text-neutral-50">{loading ? "..." : fleetCounts.active}</div>
-                <p className="mt-2 text-xs leading-6 text-neutral-500">Bots currently running on {walletLabel}.</p>
-              </div>
-              <div className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#0f1112] px-4 py-4">
-                <div className="label text-[#dce85d]">Ready for action</div>
-                <div className="mt-2 font-mono text-2xl font-bold uppercase text-neutral-50">{loading ? "..." : readyToDeployCount}</div>
-                <p className="mt-2 text-xs leading-6 text-neutral-500">Drafts and stopped bots you can launch next.</p>
-              </div>
-              <div className="rounded-2xl border border-[rgba(255,255,255,0.06)] bg-[#0f1112] px-4 py-4">
-                <div className="label text-neutral-400">Current wallet</div>
-                <div className="mt-2 font-mono text-2xl font-bold uppercase text-neutral-50">{loading ? "..." : walletLabel}</div>
-                <p className="mt-2 text-xs leading-6 text-neutral-500">Bulk actions always use the connected wallet.</p>
-              </div>
-            </div>
-          </div>
-        </article>
-        <aside className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-          <FleetStatCard icon={<Play className="h-4 w-4" />} eyebrow="Draft pipeline" value={loading ? "..." : `${fleetCounts.draft}`} detail="Saved drafts that are ready for validation, tuning, or deployment." />
-          <FleetStatCard icon={<PauseCircle className="h-4 w-4" />} eyebrow="Needs attention" value={loading ? "..." : `${fleetCounts.paused + fleetCounts.stopped}`} detail="Paused and stopped bots are easiest to review together." />
-          <FleetStatCard icon={<SquareStack className="h-4 w-4" />} eyebrow="Selection" value={`${selectedBots.length}`} detail="Filter first, then select the bots you want to act on." />
-        </aside>
+      <section className="flex flex-wrap items-end justify-between gap-4 border-b border-[rgba(255,255,255,0.08)] pb-6 md:pb-8">
+        <div className="grid gap-2">
+          <h1 className="font-mono text-[clamp(2rem,4vw,2.8rem)] font-bold uppercase tracking-tight text-neutral-50">
+            My bots
+          </h1>
+          <p className="max-w-2xl text-sm leading-7 text-neutral-400">
+            View drafts, live bots, and the ones that need attention.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <Link
+            href="/builder"
+            className="rounded-full bg-[#dce85d] px-5 py-2.5 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d]"
+          >
+            New bot draft
+          </Link>
+          <button
+            type="button"
+            onClick={() => setSelectedIds([])}
+            disabled={selectedIds.length === 0 || busy}
+            className="rounded-full border border-[rgba(255,255,255,0.12)] px-5 py-2.5 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-white hover:text-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Clear selection
+          </button>
+        </div>
       </section>
 
       {!authenticated ? (

@@ -550,40 +550,37 @@ export function BacktestingLabPage() {
 
   return (
     <main className="shell grid gap-6 pb-10 md:pb-12">
-      <section className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[linear-gradient(135deg,#16181a,rgba(22,24,26,0.7),rgba(220,232,93,0.08))] p-6 md:p-8">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="grid gap-3">
-            <span className="label text-[#dce85d]">Backtesting lab</span>
-            <h1 className="max-w-4xl font-mono text-[clamp(2.1rem,5vw,4.2rem)] font-extrabold uppercase leading-[0.9] tracking-[-0.05em] text-neutral-50">
-              Pressure-test every saved bot on replay.
-            </h1>
-            <p className="max-w-3xl text-sm leading-7 text-neutral-400 md:text-base">
-              Run candle-close simulations, inspect trade-by-trade behavior, and keep a searchable history of what each strategy looked like before it touched a live runtime.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void refreshHistory()}
-              className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d]"
+      <section className="flex flex-wrap items-end justify-between gap-4 border-b border-[rgba(255,255,255,0.08)] pb-6 md:pb-8">
+        <div className="grid gap-2">
+          <h1 className="font-mono text-[clamp(2rem,4vw,2.8rem)] font-bold uppercase tracking-tight text-neutral-50">
+            Backtests
+          </h1>
+          <p className="max-w-2xl text-sm leading-7 text-neutral-400">
+            Replay saved bots and compare runs before going live.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void refreshHistory()}
+            className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d]"
+          >
+            <span className="inline-flex items-center gap-2">
+              <RefreshCcw className="h-3.5 w-3.5" />
+              Refresh history
+            </span>
+          </button>
+          {selectedBot ? (
+            <Link
+              href={`/bots/${selectedBot.id}`}
+              className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#74b97f] hover:text-[#74b97f]"
             >
               <span className="inline-flex items-center gap-2">
-                <RefreshCcw className="h-3.5 w-3.5" />
-                Refresh history
+                Open bot
+                <ArrowUpRight className="h-3.5 w-3.5" />
               </span>
-            </button>
-            {selectedBot ? (
-              <Link
-                href={`/bots/${selectedBot.id}`}
-                className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#74b97f] hover:text-[#74b97f]"
-              >
-                <span className="inline-flex items-center gap-2">
-                  Open bot
-                  <ArrowUpRight className="h-3.5 w-3.5" />
-                </span>
-              </Link>
-            ) : null}
-          </div>
+            </Link>
+          ) : null}
         </div>
       </section>
 

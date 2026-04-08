@@ -513,23 +513,14 @@ export default function CopyPage() {
   if (!authenticated) {
     return (
       <main className="shell grid gap-8 pb-10 md:pb-12">
-        <section className="grid gap-5 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[radial-gradient(circle_at_top_left,rgba(220,232,93,0.16),transparent_32%),linear-gradient(135deg,#16181a,#0d0f10)] p-6 md:p-8">
-          <span className="label text-[#dce85d]">Copy Center</span>
-          <div className="grid gap-3 lg:grid-cols-[1.2fr_0.8fr] lg:items-end">
-            <div className="grid gap-3">
-              <h1 className="font-mono text-[clamp(2.25rem,5vw,4.5rem)] font-extrabold uppercase leading-[0.92] tracking-[-0.05em] text-neutral-50">
-                Run single follows or a whole bot basket from one desk.
-              </h1>
-              <p className="max-w-3xl text-sm leading-7 text-neutral-400 md:text-base">
-                Sign in to resize live follows, reopen cloned drafts, and split capital across several public bots with a portfolio kill switch above the whole book.
-              </p>
-            </div>
-            <div className="grid gap-3 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-5">
-              <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Before you start</span>
-              <p className="text-sm leading-7 text-neutral-400">
-                Your connected wallet decides which follows, drafts, and portfolio baskets appear here. Use your Privy session to unlock the management view.
-              </p>
-            </div>
+        <section className="grid gap-4 border-b border-[rgba(255,255,255,0.08)] pb-6 md:pb-8">
+          <div className="grid gap-2">
+            <h1 className="font-mono text-[clamp(2rem,4vw,2.8rem)] font-bold uppercase tracking-tight text-neutral-50">
+              Copy Center
+            </h1>
+            <p className="max-w-2xl text-sm leading-7 text-neutral-400">
+              Follow live bots and manage cloned drafts.
+            </p>
           </div>
           <div className="flex flex-wrap gap-3">
             <button
@@ -553,48 +544,30 @@ export default function CopyPage() {
 
   return (
     <main className="shell grid gap-8 pb-10 md:pb-12">
-      <section className="grid gap-5 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[radial-gradient(circle_at_top_left,rgba(116,185,127,0.14),transparent_26%),radial-gradient(circle_at_bottom_right,rgba(220,232,93,0.12),transparent_24%),linear-gradient(135deg,#16181a,#0d0f10)] p-6 md:p-8">
-        <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr] lg:items-end">
-          <div className="grid gap-3">
-            <span className="label text-[#74b97f]">Copy Center</span>
-            <h1 className="font-mono text-[clamp(2.2rem,5vw,4.25rem)] font-extrabold uppercase leading-[0.92] tracking-[-0.05em] text-neutral-50">
-              Run your follow book with real controls.
-            </h1>
-            <p className="max-w-3xl text-sm leading-7 text-neutral-400 md:text-base">
-              Manage single mirrors, cloned drafts, and multi-bot baskets without leaving the operating desk.
-            </p>
-          </div>
-
-          <div className="grid gap-3 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-5">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Wallet in scope</span>
-              <span className="rounded-full border border-[rgba(255,255,255,0.08)] px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#74b97f]">
-                {refreshing ? "Refreshing" : "Live"}
-              </span>
-            </div>
-            <span className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
-              {formatWalletAddress(walletAddress)}
-            </span>
-            <p className="text-sm leading-7 text-neutral-400">
-              {lastSyncedAt ? `Last synced ${new Date(lastSyncedAt).toLocaleString()}.` : "Pull data from your linked wallet to see the latest follow state."}
-            </p>
-            <div className="flex flex-wrap gap-3">
-              <button
-                type="button"
-                onClick={() => void loadManagementData(true)}
-                disabled={loading || refreshing}
-                className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {refreshing ? "Refreshing..." : "Refresh data"}
-              </button>
-              <Link
-                href="/marketplace"
-                className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#74b97f] hover:text-[#74b97f]"
-              >
-                Find strategies
-              </Link>
-            </div>
-          </div>
+      <section className="flex flex-wrap items-end justify-between gap-4 border-b border-[rgba(255,255,255,0.08)] pb-6 md:pb-8">
+        <div className="grid gap-2">
+          <h1 className="font-mono text-[clamp(2rem,4vw,2.8rem)] font-bold uppercase tracking-tight text-neutral-50">
+            Copy Center
+          </h1>
+          <p className="max-w-2xl text-sm leading-7 text-neutral-400">
+            Manage follows, cloned drafts, and portfolio baskets.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={() => void loadManagementData(true)}
+            disabled={loading || refreshing}
+            className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {refreshing ? "Refreshing..." : "Refresh data"}
+          </button>
+          <Link
+            href="/marketplace"
+            className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-[#74b97f] hover:text-[#74b97f]"
+          >
+            Find strategies
+          </Link>
         </div>
       </section>
 
@@ -604,38 +577,6 @@ export default function CopyPage() {
         </article>
       ) : null}
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-        <article className="grid gap-1 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
-          <span className="label text-[#dce85d]">Active follows</span>
-          <span className="font-mono text-4xl font-bold uppercase text-neutral-50">{loading ? "--" : activeFollows}</span>
-          <p className="text-sm leading-6 text-neutral-400">Bots currently mirroring into your delegated wallet.</p>
-        </article>
-        <article className="grid gap-1 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
-          <span className="label text-[#74b97f]">Inactive follows</span>
-          <span className="font-mono text-4xl font-bold uppercase text-neutral-50">{loading ? "--" : pausedFollows}</span>
-          <p className="text-sm leading-6 text-neutral-400">Relationships you can resume after reviewing risk and sizing.</p>
-        </article>
-        <article className="grid gap-1 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
-          <span className="label text-[#dce85d]">Cloned drafts</span>
-          <span className="font-mono text-4xl font-bold uppercase text-neutral-50">{loading ? "--" : clones.length}</span>
-          <p className="text-sm leading-6 text-neutral-400">Private strategy copies ready for edits, deployment, or archive cleanup.</p>
-        </article>
-        <article className="grid gap-1 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
-          <span className="label text-[#74b97f]">Active baskets</span>
-          <span className="font-mono text-4xl font-bold uppercase text-neutral-50">{loading ? "--" : activePortfolios}</span>
-          <p className="text-sm leading-6 text-neutral-400">Portfolio books balancing multiple source bots at once.</p>
-        </article>
-        <article className="grid gap-1 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
-          <span className="label text-[#dce85d]">Basket capital</span>
-          <span className="font-mono text-3xl font-bold uppercase text-neutral-50">${loading ? "--" : totalPortfolioCapital.toLocaleString()}</span>
-          <p className="text-sm leading-6 text-neutral-400">Target notional assigned across every portfolio basket in this wallet.</p>
-        </article>
-        <article className="grid gap-1 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
-          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Risk acknowledgement</span>
-          <span className="font-mono text-xl font-bold uppercase text-neutral-50">Version v1</span>
-          <p className="text-sm leading-6 text-neutral-400">Scale changes apply to future mirrored actions, not retroactive fills.</p>
-        </article>
-      </section>
 
       {loading ? (
         <BasketComposerSkeleton />

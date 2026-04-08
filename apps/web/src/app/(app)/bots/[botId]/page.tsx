@@ -407,97 +407,36 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
 
   return (
     <main className="shell grid gap-6 pb-10 md:gap-8 md:pb-12">
-      <section className="grid gap-5 rounded-[2.2rem] border border-[rgba(255,255,255,0.06)] bg-[radial-gradient(circle_at_top_left,rgba(220,232,93,0.16),transparent_28%),radial-gradient(circle_at_80%_20%,rgba(116,185,127,0.12),transparent_24%),linear-gradient(135deg,#16181a,#0d0f10)] p-6 md:p-8">
-        <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr] xl:items-end">
-          <div className="grid gap-5">
-            <div className="flex flex-wrap gap-2">
-              <span className="rounded-full border border-[rgba(220,232,93,0.24)] bg-[#dce85d]/10 px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]">
-                Bot workspace
-              </span>
-              <span className="rounded-full border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.18em] text-neutral-300">
-                {visibleBot?.visibility ?? "draft"}
-              </span>
-            </div>
-
-            <div className="grid gap-3">
-              <h1 className="max-w-5xl font-mono text-[clamp(2.2rem,5vw,4.4rem)] font-extrabold uppercase leading-[0.9] tracking-[-0.06em] text-neutral-50">
-                {visibleBot?.name ?? (primaryLoading ? "Loading bot" : "Bot workspace")}
-              </h1>
-              <p className="max-w-3xl text-sm leading-7 text-neutral-400 md:text-base">
-                {visibleBot?.description ??
-                  "Open runtime health, performance, publishing, and live controls from one place."}
-              </p>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <HeroStat
-                label="Status"
-                value={runtime?.status ?? "draft"}
-                accent="text-neutral-50"
-                copy="Current runtime state"
-              />
-              <HeroStat
-                label="Health"
-                value={runtimeHealth}
-                accent="text-[#74b97f]"
-                copy="Latest runtime health"
-              />
-              <HeroStat
-                label="Strategy"
-                value={visibleBot?.strategy_type ?? "--"}
-                accent="text-[#dce85d]"
-                copy="Execution style"
-              />
-              <HeroStat
-                label="Success rate"
-                value={successRate}
-                accent="text-neutral-50"
-                copy="Latest 24h window"
-              />
-            </div>
-          </div>
-
-          <aside className="grid gap-4 rounded-[1.8rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10]/90 p-5">
-            <div className="grid gap-3 rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4">
-              <SignalLine label="Market scope" value={visibleBot?.market_scope ?? "--"} />
-              <SignalLine label="Build flow" value="Builder" />
-              <SignalLine label="Last event" value={lastRuntimeEvent} />
-            </div>
-
-            {runtimeReasons.length > 0 ? (
-              <div className="grid gap-2 rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4">
-                <span className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">
-                  Current notes
-                </span>
-                {runtimeReasons.map((reason) => (
-                  <p key={reason} className="text-sm leading-6 text-neutral-400">
-                    {reason}
-                  </p>
-                ))}
-              </div>
-            ) : null}
-
-            <div className="flex flex-wrap gap-3">
-              <Link
-                href={`/builder?botId=${encodeURIComponent(params.botId)}`}
-                className="rounded-full bg-[#dce85d] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d]"
-              >
-                Edit in builder
-              </Link>
-              <Link
-                href={`/backtests?botId=${encodeURIComponent(params.botId)}`}
-                className="rounded-full border border-[rgba(116,185,127,0.22)] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#74b97f] transition hover:border-[#74b97f] hover:bg-[#74b97f]/8"
-              >
-                Open backtests
-              </Link>
-              <Link
-                href="/bots"
-                className="rounded-full border border-[rgba(255,255,255,0.12)] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d]"
-              >
-                Back to my bots
-              </Link>
-            </div>
-          </aside>
+      <section className="flex flex-wrap items-end justify-between gap-4 border-b border-[rgba(255,255,255,0.08)] pb-6 md:pb-8">
+        <div className="grid gap-2">
+          <h1 className="font-mono text-[clamp(2rem,4vw,2.8rem)] font-bold uppercase tracking-tight text-neutral-50">
+            {visibleBot?.name ?? (primaryLoading ? "Loading bot" : "Bot workspace")}
+          </h1>
+          <p className="max-w-2xl text-sm leading-7 text-neutral-400">
+            {visibleBot?.strategy_type
+              ? `${visibleBot.strategy_type} bot workspace.`
+              : "Runtime, settings, and activity in one place."}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <Link
+            href={`/builder?botId=${encodeURIComponent(params.botId)}`}
+            className="rounded-full bg-[#dce85d] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d]"
+          >
+            Edit in builder
+          </Link>
+          <Link
+            href={`/backtests?botId=${encodeURIComponent(params.botId)}`}
+            className="rounded-full border border-[rgba(116,185,127,0.22)] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#74b97f] transition hover:border-[#74b97f] hover:bg-[#74b97f]/8"
+          >
+            Open backtests
+          </Link>
+          <Link
+            href="/bots"
+            className="rounded-full border border-[rgba(255,255,255,0.12)] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d]"
+          >
+            Back to my bots
+          </Link>
         </div>
       </section>
 
@@ -735,34 +674,6 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
   );
 }
 
-function HeroStat({
-  label,
-  value,
-  copy,
-  accent,
-}: {
-  label: string;
-  value: string;
-  copy: string;
-  accent: string;
-}) {
-  return (
-    <article className="grid gap-1 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] p-4">
-      <span className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">{label}</span>
-      <div className={`font-mono text-2xl font-bold uppercase ${accent}`}>{value}</div>
-      <p className="text-xs leading-6 text-neutral-400">{copy}</p>
-    </article>
-  );
-}
-
-function SignalLine({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-b border-[rgba(255,255,255,0.06)] pb-3 last:border-b-0 last:pb-0">
-      <span className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">{label}</span>
-      <span className="text-right text-sm font-semibold text-neutral-100">{value}</span>
-    </div>
-  );
-}
 
 function SectionIntro({
   eyebrow,
@@ -774,7 +685,7 @@ function SectionIntro({
   copy: string;
 }) {
   return (
-    <div className="grid gap-1">
+    <div className="grid gap-1 border-t border-[rgba(255,255,255,0.06)] pt-4">
       <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-400">
         {eyebrow}
       </span>
