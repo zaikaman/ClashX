@@ -31,6 +31,24 @@ class BotTrustService:
         definition: dict[str, Any],
         latest_snapshot: dict[str, Any] | None,
     ) -> dict[str, Any]:
+        overview = self.build_runtime_overview(
+            runtime=runtime,
+            definition=definition,
+            latest_snapshot=latest_snapshot,
+        )
+        passport = self._build_passport(definition=definition)
+        return {
+            **overview,
+            "passport": passport,
+        }
+
+    def build_runtime_overview(
+        self,
+        *,
+        runtime: dict[str, Any],
+        definition: dict[str, Any],
+        latest_snapshot: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         health_metrics = self._runtime_health_metrics(runtime)
         drift = self._build_drift(definition=definition, runtime=runtime, latest_snapshot=latest_snapshot)
         trust = self._build_trust(
@@ -39,11 +57,9 @@ class BotTrustService:
             health_metrics=health_metrics,
             drift=drift,
         )
-        passport = self._build_passport(definition=definition)
         return {
             "trust": trust,
             "drift": drift,
-            "passport": passport,
         }
 
     def get_creator_profile(self, *, creator_id: str, include_bots: bool = False) -> dict[str, Any]:

@@ -197,6 +197,7 @@ export type PublishingSettings = {
 };
 
 const publishingSettingsCache = new Map<string, PublishingSettings>();
+const leaderboardCandidateCache = new Map<number, { expiresAt: number; rows: LeaderboardCandidateRow[] }>();
 
 function publishingSettingsCacheKey(botId: string, walletAddress: string) {
   return `${botId}:${walletAddress}`;
@@ -230,6 +231,16 @@ export type LeaderboardRow = {
   drift: DriftMetrics;
   passport: StrategyPassport;
   creator: CreatorSummary;
+};
+
+export type LeaderboardCandidateRow = {
+  runtime_id: string;
+  bot_definition_id: string;
+  bot_name: string;
+  strategy_type: string;
+  rank: number;
+  drawdown: number;
+  trust: TrustMetrics;
 };
 
 export type RuntimeProfile = {
@@ -275,6 +286,30 @@ async function fetchJson<T>(path: string, signal?: AbortSignal): Promise<T> {
 
 export function fetchLeaderboard(limit = 50, signal?: AbortSignal) {
   return fetchJson<LeaderboardRow[]>(`/api/bot-copy/leaderboard?limit=${limit}`, signal);
+}
+
+export function readCachedLeaderboardCandidates(limit = 24) {
+  const cached = leaderboardCandidateCache.get(limit);
+  if (!cached || cached.expiresAt <= Date.now()) {
+    return [];
+  }
+  return cached.rows;
+}
+
+export async function fetchLeaderboardCandidates(limit = 24, signal?: AbortSignal) {
+  const cached = leaderboardCandidateCache.get(limit);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.rows;
+  }
+  const rows = await fetchJson<LeaderboardCandidateRow[]>(
+    `/api/bot-copy/leaderboard/candidates?limit=${limit}`,
+    signal,
+  );
+  leaderboardCandidateCache.set(limit, {
+    expiresAt: Date.now() + 60_000,
+    rows,
+  });
+  return rows;
 }
 
 export function fetchRuntimeProfile(runtimeId: string, signal?: AbortSignal) {

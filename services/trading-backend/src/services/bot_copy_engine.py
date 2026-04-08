@@ -28,12 +28,23 @@ class BotCopyEngine:
         self.builder_service = BotBuilderService()
         self.trust_service = BotTrustService()
 
-    async def get_or_refresh_leaderboard(self, db: Any, *, limit: int) -> list[dict]:
+    async def get_or_refresh_leaderboard(
+        self,
+        db: Any,
+        *,
+        limit: int,
+        include_creator: bool = True,
+        include_passport: bool = True,
+    ) -> list[dict]:
         del db
         latest = self.supabase.maybe_one("bot_leaderboard_snapshots", order="captured_at.desc")
         if latest is None or self._snapshot_is_stale(latest.get("captured_at")):
             rows = await self.leaderboard_engine.refresh_public_leaderboard(None, limit=limit)
-            return self._augment_public_rows(rows)
+            return self._augment_public_rows(
+                rows,
+                include_creator=include_creator,
+                include_passport=include_passport,
+            )
         snapshots = self.supabase.select("bot_leaderboard_snapshots", filters={"captured_at": latest["captured_at"]}, order="rank.asc", limit=limit)
         runtime_ids = [row["runtime_id"] for row in snapshots]
         runtimes = {row["id"]: row for row in self.supabase.select("bot_runtimes", filters={"id": ("in", runtime_ids)})} if runtime_ids else {}
@@ -48,7 +59,11 @@ class BotCopyEngine:
             if definition is None or definition["visibility"] != "public":
                 continue
             rows.append({"runtime_id": runtime["id"], "bot_definition_id": definition["id"], "bot_name": definition["name"], "strategy_type": definition["strategy_type"], "authoring_mode": definition["authoring_mode"], "rank": snapshot["rank"], "pnl_total": snapshot["pnl_total"], "pnl_unrealized": snapshot["pnl_unrealized"], "win_streak": snapshot["win_streak"], "drawdown": snapshot["drawdown"], "captured_at": snapshot["captured_at"]})
-        return self._augment_public_rows(rows)
+        return self._augment_public_rows(
+            rows,
+            include_creator=include_creator,
+            include_passport=include_passport,
+        )
 
     async def runtime_profile(self, db: Any, *, runtime_id: str) -> dict:
         del db
@@ -199,7 +214,7 @@ class BotCopyEngine:
     def list_relationships(self, db: Any, *, follower_wallet_address: str) -> list[dict]:
         del db
         rows = self.supabase.select("bot_copy_relationships", filters={"follower_wallet_address": follower_wallet_address}, order="updated_at.desc")
-        return [self.serialize_relationship(None, row) for row in rows]
+        return self._serialize_relationship_rows(rows)
 
     def list_clones(self, db: Any, *, wallet_address: str) -> list[dict]:
         del db
@@ -232,26 +247,7 @@ class BotCopyEngine:
 
     def serialize_relationship(self, db: Any, relationship: dict[str, Any]) -> dict:
         del db
-        source_runtime = self.supabase.maybe_one("bot_runtimes", filters={"id": relationship["source_runtime_id"]})
-        source_definition = self.supabase.maybe_one("bot_definitions", filters={"id": source_runtime["bot_definition_id"]}) if source_runtime else None
-        follower = self.supabase.maybe_one("users", filters={"id": relationship["follower_user_id"]})
-        return {
-            "id": relationship["id"],
-            "source_runtime_id": relationship["source_runtime_id"],
-            "source_bot_definition_id": source_definition["id"] if source_definition else "",
-            "source_bot_name": source_definition["name"] if source_definition else "Unknown",
-            "follower_user_id": relationship["follower_user_id"],
-            "follower_wallet_address": relationship["follower_wallet_address"],
-            "mode": relationship["mode"],
-            "scale_bps": relationship["scale_bps"],
-            "max_notional_usd": relationship.get("max_notional_usd"),
-            "portfolio_basket_id": relationship.get("portfolio_basket_id"),
-            "status": relationship["status"],
-            "risk_ack_version": relationship["risk_ack_version"],
-            "confirmed_at": relationship["confirmed_at"],
-            "updated_at": relationship["updated_at"],
-            "follower_display_name": follower.get("display_name") if follower else None,
-        }
+        return self._serialize_relationship_rows([relationship])[0]
 
     @staticmethod
     def _validate_scale_bps(scale_bps: int) -> None:
@@ -315,7 +311,13 @@ class BotCopyEngine:
             captured_at = captured_at.replace(tzinfo=UTC)
         return datetime.now(tz=UTC) - captured_at > timedelta(seconds=SNAPSHOT_TTL_SECONDS)
 
-    def _augment_public_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _augment_public_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        include_creator: bool,
+        include_passport: bool,
+    ) -> list[dict[str, Any]]:
         if not rows:
             return []
         runtime_ids = [row["runtime_id"] for row in rows]
@@ -338,15 +340,79 @@ class BotCopyEngine:
                 "drawdown": row["drawdown"],
                 "captured_at": row["captured_at"],
             }
-            public_context = self.trust_service.build_public_runtime_context(
-                runtime=runtime,
-                definition=definition,
-                latest_snapshot=snapshot,
+            public_context = (
+                self.trust_service.build_public_runtime_context(
+                    runtime=runtime,
+                    definition=definition,
+                    latest_snapshot=snapshot,
+                )
+                if include_passport
+                else self.trust_service.build_runtime_overview(
+                    runtime=runtime,
+                    definition=definition,
+                    latest_snapshot=snapshot,
+                )
             )
-            creator_id = str(definition["user_id"])
-            creator = creator_cache.get(creator_id)
-            if creator is None:
-                creator = self.trust_service.get_creator_profile(creator_id=creator_id, include_bots=False)
-                creator_cache[creator_id] = creator
-            enriched.append({**row, "trust": public_context["trust"], "drift": public_context["drift"], "passport": public_context["passport"], "creator": creator})
+            enriched_row = {
+                **row,
+                "trust": public_context["trust"],
+                "drift": public_context["drift"],
+            }
+            if include_passport:
+                enriched_row["passport"] = public_context["passport"]
+            if include_creator:
+                creator_id = str(definition["user_id"])
+                creator = creator_cache.get(creator_id)
+                if creator is None:
+                    creator = self.trust_service.get_creator_profile(creator_id=creator_id, include_bots=False)
+                    creator_cache[creator_id] = creator
+                enriched_row["creator"] = creator
+            enriched.append(enriched_row)
         return enriched
+
+    def _serialize_relationship_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not rows:
+            return []
+        runtime_ids = [str(row["source_runtime_id"]) for row in rows]
+        follower_ids = [str(row["follower_user_id"]) for row in rows]
+        runtimes = (
+            {row["id"]: row for row in self.supabase.select("bot_runtimes", filters={"id": ("in", runtime_ids)})}
+            if runtime_ids
+            else {}
+        )
+        definition_ids = [runtime["bot_definition_id"] for runtime in runtimes.values()]
+        definitions = (
+            {row["id"]: row for row in self.supabase.select("bot_definitions", filters={"id": ("in", definition_ids)})}
+            if definition_ids
+            else {}
+        )
+        followers = (
+            {row["id"]: row for row in self.supabase.select("users", filters={"id": ("in", follower_ids)})}
+            if follower_ids
+            else {}
+        )
+        serialized: list[dict[str, Any]] = []
+        for relationship in rows:
+            source_runtime = runtimes.get(relationship["source_runtime_id"])
+            source_definition = definitions.get(source_runtime["bot_definition_id"]) if source_runtime else None
+            follower = followers.get(relationship["follower_user_id"])
+            serialized.append(
+                {
+                    "id": relationship["id"],
+                    "source_runtime_id": relationship["source_runtime_id"],
+                    "source_bot_definition_id": source_definition["id"] if source_definition else "",
+                    "source_bot_name": source_definition["name"] if source_definition else "Unknown",
+                    "follower_user_id": relationship["follower_user_id"],
+                    "follower_wallet_address": relationship["follower_wallet_address"],
+                    "mode": relationship["mode"],
+                    "scale_bps": relationship["scale_bps"],
+                    "max_notional_usd": relationship.get("max_notional_usd"),
+                    "portfolio_basket_id": relationship.get("portfolio_basket_id"),
+                    "status": relationship["status"],
+                    "risk_ack_version": relationship["risk_ack_version"],
+                    "confirmed_at": relationship["confirmed_at"],
+                    "updated_at": relationship["updated_at"],
+                    "follower_display_name": follower.get("display_name") if follower else None,
+                }
+            )
+        return serialized

@@ -40,6 +40,16 @@ class BotLeaderboardRow(BaseModel):
     creator: "CreatorSummaryResponse"
 
 
+class BotLeaderboardCandidateRow(BaseModel):
+    runtime_id: str
+    bot_definition_id: str
+    bot_name: str
+    strategy_type: str
+    rank: int
+    drawdown: float
+    trust: "TrustMetricsResponse"
+
+
 class RuntimeEventSummary(BaseModel):
     id: str
     event_type: str
@@ -273,8 +283,29 @@ async def list_public_bot_leaderboard(
     db: Session = Depends(get_db),
 ) -> list[BotLeaderboardRow]:
     response.headers["Cache-Control"] = "public, max-age=15, stale-while-revalidate=45"
-    rows = await bot_copy_engine.get_or_refresh_leaderboard(db, limit=limit)
+    rows = await bot_copy_engine.get_or_refresh_leaderboard(
+        db,
+        limit=limit,
+        include_creator=True,
+        include_passport=True,
+    )
     return [BotLeaderboardRow.model_validate(row) for row in rows]
+
+
+@router.get("/leaderboard/candidates", response_model=list[BotLeaderboardCandidateRow])
+async def list_public_bot_leaderboard_candidates(
+    response: Response,
+    limit: int = Query(default=24, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> list[BotLeaderboardCandidateRow]:
+    response.headers["Cache-Control"] = "public, max-age=30, stale-while-revalidate=120"
+    rows = await bot_copy_engine.get_or_refresh_leaderboard(
+        db,
+        limit=limit,
+        include_creator=False,
+        include_passport=False,
+    )
+    return [BotLeaderboardCandidateRow.model_validate(row) for row in rows]
 
 
 @router.get("/leaderboard/{runtime_id}", response_model=BotRuntimeProfileResponse)

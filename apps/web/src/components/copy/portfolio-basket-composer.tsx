@@ -1,11 +1,12 @@
 "use client";
 
-import type { LeaderboardRow } from "@/lib/public-bots";
+import type { LeaderboardCandidateRow } from "@/lib/public-bots";
 import type { PortfolioDraft } from "@/lib/copy-portfolios";
 
 type PortfolioBasketComposerProps = {
   draft: PortfolioDraft;
-  candidates: LeaderboardRow[];
+  candidates: LeaderboardCandidateRow[];
+  candidatesLoading?: boolean;
   editingLabel?: string | null;
   submitting?: boolean;
   onDraftChange: (draft: PortfolioDraft) => void;
@@ -20,6 +21,7 @@ function formatScale(scaleBps: number) {
 export function PortfolioBasketComposer({
   draft,
   candidates,
+  candidatesLoading = false,
   editingLabel,
   submitting = false,
   onDraftChange,
@@ -33,7 +35,7 @@ export function PortfolioBasketComposer({
     onDraftChange({ ...draft, ...next });
   }
 
-  function addCandidate(candidate: LeaderboardRow) {
+  function addCandidate(candidate: LeaderboardCandidateRow) {
     if (selectedIds.has(candidate.runtime_id)) {
       return;
     }
@@ -325,32 +327,49 @@ export function PortfolioBasketComposer({
               <span className="text-sm text-neutral-400">Start from live public leaders. Weighting is normalized on save, so the basket always lands on a clean 100% mix.</span>
             </div>
             <div className="grid gap-3">
-              {candidates.slice(0, 8).map((candidate) => (
-                <article
-                  key={candidate.runtime_id}
-                  className="grid gap-3 rounded-[1.25rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4 md:grid-cols-[1fr_auto] md:items-center"
-                >
-                  <div className="grid gap-1">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <span className="font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">{candidate.bot_name}</span>
-                      <span className="rounded-full bg-[rgba(220,232,93,0.12)] px-2.5 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#dce85d]">
-                        Rank {candidate.rank}
-                      </span>
-                    </div>
-                    <p className="text-sm leading-6 text-neutral-400">
-                      {candidate.strategy_type} · Trust {candidate.trust.trust_score} · Drawdown {candidate.drawdown.toFixed(1)}%
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => addCandidate(candidate)}
-                    disabled={selectedIds.has(candidate.runtime_id)}
-                    className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d] disabled:cursor-not-allowed disabled:opacity-40"
+              {candidatesLoading && candidates.length === 0 ? (
+                Array.from({ length: 3 }).map((_, index) => (
+                  <div
+                    key={`candidate-loading-${index}`}
+                    className="grid gap-3 rounded-[1.25rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4"
                   >
-                    {selectedIds.has(candidate.runtime_id) ? "Added" : "Add to basket"}
-                  </button>
-                </article>
-              ))}
+                    <div className="skeleton h-5 w-40 rounded-md" />
+                    <div className="skeleton h-4 w-56 rounded-sm" />
+                    <div className="skeleton h-10 w-32 rounded-full" />
+                  </div>
+                ))
+              ) : candidates.length === 0 ? (
+                <div className="rounded-[1.25rem] border border-dashed border-[rgba(255,255,255,0.08)] px-4 py-5 text-sm leading-6 text-neutral-400">
+                  Public candidates are still warming up. Check back in a moment.
+                </div>
+              ) : (
+                candidates.slice(0, 8).map((candidate) => (
+                  <article
+                    key={candidate.runtime_id}
+                    className="grid gap-3 rounded-[1.25rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4 md:grid-cols-[1fr_auto] md:items-center"
+                  >
+                    <div className="grid gap-1">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span className="font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">{candidate.bot_name}</span>
+                        <span className="rounded-full bg-[rgba(220,232,93,0.12)] px-2.5 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#dce85d]">
+                          Rank {candidate.rank}
+                        </span>
+                      </div>
+                      <p className="text-sm leading-6 text-neutral-400">
+                        {candidate.strategy_type} / Trust {candidate.trust.trust_score} / Drawdown {candidate.drawdown.toFixed(1)}%
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => addCandidate(candidate)}
+                      disabled={selectedIds.has(candidate.runtime_id)}
+                      className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {selectedIds.has(candidate.runtime_id) ? "Added" : "Add to basket"}
+                    </button>
+                  </article>
+                ))
+              )}
             </div>
           </div>
 
@@ -364,7 +383,7 @@ export function PortfolioBasketComposer({
               {submitting ? "Saving..." : editingLabel ? "Update basket" : "Create basket"}
             </button>
             <div className="inline-flex min-h-12 self-start items-center rounded-full border border-[rgba(255,255,255,0.08)] bg-[#111315] px-4 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
-              {draft.members.length} member{draft.members.length === 1 ? "" : "s"} · ${draft.target_notional_usd.toLocaleString()}
+              {draft.members.length} member{draft.members.length === 1 ? "" : "s"} / ${draft.target_notional_usd.toLocaleString()}
             </div>
           </div>
         </div>

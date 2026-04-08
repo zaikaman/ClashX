@@ -1,10 +1,9 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { PortfolioBasketComposer } from "@/components/copy/portfolio-basket-composer";
-import { PortfolioHealthPanel } from "@/components/copy/portfolio-health-panel";
 import {
   createEmptyPortfolioDraft,
   draftFromPortfolio,
@@ -12,7 +11,11 @@ import {
   type PortfolioDraft,
 } from "@/lib/copy-portfolios";
 import { useClashxAuth } from "@/lib/clashx-auth";
-import { fetchLeaderboard, type LeaderboardRow } from "@/lib/public-bots";
+import {
+  fetchLeaderboardCandidates,
+  readCachedLeaderboardCandidates,
+  type LeaderboardCandidateRow,
+} from "@/lib/public-bots";
 
 type BotCopyRelationship = {
   id: string;
@@ -47,6 +50,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8
 const SCALE_MIN_BPS = 500;
 const SCALE_MAX_BPS = 30_000;
 const SCALE_STEP_BPS = 500;
+const CANDIDATE_LIMIT = 24;
 
 function formatWalletAddress(walletAddress: string | null) {
   if (!walletAddress) {
@@ -184,6 +188,20 @@ function BasketComposerSkeleton() {
   );
 }
 
+const PortfolioBasketComposer = dynamic(
+  () => import("@/components/copy/portfolio-basket-composer").then((module) => module.PortfolioBasketComposer),
+  {
+    loading: () => <BasketComposerSkeleton />,
+  },
+);
+
+const PortfolioHealthPanel = dynamic(
+  () => import("@/components/copy/portfolio-health-panel").then((module) => module.PortfolioHealthPanel),
+  {
+    loading: () => <LoadingCard />,
+  },
+);
+
 function serializePortfolioDraft(draft: PortfolioDraft) {
   return {
     name: draft.name,
@@ -207,8 +225,11 @@ export default function CopyPage() {
   const [relationships, setRelationships] = useState<BotCopyRelationship[]>([]);
   const [clones, setClones] = useState<CloneListItem[]>([]);
   const [portfolios, setPortfolios] = useState<PortfolioBasket[]>([]);
-  const [candidateBots, setCandidateBots] = useState<LeaderboardRow[]>([]);
+  const [candidateBots, setCandidateBots] = useState<LeaderboardCandidateRow[]>(() =>
+    readCachedLeaderboardCandidates(CANDIDATE_LIMIT),
+  );
   const [loading, setLoading] = useState(true);
+  const [candidateBotsLoading, setCandidateBotsLoading] = useState(candidateBots.length === 0);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
@@ -226,10 +247,10 @@ export default function CopyPage() {
         setRelationships([]);
         setClones([]);
         setPortfolios([]);
-        setCandidateBots([]);
         setError(null);
         setLastSyncedAt(null);
         setLoading(false);
+        setCandidateBotsLoading(false);
         return;
       }
 
@@ -241,7 +262,7 @@ export default function CopyPage() {
 
       try {
         const headers = await getAuthHeaders();
-        const [relationshipsResponse, clonesResponse, portfoliosResponse, leaderboardRows] = await Promise.all([
+        const [relationshipsResponse, clonesResponse, portfoliosResponse] = await Promise.all([
           fetch(`${API_BASE_URL}/api/bot-copy?wallet_address=${encodeURIComponent(walletAddress)}`, {
             cache: "no-store",
             headers,
@@ -254,7 +275,6 @@ export default function CopyPage() {
             cache: "no-store",
             headers,
           }),
-          fetchLeaderboard(24),
         ]);
 
         const relationshipsPayload = await parseJson<BotCopyRelationship[]>(relationshipsResponse);
@@ -282,7 +302,6 @@ export default function CopyPage() {
         setRelationships(relationshipsPayload as BotCopyRelationship[]);
         setClones(clonesPayload as CloneListItem[]);
         setPortfolios(portfoliosPayload as PortfolioBasket[]);
-        setCandidateBots(leaderboardRows);
         setError(null);
         setLastSyncedAt(new Date().toISOString());
       } catch (loadError) {
@@ -295,12 +314,32 @@ export default function CopyPage() {
     [authenticated, getAuthHeaders, walletAddress],
   );
 
+  const loadCandidateBots = useCallback(async () => {
+    if (!authenticated) {
+      setCandidateBots([]);
+      setCandidateBotsLoading(false);
+      return;
+    }
+
+    setCandidateBotsLoading(readCachedLeaderboardCandidates(CANDIDATE_LIMIT).length === 0);
+
+    try {
+      const rows = await fetchLeaderboardCandidates(CANDIDATE_LIMIT);
+      setCandidateBots(rows);
+    } catch {
+      // Keep the rest of the page interactive if the public candidate feed is slow.
+    } finally {
+      setCandidateBotsLoading(false);
+    }
+  }, [authenticated]);
+
   useEffect(() => {
     if (!ready) {
       return;
     }
     void loadManagementData();
-  }, [loadManagementData, ready]);
+    void loadCandidateBots();
+  }, [loadCandidateBots, loadManagementData, ready]);
 
   useEffect(() => {
     setScaleDrafts((current) => {
@@ -584,6 +623,7 @@ export default function CopyPage() {
         <PortfolioBasketComposer
           draft={portfolioDraft}
           candidates={candidateBots}
+          candidatesLoading={candidateBotsLoading}
           editingLabel={editingPortfolioId ? "Editing basket" : null}
           submitting={savingPortfolio}
           onDraftChange={setPortfolioDraft}

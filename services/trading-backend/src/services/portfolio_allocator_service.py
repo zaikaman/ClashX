@@ -25,7 +25,7 @@ class PortfolioAllocatorService:
 
     def list_portfolios(self, *, wallet_address: str) -> list[dict[str, Any]]:
         baskets = self.supabase.select("portfolio_baskets", filters={"wallet_address": wallet_address}, order="updated_at.desc")
-        return [self._build_portfolio_payload(basket) for basket in baskets]
+        return self._build_portfolio_payloads(baskets)
 
     def get_portfolio(self, *, portfolio_id: str, wallet_address: str | None = None) -> dict[str, Any]:
         basket = self._require_basket(portfolio_id=portfolio_id, wallet_address=wallet_address)
@@ -237,32 +237,64 @@ class PortfolioAllocatorService:
         return detail
 
     def _build_portfolio_payload(self, basket: dict[str, Any]) -> dict[str, Any]:
-        policy = self.supabase.maybe_one("portfolio_risk_policies", filters={"portfolio_basket_id": basket["id"]}) or {}
-        members = self.supabase.select("portfolio_allocation_members", filters={"portfolio_basket_id": basket["id"]}, order="created_at.asc")
-        history = self.supabase.select("portfolio_rebalance_events", filters={"portfolio_basket_id": basket["id"]}, order="created_at.desc", limit=8)
-        contexts = self._build_member_contexts(basket=basket, members=members)
-        health = self.portfolio_risk_service.evaluate_portfolio(basket=basket, risk_policy=policy, member_contexts=contexts)
-        return {
-            "id": basket["id"],
-            "owner_user_id": basket["owner_user_id"],
-            "wallet_address": basket["wallet_address"],
-            "name": basket["name"],
-            "description": basket.get("description") or "",
-            "status": basket["status"],
-            "rebalance_mode": basket["rebalance_mode"],
-            "rebalance_interval_minutes": int(basket.get("rebalance_interval_minutes") or 60),
-            "drift_threshold_pct": float(basket.get("drift_threshold_pct") or 6.0),
-            "target_notional_usd": float(basket.get("target_notional_usd") or 0.0),
-            "current_notional_usd": float(basket.get("current_notional_usd") or 0.0),
-            "kill_switch_reason": basket.get("kill_switch_reason"),
-            "last_rebalanced_at": basket.get("last_rebalanced_at"),
-            "created_at": basket["created_at"],
-            "updated_at": basket["updated_at"],
-            "risk_policy": self.portfolio_risk_service.normalize_policy(policy),
-            "members": [self._serialize_member_context(context) for context in contexts],
-            "health": health,
-            "rebalance_history": history,
-        }
+        return self._build_portfolio_payloads([basket])[0]
+
+    def _build_portfolio_payloads(self, baskets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not baskets:
+            return []
+        basket_ids = [str(basket["id"]) for basket in baskets]
+        policies = self.supabase.select("portfolio_risk_policies", filters={"portfolio_basket_id": ("in", basket_ids)})
+        policies_by_basket = {str(policy["portfolio_basket_id"]): policy for policy in policies}
+        members = self.supabase.select(
+            "portfolio_allocation_members",
+            filters={"portfolio_basket_id": ("in", basket_ids)},
+            order="created_at.asc",
+        )
+        contexts_by_basket = self._build_member_contexts_by_basket(baskets=baskets, members=members)
+        history_rows = self.supabase.select(
+            "portfolio_rebalance_events",
+            filters={"portfolio_basket_id": ("in", basket_ids)},
+            order="created_at.desc",
+        )
+        history_by_basket: dict[str, list[dict[str, Any]]] = {}
+        for event in history_rows:
+            basket_id = str(event["portfolio_basket_id"])
+            if len(history_by_basket.setdefault(basket_id, [])) < 8:
+                history_by_basket[basket_id].append(event)
+        payloads: list[dict[str, Any]] = []
+        for basket in baskets:
+            basket_id = str(basket["id"])
+            policy = policies_by_basket.get(basket_id) or {}
+            contexts = contexts_by_basket.get(basket_id, [])
+            health = self.portfolio_risk_service.evaluate_portfolio(
+                basket=basket,
+                risk_policy=policy,
+                member_contexts=contexts,
+            )
+            payloads.append(
+                {
+                    "id": basket["id"],
+                    "owner_user_id": basket["owner_user_id"],
+                    "wallet_address": basket["wallet_address"],
+                    "name": basket["name"],
+                    "description": basket.get("description") or "",
+                    "status": basket["status"],
+                    "rebalance_mode": basket["rebalance_mode"],
+                    "rebalance_interval_minutes": int(basket.get("rebalance_interval_minutes") or 60),
+                    "drift_threshold_pct": float(basket.get("drift_threshold_pct") or 6.0),
+                    "target_notional_usd": float(basket.get("target_notional_usd") or 0.0),
+                    "current_notional_usd": float(basket.get("current_notional_usd") or 0.0),
+                    "kill_switch_reason": basket.get("kill_switch_reason"),
+                    "last_rebalanced_at": basket.get("last_rebalanced_at"),
+                    "created_at": basket["created_at"],
+                    "updated_at": basket["updated_at"],
+                    "risk_policy": self.portfolio_risk_service.normalize_policy(policy),
+                    "members": [self._serialize_member_context(context) for context in contexts],
+                    "health": health,
+                    "rebalance_history": history_by_basket.get(basket_id, []),
+                }
+            )
+        return payloads
 
     def _serialize_member_context(self, context: dict[str, Any]) -> dict[str, Any]:
         member = context["member"]
@@ -290,20 +322,50 @@ class PortfolioAllocatorService:
         }
 
     def _build_member_contexts(self, *, basket: dict[str, Any], members: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        runtime_ids = [member["source_runtime_id"] for member in members]
-        runtimes = {row["id"]: row for row in self.supabase.select("bot_runtimes", filters={"id": ("in", runtime_ids)})} if runtime_ids else {}
-        definition_ids = [runtime["bot_definition_id"] for runtime in runtimes.values()]
-        definitions = {row["id"]: row for row in self.supabase.select("bot_definitions", filters={"id": ("in", definition_ids)})} if definition_ids else {}
-        relationship_ids = [member["relationship_id"] for member in members if member.get("relationship_id")]
-        relationships = {row["id"]: row for row in self.supabase.select("bot_copy_relationships", filters={"id": ("in", relationship_ids)})} if relationship_ids else {}
+        return self._build_member_contexts_by_basket(baskets=[basket], members=members).get(str(basket["id"]), [])
+
+    def _build_member_contexts_by_basket(
+        self,
+        *,
+        baskets: list[dict[str, Any]],
+        members: list[dict[str, Any]],
+    ) -> dict[str, list[dict[str, Any]]]:
+        if not members:
+            return {str(basket["id"]): [] for basket in baskets}
+        baskets_by_id = {str(basket["id"]): basket for basket in baskets}
+        runtime_ids = list({str(member["source_runtime_id"]) for member in members})
+        runtimes = (
+            {row["id"]: row for row in self.supabase.select("bot_runtimes", filters={"id": ("in", runtime_ids)})}
+            if runtime_ids
+            else {}
+        )
+        definition_ids = list({str(runtime["bot_definition_id"]) for runtime in runtimes.values()})
+        definitions = (
+            {row["id"]: row for row in self.supabase.select("bot_definitions", filters={"id": ("in", definition_ids)})}
+            if definition_ids
+            else {}
+        )
+        relationship_ids = [str(member["relationship_id"]) for member in members if member.get("relationship_id")]
+        relationships = (
+            {row["id"]: row for row in self.supabase.select("bot_copy_relationships", filters={"id": ("in", relationship_ids)})}
+            if relationship_ids
+            else {}
+        )
         snapshots = {row["runtime_id"]: row for row in self._load_latest_snapshots(runtime_ids)}
-        contexts: list[dict[str, Any]] = []
+        contexts_by_basket: dict[str, list[dict[str, Any]]] = {str(basket["id"]): [] for basket in baskets}
         for member in members:
+            basket = baskets_by_id.get(str(member["portfolio_basket_id"]))
+            if basket is None:
+                continue
             runtime = runtimes.get(member["source_runtime_id"])
             definition = definitions.get(runtime["bot_definition_id"]) if isinstance(runtime, dict) else None
             latest_snapshot = snapshots.get(member["source_runtime_id"])
             public_context = (
-                self.trust_service.build_public_runtime_context(runtime=runtime, definition=definition, latest_snapshot=latest_snapshot)
+                self.trust_service.build_runtime_overview(
+                    runtime=runtime,
+                    definition=definition,
+                    latest_snapshot=latest_snapshot,
+                )
                 if isinstance(runtime, dict) and isinstance(definition, dict)
                 else {"trust": {}, "drift": {}}
             )
@@ -312,7 +374,7 @@ class PortfolioAllocatorService:
                 if isinstance(runtime, dict)
                 else {"member_live_pnl_pct": 0.0, "member_drawdown_pct": 0.0, "scale_drift_pct": 0.0}
             )
-            contexts.append(
+            contexts_by_basket[str(basket["id"])].append(
                 {
                     "basket": basket,
                     "member": member,
@@ -327,7 +389,7 @@ class PortfolioAllocatorService:
                     **member_snapshot,
                 }
             )
-        return contexts
+        return contexts_by_basket
 
     def _build_member_rows(
         self,
@@ -436,12 +498,20 @@ class PortfolioAllocatorService:
         return {row["id"]: row for row in rows}
 
     def _load_latest_snapshots(self, runtime_ids: list[str]) -> list[dict[str, Any]]:
-        snapshots: list[dict[str, Any]] = []
-        for runtime_id in runtime_ids:
-            row = self.supabase.maybe_one("bot_leaderboard_snapshots", filters={"runtime_id": runtime_id}, order="captured_at.desc")
-            if row is not None:
-                snapshots.append(row)
-        return snapshots
+        if not runtime_ids:
+            return []
+        rows = self.supabase.select(
+            "bot_leaderboard_snapshots",
+            columns="runtime_id,rank,pnl_total,pnl_unrealized,win_streak,drawdown,captured_at",
+            filters={"runtime_id": ("in", runtime_ids)},
+            order="captured_at.desc",
+        )
+        snapshots_by_runtime: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            runtime_id = str(row["runtime_id"])
+            if runtime_id not in snapshots_by_runtime:
+                snapshots_by_runtime[runtime_id] = row
+        return list(snapshots_by_runtime.values())
 
     def _record_rebalance_event(self, *, portfolio_basket_id: str, trigger: str, status: str, summary_json: dict[str, Any]) -> None:
         self.supabase.insert(
