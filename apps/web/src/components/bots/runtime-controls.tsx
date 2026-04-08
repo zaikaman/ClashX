@@ -205,7 +205,7 @@ export function RuntimeControls({
             <PolicyStat label="Max drawdown" value={`${riskPolicy.maxDrawdownPct}%`} />
             <PolicyStat
               label="Market scope"
-              value={riskPolicy.allowedSymbols.trim().length > 0 ? riskPolicy.allowedSymbols : "All supported"}
+              value={riskPolicy.allowedSymbols.trim().length > 0 ? riskPolicy.allowedSymbols.split(',').join(', ') : "All supported"}
             />
             <PolicyStat label="Sizing mode" value={riskPolicy.sizingMode.replaceAll("_", " ")} />
             <PolicyStat
@@ -291,9 +291,9 @@ export function RuntimeControls({
 
 function PolicyStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-[1.2rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-3">
+    <div className="rounded-[1.2rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-3 min-w-0">
       <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">{label}</div>
-      <div className="mt-2 text-sm text-neutral-200">{value}</div>
+      <div className="mt-2 text-sm text-neutral-200 line-clamp-2" title={value}>{value}</div>
     </div>
   );
 }
