@@ -20,38 +20,51 @@ class RuntimeObservabilityService:
         del db, user_id
         runtime = self._resolve_runtime(bot_id=bot_id, wallet_address=wallet_address)
         if runtime is None:
-            return {
-                "health": {
-                    "runtime_id": None,
-                    "health": "not_deployed",
-                    "status": "draft",
-                    "mode": "live",
-                    "last_runtime_update": None,
-                    "last_event_at": None,
-                    "heartbeat_age_seconds": None,
-                    "error_rate_recent": 0.0,
-                    "reasons": ["Runtime has not been deployed yet"],
-                },
-                "metrics": {
-                    "runtime_id": "",
-                    "status": "draft",
-                    "uptime_seconds": None,
-                    "window_hours": 24,
-                    "events_total": 0,
-                    "actions_total": 0,
-                    "actions_success": 0,
-                    "actions_error": 0,
-                    "actions_skipped": 0,
-                    "success_rate": 1.0,
-                    "status_counts": {},
-                    "event_type_counts": {},
-                    "failure_reasons": [],
-                    "recent_failures": [],
-                    "last_event_at": None,
-                },
-            }
+            return self._draft_overview_payload()
         snapshot = self._build_snapshot(runtime)
         return {"health": self._build_health_payload(snapshot), "metrics": self._build_metrics_payload(snapshot)}
+
+    def get_overviews_for_wallet(
+        self,
+        db: Any,
+        *,
+        wallet_address: str,
+        user_id: str,
+    ) -> dict[str, dict[str, Any]]:
+        del db, user_id
+        definitions = self._supabase.select("bot_definitions", filters={"wallet_address": wallet_address})
+        if not definitions:
+            return {}
+
+        runtimes = self._supabase.select("bot_runtimes", filters={"wallet_address": wallet_address})
+        runtime_by_bot_id = {
+            str(runtime.get("bot_definition_id") or "").strip(): runtime
+            for runtime in runtimes
+            if str(runtime.get("bot_definition_id") or "").strip()
+        }
+        runtime_ids = [
+            str(runtime.get("id") or "").strip()
+            for runtime in runtimes
+            if str(runtime.get("id") or "").strip()
+        ]
+        events_by_runtime = self._load_runtime_events_map(runtime_ids)
+        now = datetime.now(tz=UTC)
+
+        overviews_by_bot: dict[str, dict[str, Any]] = {}
+        for definition in definitions:
+            bot_id = str(definition.get("id") or "").strip()
+            if not bot_id:
+                continue
+            runtime = runtime_by_bot_id.get(bot_id)
+            if runtime is None:
+                overviews_by_bot[bot_id] = self._draft_overview_payload()
+                continue
+            snapshot = self._build_snapshot(runtime, events=events_by_runtime.get(str(runtime["id"]), []), now=now)
+            overviews_by_bot[bot_id] = {
+                "health": self._build_health_payload(snapshot),
+                "metrics": self._build_metrics_payload(snapshot),
+            }
+        return overviews_by_bot
 
     def get_metrics(self, db: Any, *, bot_id: str, wallet_address: str, user_id: str) -> dict[str, Any]:
         del db, user_id
@@ -123,19 +136,84 @@ class RuntimeObservabilityService:
             raise ValueError("Bot not found")
         return self._supabase.maybe_one("bot_runtimes", filters={"bot_definition_id": definition["id"], "wallet_address": wallet_address})
 
-    def _build_snapshot(self, runtime: dict[str, Any]) -> dict[str, Any]:
-        now = datetime.now(tz=UTC)
-        window_start = now - timedelta(hours=24)
-        events = self._supabase.select("bot_execution_events", filters={"runtime_id": runtime["id"]}, order="created_at.desc", limit=500)
-        recent_window = [event for event in events if self._as_datetime(event["created_at"]) >= window_start]
+    def _build_snapshot(
+        self,
+        runtime: dict[str, Any],
+        *,
+        events: list[dict[str, Any]] | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        resolved_now = now or datetime.now(tz=UTC)
+        window_start = resolved_now - timedelta(hours=24)
+        resolved_events = events
+        if resolved_events is None:
+            resolved_events = self._supabase.select(
+                "bot_execution_events",
+                filters={"runtime_id": runtime["id"]},
+                order="created_at.desc",
+                limit=500,
+            )
+        recent_window = [event for event in resolved_events if self._as_datetime(event["created_at"]) >= window_start]
         return {
             "runtime": runtime,
-            "events": events,
+            "events": resolved_events,
             "recent_window": recent_window,
             "runtime_updated_at": self._as_datetime(runtime["updated_at"]),
             "runtime_deployed_at": runtime.get("deployed_at"),
-            "now": now,
+            "now": resolved_now,
         }
+
+    def _draft_overview_payload(self) -> dict[str, Any]:
+        return {
+            "health": {
+                "runtime_id": None,
+                "health": "not_deployed",
+                "status": "draft",
+                "mode": "live",
+                "last_runtime_update": None,
+                "last_event_at": None,
+                "heartbeat_age_seconds": None,
+                "error_rate_recent": 0.0,
+                "reasons": ["Runtime has not been deployed yet"],
+            },
+            "metrics": {
+                "runtime_id": "",
+                "status": "draft",
+                "uptime_seconds": None,
+                "window_hours": 24,
+                "events_total": 0,
+                "actions_total": 0,
+                "actions_success": 0,
+                "actions_error": 0,
+                "actions_skipped": 0,
+                "success_rate": 1.0,
+                "status_counts": {},
+                "event_type_counts": {},
+                "failure_reasons": [],
+                "recent_failures": [],
+                "last_event_at": None,
+            },
+        }
+
+    def _load_runtime_events_map(self, runtime_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+        normalized_runtime_ids = [runtime_id for runtime_id in runtime_ids if runtime_id]
+        if not normalized_runtime_ids:
+            return {}
+
+        rows = self._supabase.select(
+            "bot_execution_events",
+            columns="id,runtime_id,event_type,decision_summary,status,error_reason,created_at",
+            filters={"runtime_id": ("in", normalized_runtime_ids)},
+            order="created_at.desc",
+            limit=max(500, len(normalized_runtime_ids) * 500),
+        )
+        events_by_runtime: dict[str, list[dict[str, Any]]] = {runtime_id: [] for runtime_id in normalized_runtime_ids}
+        for row in rows:
+            runtime_id = str(row.get("runtime_id") or "").strip()
+            if runtime_id not in events_by_runtime or len(events_by_runtime[runtime_id]) >= 500:
+                continue
+            events_by_runtime[runtime_id].append(row)
+        return events_by_runtime
 
     def _build_metrics_payload(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         runtime = snapshot["runtime"]

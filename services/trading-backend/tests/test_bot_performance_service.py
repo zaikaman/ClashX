@@ -394,6 +394,37 @@ def test_runtime_performance_is_scoped_to_each_runtime() -> None:
     assert performance_b["pnl_total_pct"] == -10.0
 
 
+def test_batch_runtime_performance_map_scopes_results_to_each_runtime() -> None:
+    fake_supabase = FakeSupabaseRestClient(_tables())
+    fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = [
+        {
+            "symbol": "BTC",
+            "side": "bid",
+            "amount": 1.0,
+            "entry_price": 100.0,
+            "mark_price": 110.0,
+        },
+        {
+            "symbol": "ETH",
+            "side": "bid",
+            "amount": 2.0,
+            "entry_price": 50.0,
+            "mark_price": 40.0,
+        },
+    ]
+    service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=fake_supabase)
+
+    runtimes = fake_supabase.select("bot_runtimes", filters={"wallet_address": "shared-wallet"})
+    performance_by_runtime = asyncio.run(service.calculate_runtimes_performance_map(runtimes))
+
+    assert performance_by_runtime["runtime-a"]["positions"][0]["symbol"] == "BTC"
+    assert performance_by_runtime["runtime-a"]["pnl_total"] == 10.0
+    assert performance_by_runtime["runtime-b"]["positions"][0]["symbol"] == "ETH"
+    assert performance_by_runtime["runtime-b"]["pnl_total"] == -20.0
+    assert fake_pacifica.position_history_requests[0] == ("shared-wallet", 200, 0)
+
+
 def test_runtime_performance_falls_back_when_order_history_fill_amounts_are_zero() -> None:
     fake_supabase = FakeSupabaseRestClient(
         {

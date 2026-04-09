@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
-  LayoutDashboard, Box, Home, X, ShoppingBag,
+  Activity, BarChart3, LayoutDashboard, Box, Home, X, ShoppingBag,
   Trophy, Menu, FlaskConical
 } from "lucide-react";
 import { clsx } from "clsx";
@@ -18,6 +18,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   const navItems = [
+    { href: '/dashboard', label: 'Dashboard', icon: Activity },
+    { href: '/analytics', label: 'Analytics', icon: BarChart3 },
     { href: '/marketplace', label: 'Marketplace', icon: Trophy },
     { href: '/builder', label: 'Builder Studio', icon: Box },
     { href: '/bots', label: 'My Bots', icon: LayoutDashboard },

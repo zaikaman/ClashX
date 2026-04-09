@@ -50,6 +50,16 @@ export const appNavGroups: AppNavGroup[] = [
     label: "Operate",
     items: [
       {
+        href: "/dashboard",
+        label: "Dashboard",
+        description: "See live bots, open trades, and runtime alerts in one place.",
+      },
+      {
+        href: "/analytics",
+        label: "Analytics",
+        description: "Compare fleet performance, exposure concentration, and action quality.",
+      },
+      {
         href: "/bots",
         label: "My bots",
         description: "Open drafts, runtimes, and health details.",
@@ -67,6 +77,8 @@ export const appWorkflow = [
   { href: "/marketplace", label: "Browse the marketplace" },
   { href: "/builder", label: "Draft a strategy" },
   { href: "/bots", label: "Deploy and monitor" },
+  { href: "/dashboard", label: "Watch the fleet" },
+  { href: "/analytics", label: "Read the analytics" },
   { href: "/copy", label: "Follow or clone a winner" },
 ];
 
@@ -165,6 +177,42 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
       actions: [
         { href: "/bots", label: "Open my bots", tone: "primary" },
         { href: "/marketplace", label: "Open marketplace", tone: "secondary" },
+      ],
+    };
+  }
+
+  if (normalizedPathname === "/dashboard") {
+    return {
+      eyebrow: "Fleet dashboard",
+      title: "Monitor every bot from one control room",
+      description: "Use this page to answer the operational questions fast: which bots are live, which trades are open, and which runtimes need attention now.",
+      guidanceTitle: "Use this desk",
+      guidance: [
+        "Start with the attention queue so operational risks surface before you drill into a bot.",
+        "Use the open trade radar when you need to confirm current exposure across the whole fleet.",
+        "Jump into one bot only after the fleet-level board tells you where the real issue is.",
+      ],
+      actions: [
+        { href: "/analytics", label: "Open analytics", tone: "primary" },
+        { href: "/bots", label: "Open my bots", tone: "secondary" },
+      ],
+    };
+  }
+
+  if (normalizedPathname === "/analytics") {
+    return {
+      eyebrow: "Fleet analytics",
+      title: "Read deeper cross-bot performance and runtime quality",
+      description: "Use rankings, concentration views, and failure pressure to understand how the fleet behaves beyond the per-bot view.",
+      guidanceTitle: "Use this desk",
+      guidance: [
+        "Read performance and exposure together so one strong bot does not hide concentrated risk elsewhere.",
+        "Use the health matrix to spot runtimes that are still active but degrading quietly.",
+        "Track failure pressure by reason so you fix repeated issues instead of chasing isolated events.",
+      ],
+      actions: [
+        { href: "/dashboard", label: "Open dashboard", tone: "primary" },
+        { href: "/bots", label: "Open my bots", tone: "secondary" },
       ],
     };
   }

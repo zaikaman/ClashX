@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import asyncio
 from datetime import datetime
 from typing import Literal
 from typing import Any
@@ -289,23 +287,19 @@ async def list_bots(
             resolved_wallet
         )
         manual_close_history = await bot_performance_service.load_position_history_for_wallet(resolved_wallet)
-        performance_payloads = await asyncio.gather(
-            *[
-                bot_performance_service.calculate_runtime_performance(
-                    runtime,
-                    market_lookup=market_lookup,
-                    live_position_lookup=live_position_lookup,
-                    manual_close_history=manual_close_history,
-                    live_positions_loaded=live_positions_loaded,
-                )
-                if runtime is not None
-                else asyncio.sleep(0, result=None)
-                for runtime in (runtimes.get(row["id"]) for row in definitions)
-            ]
+        performance_by_runtime = await bot_performance_service.calculate_runtimes_performance_map(
+            runtimes_for_wallet,
+            market_lookup=market_lookup,
+            live_position_lookup=live_position_lookup,
+            manual_close_history=manual_close_history,
+            live_positions_loaded=live_positions_loaded,
         )
         performances = [
-            RuntimePerformanceResponse.model_validate(payload) if payload is not None else None
-            for payload in performance_payloads
+            RuntimePerformanceResponse.model_validate(payload)
+            if (payload := performance_by_runtime.get(str((runtimes.get(row["id"]) or {}).get("id") or "").strip()))
+            is not None
+            else None
+            for row in definitions
         ]
     else:
         performances = [None] * len(definitions)
@@ -352,6 +346,26 @@ def create_bot(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return BotDefinitionResponse.model_validate(bot)
+
+
+@router.get("/runtime-overviews", response_model=dict[str, RuntimeOverviewResponse])
+def list_runtime_overviews(
+    response: Response,
+    wallet_address: str | None = Query(default=None, min_length=8),
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> dict[str, RuntimeOverviewResponse]:
+    response.headers["Cache-Control"] = "private, max-age=2, stale-while-revalidate=8"
+    resolved_wallet = _resolve_wallet(user, wallet_address)
+    payload = runtime_observability_service.get_overviews_for_wallet(
+        db,
+        wallet_address=resolved_wallet,
+        user_id=user.user_id,
+    )
+    return {
+        bot_id: RuntimeOverviewResponse.model_validate({**overview, "performance": None})
+        for bot_id, overview in payload.items()
+    }
 
 
 @router.get("/{bot_id}", response_model=BotDefinitionResponse)

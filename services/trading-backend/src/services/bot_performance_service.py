@@ -53,6 +53,63 @@ class BotPerformanceService:
             return []
         return await self._load_manual_history_rows(wallet_address, limit=limit, offset=offset)
 
+    async def calculate_runtimes_performance_map(
+        self,
+        runtimes: list[dict[str, Any]],
+        *,
+        market_lookup: dict[str, dict[str, Any]] | None = None,
+        live_position_lookup: dict[str, dict[str, Any]] | None = None,
+        manual_close_history: list[dict[str, Any]] | None = None,
+        live_positions_loaded: bool | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        normalized_runtimes = [runtime for runtime in runtimes if str(runtime.get("id") or "").strip()]
+        if not normalized_runtimes:
+            return {}
+        runtime_events_by_id = self._load_runtime_execution_events_map(normalized_runtimes)
+
+        resolved_market_lookup = market_lookup or await self._load_market_lookup()
+        resolved_live_positions_loaded = live_positions_loaded
+        if live_position_lookup is None:
+            resolved_live_position_lookup, resolved_live_positions_loaded = await self._load_live_position_lookup(
+                normalized_runtimes[0]
+            )
+        else:
+            resolved_live_position_lookup = live_position_lookup
+            if resolved_live_positions_loaded is None:
+                resolved_live_positions_loaded = True
+
+        resolved_manual_close_history = manual_close_history
+        if resolved_manual_close_history is None:
+            resolved_manual_close_history = await self.load_position_history_for_wallet(
+                str(normalized_runtimes[0].get("wallet_address") or "").strip()
+            )
+
+        if len(normalized_runtimes) > 1 and self._wallet_requires_joint_reconciliation(
+            normalized_runtimes,
+            runtime_events_by_id=runtime_events_by_id,
+        ):
+            return await self._calculate_wallet_runtime_performance_map(
+                normalized_runtimes,
+                market_lookup=resolved_market_lookup,
+                live_position_lookup=resolved_live_position_lookup,
+                manual_close_history=resolved_manual_close_history,
+                live_positions_loaded=resolved_live_positions_loaded,
+                runtime_events_by_id=runtime_events_by_id,
+            )
+
+        performance_by_runtime: dict[str, dict[str, Any]] = {}
+        for runtime in normalized_runtimes:
+            runtime_id = str(runtime.get("id") or "").strip()
+            performance_by_runtime[runtime_id] = await self._calculate_runtime_performance_isolated(
+                runtime,
+                market_lookup=resolved_market_lookup,
+                live_position_lookup=resolved_live_position_lookup,
+                manual_close_history=resolved_manual_close_history,
+                live_positions_loaded=resolved_live_positions_loaded,
+                runtime_events=runtime_events_by_id.get(runtime_id),
+            )
+        return performance_by_runtime
+
     async def calculate_runtime_performance_with_context(
         self,
         runtime: dict[str, Any],
@@ -88,14 +145,17 @@ class BotPerformanceService:
         live_position_lookup: dict[str, dict[str, Any]] | None,
         manual_close_history: list[dict[str, Any]] | None,
         live_positions_loaded: bool | None = None,
+        runtime_events: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        events = self._supabase.select(
-            "bot_execution_events",
-            columns="id,created_at,request_payload,result_payload",
-            filters={"runtime_id": runtime["id"], "event_type": "action.executed"},
-            order="created_at.asc",
-            limit=1000,
-        )
+        events = runtime_events
+        if events is None:
+            events = self._supabase.select(
+                "bot_execution_events",
+                columns="id,created_at,request_payload,result_payload",
+                filters={"runtime_id": runtime["id"], "event_type": "action.executed"},
+                order="created_at.asc",
+                limit=1000,
+            )
 
         resolved_live_positions_loaded = live_positions_loaded
         if live_position_lookup is None:
@@ -178,6 +238,7 @@ class BotPerformanceService:
         live_position_lookup: dict[str, dict[str, Any]] | None,
         manual_close_history: list[dict[str, Any]] | None,
         live_positions_loaded: bool | None,
+        runtime_events_by_id: dict[str, list[dict[str, Any]]] | None = None,
     ) -> dict[str, dict[str, Any]]:
         if not runtimes:
             return {}
@@ -204,13 +265,15 @@ class BotPerformanceService:
             runtime_id = str(runtime.get("id") or "").strip()
             if not runtime_id:
                 continue
-            events = self._supabase.select(
-                "bot_execution_events",
-                columns="id,created_at,request_payload,result_payload",
-                filters={"runtime_id": runtime_id, "event_type": "action.executed"},
-                order="created_at.asc",
-                limit=1000,
-            )
+            events = (runtime_events_by_id or {}).get(runtime_id)
+            if events is None:
+                events = self._supabase.select(
+                    "bot_execution_events",
+                    columns="id,created_at,request_payload,result_payload",
+                    filters={"runtime_id": runtime_id, "event_type": "action.executed"},
+                    order="created_at.asc",
+                    limit=1000,
+                )
             bot_records: list[dict[str, Any]] = []
             bot_positions: dict[str, dict[str, float]] = {}
             unresolved_events: list[dict[str, Any]] = []
@@ -281,18 +344,25 @@ class BotPerformanceService:
             return runtimes if not self._runtime_exists(runtime_id) else [runtime, *runtimes]
         return runtimes
 
-    def _wallet_requires_joint_reconciliation(self, runtimes: list[dict[str, Any]]) -> bool:
+    def _wallet_requires_joint_reconciliation(
+        self,
+        runtimes: list[dict[str, Any]],
+        *,
+        runtime_events_by_id: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> bool:
         symbol_owners: dict[str, set[str]] = {}
         for runtime in runtimes:
             runtime_id = str(runtime.get("id") or "").strip()
             if not runtime_id:
                 continue
-            events = self._supabase.select(
-                "bot_execution_events",
-                columns="result_payload,request_payload",
-                filters={"runtime_id": runtime_id, "event_type": "action.executed"},
-                limit=1000,
-            )
+            events = (runtime_events_by_id or {}).get(runtime_id)
+            if events is None:
+                events = self._supabase.select(
+                    "bot_execution_events",
+                    columns="result_payload,request_payload",
+                    filters={"runtime_id": runtime_id, "event_type": "action.executed"},
+                    limit=1000,
+                )
             for event in events:
                 symbol = self._extract_event_symbol_hint(event)
                 if not symbol:
@@ -721,6 +791,26 @@ class BotPerformanceService:
 
     def _runtime_exists(self, runtime_id: str) -> bool:
         return self._supabase.maybe_one("bot_runtimes", columns="id", filters={"id": runtime_id}) is not None
+
+    def _load_runtime_execution_events_map(self, runtimes: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+        runtime_ids = [str(runtime.get("id") or "").strip() for runtime in runtimes if str(runtime.get("id") or "").strip()]
+        if not runtime_ids:
+            return {}
+
+        rows = self._supabase.select(
+            "bot_execution_events",
+            columns="id,runtime_id,created_at,request_payload,result_payload",
+            filters={"runtime_id": ("in", runtime_ids), "event_type": "action.executed"},
+            order="created_at.asc",
+            limit=max(1000, len(runtime_ids) * 1000),
+        )
+        events_by_runtime: dict[str, list[dict[str, Any]]] = {runtime_id: [] for runtime_id in runtime_ids}
+        for row in rows:
+            runtime_id = str(row.get("runtime_id") or "").strip()
+            if runtime_id not in events_by_runtime or len(events_by_runtime[runtime_id]) >= 1000:
+                continue
+            events_by_runtime[runtime_id].append(row)
+        return events_by_runtime
 
     @staticmethod
     def _is_retryable_ledger_cache_error(exc: SupabaseRestError) -> bool:

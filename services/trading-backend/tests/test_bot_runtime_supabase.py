@@ -163,6 +163,10 @@ class FakeSupabaseRestClient:
         for key, expected in filters.items():
             if isinstance(expected, tuple):
                 operator, operand = expected
+                if operator == "in":
+                    if row.get(key) not in operand:
+                        return False
+                    continue
                 if operator != "eq" or row.get(key) != operand:
                     return False
                 continue
@@ -468,6 +472,63 @@ def test_runtime_overview_returns_draft_snapshot_when_runtime_is_missing() -> No
     assert overview["metrics"]["events_total"] == 0
 
 
+def test_runtime_overviews_for_wallet_batches_runtime_snapshots() -> None:
+    tables = _seed_tables()
+    tables["bot_definitions"].append(
+        {
+            "id": "bot-2",
+            "user_id": "user-1",
+            "wallet_address": "wallet-1",
+            "name": "Draft Bot",
+            "description": "No runtime yet",
+            "visibility": "private",
+            "market_scope": "Pacifica perpetuals",
+            "strategy_type": "rules",
+            "authoring_mode": "visual",
+            "rules_version": 1,
+            "rules_json": _graph_rules(),
+            "created_at": "2026-03-16T00:00:00+00:00",
+            "updated_at": "2026-03-16T00:00:00+00:00",
+        }
+    )
+    now = datetime.now(tz=UTC)
+    tables["bot_execution_events"] = [
+        {
+            "id": "event-2",
+            "runtime_id": "runtime-1",
+            "event_type": "action.executed",
+            "decision_summary": "opened a long",
+            "request_payload": {},
+            "result_payload": {"status": "success"},
+            "status": "success",
+            "error_reason": None,
+            "created_at": (now - timedelta(minutes=10)).isoformat(),
+        },
+        {
+            "id": "event-1",
+            "runtime_id": "runtime-1",
+            "event_type": "action.failed",
+            "decision_summary": "rejected by guardrail",
+            "request_payload": {},
+            "result_payload": {"status": "error"},
+            "status": "error",
+            "error_reason": "risk_limit",
+            "created_at": (now - timedelta(minutes=15)).isoformat(),
+        },
+    ]
+    fake_supabase = FakeSupabaseRestClient(tables)
+    service = RuntimeObservabilityService()
+    service._supabase = fake_supabase
+
+    overview_by_bot = service.get_overviews_for_wallet(None, wallet_address="wallet-1", user_id="user-1")
+
+    assert overview_by_bot["bot-1"]["health"]["runtime_id"] == "runtime-1"
+    assert overview_by_bot["bot-1"]["metrics"]["events_total"] == 2
+    assert overview_by_bot["bot-1"]["metrics"]["actions_total"] == 2
+    assert overview_by_bot["bot-2"]["health"]["health"] == "not_deployed"
+    assert overview_by_bot["bot-2"]["metrics"]["status"] == "draft"
+
+
 def test_list_runtime_events_returns_empty_list_when_runtime_is_missing() -> None:
     tables = _seed_tables()
     tables["bot_runtimes"] = []
@@ -497,7 +558,8 @@ def test_runtime_worker_executes_supabase_trade_without_sqlalchemy() -> None:
     execution_events = fake_supabase.tables["bot_execution_events"]
 
     assert [order["type"] for order in fake_pacifica.orders] == ["update_leverage", "create_market_order"]
-    assert fake_pacifica.orders[1]["amount"] == 0.005
+    assert fake_pacifica.orders[0]["leverage"] == 5
+    assert fake_pacifica.orders[1]["amount"] == 0.009
     assert runtime["risk_policy_json"]["_runtime_state"]["executions_total"] == 1
     assert runtime["risk_policy_json"]["_runtime_state"]["allocated_capital_usd"] == 200
     assert any(event["event_type"] == "action.executed" for event in execution_events)
