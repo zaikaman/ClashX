@@ -321,7 +321,7 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
         const headers = await getAuthHeaders();
         const walletQuery = encodeURIComponent(resolvedWallet);
         const response = await fetch(
-          `${API_BASE_URL}/api/bots/${params.botId}/runtime-overview?wallet_address=${walletQuery}&include_performance=true&performance_mode=fast`,
+          `${API_BASE_URL}/api/bots/${params.botId}/runtime-overview?wallet_address=${walletQuery}&include_performance=true&performance_mode=full`,
           {
             headers,
             signal: controller.signal,
