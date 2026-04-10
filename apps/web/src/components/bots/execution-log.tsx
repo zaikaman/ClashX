@@ -25,20 +25,78 @@ const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
   timeStyle: "short",
 });
 
+const currencyFormatter = new Intl.NumberFormat(undefined, {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 0,
+});
+
+function formatEventType(eventType: string) {
+  if (eventType === "action.skipped") {
+    return "Action skipped";
+  }
+  if (eventType === "action.executed") {
+    return "Action executed";
+  }
+  if (eventType === "action.failed") {
+    return "Action failed";
+  }
+  if (eventType.startsWith("runtime.")) {
+    return `Runtime ${eventType.split(".", 2)[1]?.replace(/_/g, " ") ?? "update"}`;
+  }
+  return eventType.replace(/[._]/g, " ");
+}
+
+function describeActionType(actionType: string, symbol: string | null) {
+  const market = symbol ? ` on ${symbol}` : "";
+  if (actionType === "open_long") {
+    return `Open long${market}`;
+  }
+  if (actionType === "open_short") {
+    return `Open short${market}`;
+  }
+  if (actionType === "set_tpsl") {
+    return `Set TP/SL${market}`;
+  }
+  if (actionType === "close_position") {
+    return `Close position${market}`;
+  }
+  if (actionType === "update_leverage") {
+    return `Update leverage${market}`;
+  }
+  if (actionType === "place_market_order") {
+    return `Place market order${market}`;
+  }
+  if (actionType === "place_limit_order") {
+    return `Place limit order${market}`;
+  }
+  if (actionType === "place_twap_order") {
+    return `Place TWAP order${market}`;
+  }
+  return actionType.replace(/_/g, " ");
+}
+
 function summarizeAction(event: BotExecutionEvent) {
-  const actionType = typeof event.action_type === "string" ? event.action_type : event.event_type;
+  const actionType = typeof event.action_type === "string" ? event.action_type : null;
+  if (!actionType) {
+    return "";
+  }
   const symbol = typeof event.symbol === "string" ? event.symbol : null;
-  const leverage = typeof event.leverage === "number" ? `${event.leverage}x` : null;
-  const sizeUsd = typeof event.size_usd === "number" ? `$${event.size_usd.toFixed(0)}` : null;
-  return [actionType, symbol, leverage, sizeUsd].filter(Boolean).join(" / ");
+  const actionLabel = describeActionType(actionType, symbol);
+  const leverage = typeof event.leverage === "number" ? `${event.leverage}x leverage` : null;
+  const sizeUsd = typeof event.size_usd === "number" ? `${currencyFormatter.format(event.size_usd)} notional` : null;
+  return [actionLabel, leverage, sizeUsd].filter(Boolean).join(" • ");
 }
 
 function statusTone(status: string) {
   if (status === "success") {
     return "border-[#74b97f]/25 bg-[#74b97f]/10 text-[#a9d7b1]";
   }
-  if (status === "error") {
+  if (status === "skipped") {
     return "border-[#dce85d]/25 bg-[#dce85d]/10 text-[#f0f4be]";
+  }
+  if (status === "error") {
+    return "border-[#ff8d7a]/25 bg-[#ff8d7a]/10 text-[#ffd0c7]";
   }
   return "border-[rgba(255,255,255,0.08)] bg-[#0f1112] text-neutral-300";
 }
@@ -91,7 +149,7 @@ function renderOutcome(event: DisplayEvent) {
     return summary;
   }
 
-  return `${summary} Collapsed ${event.grouped_count} repeated checks into one item.`;
+  return `${summary} ${event.grouped_count} repeated evaluations were collapsed into this single entry.`;
 }
 
 function formatTimestamp(value: string) {
@@ -119,7 +177,7 @@ export function ExecutionLog({ events }: { events: BotExecutionEvent[] }) {
         >
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="grid gap-1">
-              <div className="font-mono text-base font-bold uppercase tracking-tight text-neutral-50">{event.event_type}</div>
+              <div className="font-mono text-base font-bold uppercase tracking-tight text-neutral-50">{formatEventType(event.event_type)}</div>
               <div className="text-sm text-neutral-400">{summarizeAction(event) || event.decision_summary}</div>
             </div>
             <div className="grid justify-items-end gap-2">
@@ -142,7 +200,9 @@ export function ExecutionLog({ events }: { events: BotExecutionEvent[] }) {
 
           <div className="grid gap-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,0.9fr)]">
             <div className="rounded-2xl bg-[#0f1112] px-4 py-3">
-              <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Decision</div>
+              <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                {event.event_type.startsWith("action.") ? "Attempt" : "Decision"}
+              </div>
               <div className="mt-2 break-all text-sm leading-6 text-neutral-300">
                 {event.grouped_count > 1 ? `Repeated ${event.grouped_count} times. ` : ""}
                 {event.decision_summary}
@@ -151,7 +211,7 @@ export function ExecutionLog({ events }: { events: BotExecutionEvent[] }) {
 
             <div className="rounded-2xl bg-[#0f1112] px-4 py-3">
               <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Outcome</div>
-              <div className="mt-2 break-all text-sm leading-6 text-neutral-300">{renderOutcome(event)}</div>
+              <div className="mt-2 text-sm leading-6 text-neutral-300">{renderOutcome(event)}</div>
             </div>
           </div>
         </article>

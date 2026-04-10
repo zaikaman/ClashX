@@ -591,6 +591,38 @@ def test_list_runtime_events_returns_empty_list_when_runtime_is_missing() -> Non
     assert events == []
 
 
+def test_list_runtime_events_humanizes_skipped_action_messages() -> None:
+    tables = _seed_tables()
+    now = datetime.now(tz=UTC)
+    tables["bot_execution_events"] = [
+        {
+            "id": "event-1",
+            "runtime_id": "runtime-1",
+            "event_type": "action.skipped",
+            "decision_summary": "idem:runtime-1:open_long:fartcoin",
+            "request_payload": {
+                "type": "open_long",
+                "symbol": "FARTCOIN",
+                "leverage": 1,
+                "size_usd": 444,
+            },
+            "result_payload": {"issues": ["requested order value 444 exceeds max_order_size_usd 250"]},
+            "status": "skipped",
+            "error_reason": None,
+            "created_at": now.isoformat(),
+        }
+    ]
+    fake_supabase = FakeSupabaseRestClient(tables)
+    engine = BotRuntimeEngine()
+    engine._supabase = fake_supabase
+
+    events = engine.list_runtime_events(None, bot_id="bot-1", wallet_address="wallet-1", user_id="user-1", limit=20)
+
+    assert len(events) == 1
+    assert events[0]["decision_summary"] == "Runtime attempted to open a long position on FARTCOIN with 1x leverage and about $444 notional."
+    assert events[0]["outcome_summary"] == "Requested order size is about $444, above the runtime cap of $250."
+
+
 def test_runtime_worker_executes_supabase_trade_without_sqlalchemy() -> None:
     fake_supabase = FakeSupabaseRestClient(_seed_tables())
     fake_pacifica = FakePacificaClient()

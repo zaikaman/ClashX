@@ -134,7 +134,7 @@ class BotRuntimeEngine:
             return []
         rows = self._supabase.select(
             "bot_execution_events",
-            columns="id,runtime_id,event_type,decision_summary,request_payload,status,error_reason,created_at",
+            columns="id,runtime_id,event_type,decision_summary,request_payload,result_payload,status,error_reason,created_at",
             filters={"runtime_id": runtime["id"]},
             order="created_at.desc",
             limit=limit,
@@ -225,18 +225,19 @@ class BotRuntimeEngine:
     @classmethod
     def serialize_event_summary(cls, event: dict[str, Any]) -> dict[str, Any]:
         request_payload = event["request_payload"] if isinstance(event.get("request_payload"), dict) else {}
+        result_payload = event["result_payload"] if isinstance(event.get("result_payload"), dict) else {}
         return {
             "id": event["id"],
             "runtime_id": event["runtime_id"],
             "event_type": event["event_type"],
-            "decision_summary": event["decision_summary"],
-            "action_type": cls._read_text(request_payload.get("type")) or cls._read_text(event.get("event_type")),
+            "decision_summary": cls._build_event_decision_summary(event, request_payload=request_payload),
+            "action_type": cls._read_text(request_payload.get("type")),
             "symbol": cls._read_text(request_payload.get("symbol")),
             "leverage": cls._read_number(request_payload.get("leverage")),
             "size_usd": cls._read_number(request_payload.get("size_usd")),
             "status": event["status"],
             "error_reason": event.get("error_reason"),
-            "outcome_summary": cls._build_event_outcome_summary(event),
+            "outcome_summary": cls._build_event_outcome_summary(event, result_payload=result_payload),
             "created_at": event["created_at"],
         }
 
@@ -297,23 +298,162 @@ class BotRuntimeEngine:
         loop.create_task(broadcaster.publish(channel=f"user:{user_id}", event=event, payload=payload))
 
     @staticmethod
-    def _build_event_outcome_summary(event: dict[str, Any]) -> str:
+    def _build_event_outcome_summary(event: dict[str, Any], *, result_payload: dict[str, Any] | None = None) -> str:
         error_reason = BotRuntimeEngine._read_text(event.get("error_reason"))
         if error_reason:
             return error_reason
 
         event_type = BotRuntimeEngine._read_text(event.get("event_type")) or "event"
         status = BotRuntimeEngine._read_text(event.get("status")) or "pending"
+        payload = result_payload if isinstance(result_payload, dict) else {}
+        skip_summary = BotRuntimeEngine._build_skip_outcome_summary(payload)
+        if status == "skipped" and skip_summary:
+            return skip_summary
 
         if event_type.startswith("runtime."):
-            return "Runtime state updated successfully."
+            return BotRuntimeEngine._build_runtime_outcome_summary(event_type)
         if status == "success":
             return "Action executed successfully."
         if status == "skipped":
-            return "Action skipped by the current runtime guardrails."
+            return "Action was skipped after runtime checks."
         if status == "error":
             return "Action failed during runtime execution."
         return "Event recorded."
+
+    @staticmethod
+    def _build_event_decision_summary(event: dict[str, Any], *, request_payload: dict[str, Any]) -> str:
+        event_type = BotRuntimeEngine._read_text(event.get("event_type")) or "event"
+        if event_type.startswith("runtime."):
+            status = event_type.split(".", 1)[1].replace("_", " ").strip() or "updated"
+            return f"Runtime transitioned to {status}."
+
+        action_type = BotRuntimeEngine._read_text(request_payload.get("type"))
+        symbol = BotRuntimeEngine._read_text(request_payload.get("symbol"))
+        leverage = BotRuntimeEngine._read_number(request_payload.get("leverage"))
+        size_usd = BotRuntimeEngine._read_number(request_payload.get("size_usd"))
+        if action_type:
+            return BotRuntimeEngine._describe_action_attempt(
+                action_type=action_type,
+                symbol=symbol,
+                leverage=leverage,
+                size_usd=size_usd,
+            )
+
+        stored_summary = BotRuntimeEngine._read_text(event.get("decision_summary"))
+        return stored_summary or "Runtime recorded a decision."
+
+    @staticmethod
+    def _describe_action_attempt(
+        *,
+        action_type: str,
+        symbol: str | None,
+        leverage: float | None,
+        size_usd: float | None,
+    ) -> str:
+        market = f" on {symbol.upper().replace('-PERP', '')}" if symbol else ""
+        leverage_text = f" with {leverage:g}x leverage" if leverage is not None else ""
+        size_text = f" and about ${size_usd:,.0f} notional" if size_usd is not None else ""
+
+        if action_type == "open_long":
+            return f"Runtime attempted to open a long position{market}{leverage_text}{size_text}."
+        if action_type == "open_short":
+            return f"Runtime attempted to open a short position{market}{leverage_text}{size_text}."
+        if action_type == "set_tpsl":
+            return f"Runtime attempted to place take-profit and stop-loss protection{market}."
+        if action_type == "close_position":
+            return f"Runtime attempted to close the managed position{market}."
+        if action_type == "update_leverage":
+            target = f" on {symbol.upper().replace('-PERP', '')}" if symbol else ""
+            leverage_only = f" to {leverage:g}x" if leverage is not None else ""
+            return f"Runtime attempted to update leverage{target}{leverage_only}."
+        if action_type == "place_market_order":
+            return f"Runtime attempted to place a market order{market}{leverage_text}{size_text}."
+        if action_type == "place_limit_order":
+            return f"Runtime attempted to place a limit order{market}{leverage_text}{size_text}."
+        if action_type == "place_twap_order":
+            return f"Runtime attempted to place a TWAP order{market}{leverage_text}{size_text}."
+        return f"Runtime attempted to run {action_type.replace('_', ' ')}{market}."
+
+    @staticmethod
+    def _build_runtime_outcome_summary(event_type: str) -> str:
+        if event_type == "runtime.active":
+            return "Runtime is active and ready to evaluate new market signals."
+        if event_type == "runtime.paused":
+            return "Runtime is paused and will not place new trades."
+        if event_type == "runtime.stopped":
+            return "Runtime has been stopped and will not evaluate new actions."
+        return "Runtime state updated successfully."
+
+    @staticmethod
+    def _build_skip_outcome_summary(result_payload: dict[str, Any]) -> str | None:
+        issues = result_payload.get("issues")
+        if not isinstance(issues, list):
+            return None
+
+        friendly_issues = [
+            BotRuntimeEngine._humanize_issue(str(issue).strip())
+            for issue in issues
+            if BotRuntimeEngine._read_text(issue)
+        ]
+        if not friendly_issues:
+            return None
+        return " ".join(friendly_issues)
+
+    @staticmethod
+    def _humanize_issue(issue: str) -> str:
+        cleaned = issue.strip()
+        if not cleaned:
+            return "Runtime checks blocked this action."
+
+        if cleaned.startswith("symbol ") and cleaned.endswith(" is not in allowed_symbols policy"):
+            symbol = cleaned[len("symbol ") : -len(" is not in allowed_symbols policy")].strip().upper()
+            return f"{symbol} is outside this runtime's allowed market list."
+        if cleaned.startswith("requested leverage ") and " exceeds max_leverage " in cleaned:
+            requested, maximum = cleaned[len("requested leverage ") :].split(" exceeds max_leverage ", 1)
+            return f"Requested {requested.strip()}x leverage, above the runtime cap of {maximum.strip()}x."
+        if cleaned.startswith("requested leverage ") and " market max_leverage " in cleaned:
+            requested_part, market_part = cleaned[len("requested leverage ") :].split(" exceeds ", 1)
+            market_name, market_max = market_part.split(" market max_leverage ", 1)
+            return (
+                f"Requested {requested_part.strip()}x leverage, above {market_name.strip().upper()}'s market maximum "
+                f"of {market_max.strip()}x."
+            )
+        if cleaned.startswith("requested order value ") and " exceeds max_order_size_usd " in cleaned:
+            requested, maximum = cleaned[len("requested order value ") :].split(" exceeds max_order_size_usd ", 1)
+            requested_amount = BotRuntimeEngine._read_number(requested)
+            maximum_amount = BotRuntimeEngine._read_number(maximum)
+            if requested_amount is not None and maximum_amount is not None:
+                return (
+                    f"Requested order size is about ${requested_amount:,.0f}, above the runtime cap of "
+                    f"${maximum_amount:,.0f}."
+                )
+        if cleaned.startswith("bot does not manage an open position on "):
+            symbol = cleaned[len("bot does not manage an open position on ") :].strip().upper()
+            return f"No tracked open position exists on {symbol}, so this action cannot run."
+        if cleaned.startswith("max_open_positions ") and cleaned.endswith(" reached"):
+            limit = cleaned[len("max_open_positions ") : -len(" reached")].strip()
+            return f"The runtime is already at its limit of {limit} open position{'s' if limit != '1' else ''}."
+        if cleaned.startswith("bot already manages an open position on "):
+            symbol = cleaned[len("bot already manages an open position on ") :].strip().upper()
+            return f"The runtime already has an open position on {symbol}."
+        if cleaned.startswith("existing bot entry order on ") and cleaned.endswith(" is still open"):
+            symbol = cleaned[len("existing bot entry order on ") : -len(" is still open")].strip().upper()
+            return f"An existing entry order on {symbol} is still open."
+        if cleaned.startswith("pending entry on ") and cleaned.endswith(" is still syncing"):
+            symbol = cleaned[len("pending entry on ") : -len(" is still syncing")].strip().upper()
+            return f"A new entry on {symbol} is still syncing from Pacifica, so another order was blocked."
+        if cleaned.startswith("awaiting position sync on ") and cleaned.endswith(" before TP/SL"):
+            symbol = cleaned[len("awaiting position sync on ") : -len(" before TP/SL")].strip().upper()
+            return f"{symbol} has not synced into the runtime yet, so TP/SL could not be placed."
+        if cleaned.startswith("existing protective order on ") and cleaned.endswith(" already covers this position"):
+            symbol = cleaned[len("existing protective order on ") : -len(" already covers this position")].strip().upper()
+            return f"Existing protective orders already cover the current position on {symbol}."
+        if cleaned.startswith("runtime drawdown "):
+            return cleaned[0].upper() + cleaned[1:] + ("" if cleaned.endswith(".") else ".")
+        if cleaned.startswith("cooldown active for ") and cleaned.endswith(" more seconds"):
+            remaining = cleaned[len("cooldown active for ") : -len(" more seconds")].strip()
+            return f"Cooldown is still active for {remaining} more seconds."
+        return cleaned[0].upper() + cleaned[1:] + ("" if cleaned.endswith(".") else ".")
 
     @staticmethod
     def _read_text(value: Any) -> str | None:
