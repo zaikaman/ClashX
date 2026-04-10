@@ -32,11 +32,19 @@ class RuntimeObservabilityService:
         user_id: str,
     ) -> dict[str, dict[str, Any]]:
         del db, user_id
-        definitions = self._supabase.select("bot_definitions", filters={"wallet_address": wallet_address})
+        definitions = self._supabase.select(
+            "bot_definitions",
+            columns="id",
+            filters={"wallet_address": wallet_address},
+        )
         if not definitions:
             return {}
 
-        runtimes = self._supabase.select("bot_runtimes", filters={"wallet_address": wallet_address})
+        runtimes = self._supabase.select(
+            "bot_runtimes",
+            columns="id,bot_definition_id,status,mode,risk_policy_json,deployed_at,updated_at",
+            filters={"wallet_address": wallet_address},
+        )
         runtime_by_bot_id = {
             str(runtime.get("bot_definition_id") or "").strip(): runtime
             for runtime in runtimes
@@ -93,7 +101,11 @@ class RuntimeObservabilityService:
     ) -> dict[str, Any]:
         del db
         runtime = self._require_runtime(bot_id=bot_id, wallet_address=wallet_address)
-        definition = self._supabase.maybe_one("bot_definitions", filters={"id": bot_id, "wallet_address": wallet_address})
+        definition = self._supabase.maybe_one(
+            "bot_definitions",
+            columns="id,rules_json",
+            filters={"id": bot_id, "wallet_address": wallet_address},
+        )
         if definition is None:
             raise ValueError("Bot not found")
         existing = runtime["risk_policy_json"] if isinstance(runtime.get("risk_policy_json"), dict) else {}
@@ -105,11 +117,13 @@ class RuntimeObservabilityService:
             if issues:
                 raise ValueError("Risk-adjusted sizing is not available for this bot: " + "; ".join(issues))
         updated_at = datetime.now(tz=UTC).isoformat()
-        runtime = self._supabase.update(
+        self._supabase.update(
             "bot_runtimes",
             {"risk_policy_json": next_policy, "updated_at": updated_at},
             filters={"id": runtime["id"]},
-        )[0]
+            returning="minimal",
+        )
+        runtime = {**runtime, "risk_policy_json": next_policy, "updated_at": updated_at}
         self._supabase.insert(
             "audit_events",
             {
@@ -119,6 +133,7 @@ class RuntimeObservabilityService:
                 "payload": {"runtime_id": runtime["id"], "bot_id": bot_id, "updated_keys": sorted(risk_policy_json.keys())},
                 "created_at": updated_at,
             },
+            returning="minimal",
         )
         policy = runtime["risk_policy_json"] if isinstance(runtime.get("risk_policy_json"), dict) else {}
         runtime_state_next = policy.get("_runtime_state") if isinstance(policy.get("_runtime_state"), dict) else {}
@@ -131,10 +146,20 @@ class RuntimeObservabilityService:
         return runtime
 
     def _resolve_runtime(self, *, bot_id: str, wallet_address: str) -> dict[str, Any] | None:
-        definition = self._supabase.maybe_one("bot_definitions", filters={"id": bot_id, "wallet_address": wallet_address})
+        definition = self._supabase.maybe_one(
+            "bot_definitions",
+            columns="id",
+            filters={"id": bot_id, "wallet_address": wallet_address},
+            cache_ttl_seconds=10,
+        )
         if definition is None:
             raise ValueError("Bot not found")
-        return self._supabase.maybe_one("bot_runtimes", filters={"bot_definition_id": definition["id"], "wallet_address": wallet_address})
+        return self._supabase.maybe_one(
+            "bot_runtimes",
+            columns="id,bot_definition_id,status,mode,risk_policy_json,deployed_at,updated_at",
+            filters={"bot_definition_id": definition["id"], "wallet_address": wallet_address},
+            cache_ttl_seconds=10,
+        )
 
     def _build_snapshot(
         self,
@@ -149,6 +174,7 @@ class RuntimeObservabilityService:
         if resolved_events is None:
             resolved_events = self._supabase.select(
                 "bot_execution_events",
+                columns="id,event_type,decision_summary,status,error_reason,created_at",
                 filters={"runtime_id": runtime["id"]},
                 order="created_at.desc",
                 limit=500,

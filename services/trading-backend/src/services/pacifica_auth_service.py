@@ -31,10 +31,15 @@ class PacificaAuthService:
 
     def get_authorization_by_wallet(self, db: Any, wallet_address: str) -> dict[str, Any] | None:
         del db
-        user = self.supabase.maybe_one("users", filters={"wallet_address": wallet_address})
+        user = self.supabase.maybe_one(
+            "users",
+            columns="id",
+            filters={"wallet_address": wallet_address},
+            cache_ttl_seconds=60,
+        )
         if user is None:
             return None
-        record = self.supabase.maybe_one("pacifica_authorizations", filters={"user_id": user["id"]})
+        record = self.supabase.maybe_one("pacifica_authorizations", filters={"user_id": user["id"]}, cache_ttl_seconds=5)
         return self._serialize(record) if record else None
 
     def require_active_authorization(self, db: Any, wallet_address: str) -> dict[str, Any]:
@@ -45,10 +50,15 @@ class PacificaAuthService:
 
     def get_trading_credentials(self, db: Any, wallet_address: str) -> dict[str, str] | None:
         del db
-        user = self.supabase.maybe_one("users", filters={"wallet_address": wallet_address})
+        user = self.supabase.maybe_one(
+            "users",
+            columns="id",
+            filters={"wallet_address": wallet_address},
+            cache_ttl_seconds=60,
+        )
         if user is None:
             return None
-        record = self.supabase.maybe_one("pacifica_authorizations", filters={"user_id": user["id"]})
+        record = self.supabase.maybe_one("pacifica_authorizations", filters={"user_id": user["id"]}, cache_ttl_seconds=5)
         if record is None or record["status"] != "active":
             return None
         return {
@@ -172,7 +182,11 @@ class PacificaAuthService:
         return self._serialize(saved)
 
     def _upsert_user(self, *, wallet_address: str, display_name: str | None) -> dict[str, Any]:
-        user = self.supabase.maybe_one("users", filters={"wallet_address": wallet_address})
+        user = self.supabase.maybe_one(
+            "users",
+            filters={"wallet_address": wallet_address},
+            cache_ttl_seconds=60,
+        )
         if user is None:
             return self.supabase.insert(
                 "users",

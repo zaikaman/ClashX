@@ -57,8 +57,9 @@ class _FakeSupabaseRestClient:
         *,
         upsert: bool = False,
         on_conflict: str | None = None,
+        returning: str = "representation",
     ) -> list[dict[str, Any]]:
-        del upsert, on_conflict
+        del upsert, on_conflict, returning
         self._maybe_raise(self.insert_failures, table)
         items = payload if isinstance(payload, list) else [payload]
         stored: list[dict[str, Any]] = []

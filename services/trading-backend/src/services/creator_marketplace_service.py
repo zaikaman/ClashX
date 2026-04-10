@@ -307,6 +307,7 @@ class CreatorMarketplaceService:
                 },
                 "created_at": datetime.now(tz=UTC).isoformat(),
             },
+            returning="minimal",
         )
         self._clear_marketplace_cache()
         return self.get_publishing_settings(bot_id=bot_id, wallet_address=wallet_address)
@@ -419,8 +420,7 @@ class CreatorMarketplaceService:
                 return cached_rows
 
             target_limit = max(limit, 120)
-            rows = await self._load_public_leaderboard(limit=target_limit)
-            marketplace_rows = [self._attach_marketplace_fields(row) for row in rows]
+            marketplace_rows = await self._load_public_leaderboard(limit=target_limit)
             captured_at = self._latest_captured_at(marketplace_rows)
             self._marketplace_rows_cache = marketplace_rows
             self._marketplace_rows_cache_captured_at = captured_at
@@ -471,12 +471,24 @@ class CreatorMarketplaceService:
             return []
         runtime_ids = [row["runtime_id"] for row in rows]
         definition_ids = [row["bot_definition_id"] for row in rows]
-        runtimes = {row["id"]: row for row in self.supabase.select("bot_runtimes", filters={"id": ("in", runtime_ids)})}
-        definitions = {
-            row["id"]: row for row in self.supabase.select("bot_definitions", filters={"id": ("in", definition_ids)})
+        runtimes = {
+            row["id"]: row
+            for row in self.supabase.select(
+                "bot_runtimes",
+                columns="id,bot_definition_id,user_id,wallet_address,status,mode,risk_policy_json,deployed_at,stopped_at,updated_at",
+                filters={"id": ("in", runtime_ids)},
+            )
         }
-        creator_cache: dict[str, dict[str, Any]] = {}
-        augmented: list[dict[str, Any]] = []
+        definitions = {
+            row["id"]: row
+            for row in self.supabase.select(
+                "bot_definitions",
+                columns="id,user_id,wallet_address,name,description,visibility,market_scope,strategy_type,authoring_mode,rules_version,rules_json,created_at,updated_at",
+                filters={"id": ("in", definition_ids)},
+            )
+        }
+        support = self._build_marketplace_support_maps(rows=rows, definitions=definitions)
+        overview_rows: list[dict[str, Any]] = []
         for row in rows:
             runtime = runtimes.get(row["runtime_id"])
             definition = definitions.get(row["bot_definition_id"])
@@ -497,22 +509,45 @@ class CreatorMarketplaceService:
                 latest_snapshot=snapshot,
             )
             creator_id = str(definition["user_id"])
-            creator = creator_cache.get(creator_id)
-            if creator is None:
-                creator = self._augment_creator_summary(
-                    self.trust_service.get_creator_profile(creator_id=creator_id, include_bots=False)
-                )
-                creator_cache[creator_id] = creator
-            augmented.append(
+            overview_rows.append(
                 {
                     **row,
                     "trust": public_context["trust"],
                     "drift": public_context["drift"],
                     "passport": public_context["passport"],
-                    "creator": creator,
+                    "copy_stats": support["copy_stats_by_runtime"].get(
+                        str(row["runtime_id"]),
+                        {"mirror_count": 0, "active_mirror_count": 0, "clone_count": 0},
+                    ),
+                    "publishing": support["publishing_by_definition"].get(
+                        str(row["bot_definition_id"]),
+                        {
+                            "visibility": "public",
+                            "access_mode": "public",
+                            "publish_state": "published",
+                            "hero_headline": "",
+                            "access_note": "",
+                            "featured_collection_title": None,
+                            "featured_rank": 0,
+                            "is_featured": False,
+                            "invite_count": 0,
+                        },
+                    ),
+                    "_creator_id": creator_id,
                 }
             )
-        return augmented
+        creator_summaries = self._build_marketplace_creator_summary_map(overview_rows=overview_rows, support=support)
+        return [
+            {
+                key: value
+                for key, value in {
+                    **row,
+                    "creator": creator_summaries.get(str(row.get("_creator_id") or ""), {}),
+                }.items()
+                if key != "_creator_id"
+            }
+            for row in overview_rows
+        ]
 
     def _augment_marketplace_overview_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not rows:
@@ -604,26 +639,56 @@ class CreatorMarketplaceService:
         creator_ids = sorted({creator_id for creator_id in creator_id_by_runtime.values() if creator_id})
 
         relationships = (
-            self.supabase.select("bot_copy_relationships", filters={"source_runtime_id": ("in", runtime_ids)})
+            self.supabase.select(
+                "bot_copy_relationships",
+                columns="source_runtime_id,follower_user_id,status",
+                filters={"source_runtime_id": ("in", runtime_ids)},
+            )
             if runtime_ids
             else []
         )
         publishing_rows = (
-            self.supabase.select("bot_publishing_settings", filters={"bot_definition_id": ("in", definition_ids)})
+            self.supabase.select(
+                "bot_publishing_settings",
+                columns="bot_definition_id,visibility,access_mode,publish_state,hero_headline,access_note",
+                filters={"bot_definition_id": ("in", definition_ids)},
+            )
             if definition_ids
             else []
         )
         invite_rows = (
-            []
+            self.supabase.select(
+                "bot_invite_access",
+                columns="bot_definition_id",
+                filters={"bot_definition_id": ("in", definition_ids), "status": "active"},
+            )
+            if definition_ids
+            else []
         )
-        users = self.supabase.select("users", filters={"id": ("in", creator_ids)}) if creator_ids else []
+        users = (
+            self.supabase.select(
+                "users",
+                columns="id,wallet_address,display_name",
+                filters={"id": ("in", creator_ids)},
+            )
+            if creator_ids
+            else []
+        )
         profiles = (
-            self.supabase.select("creator_marketplace_profiles", filters={"user_id": ("in", creator_ids)})
+            self.supabase.select(
+                "creator_marketplace_profiles",
+                columns="id,user_id,display_name,headline,bio,slug",
+                filters={"user_id": ("in", creator_ids)},
+            )
             if creator_ids
             else []
         )
         clone_rows = (
-            self.supabase.select("bot_clones", filters={"source_bot_definition_id": ("in", definition_ids)})
+            self.supabase.select(
+                "bot_clones",
+                columns="source_bot_definition_id",
+                filters={"source_bot_definition_id": ("in", definition_ids)},
+            )
             if definition_ids
             else []
         )
@@ -857,57 +922,6 @@ class CreatorMarketplaceService:
             "benchmark_completed_at": None,
         }
 
-    def _attach_marketplace_fields(self, row: dict[str, Any]) -> dict[str, Any]:
-        invites = self._list_invites(bot_id=str(row["bot_definition_id"]))
-        publishing = self._get_publishing_settings_row(bot_definition_id=str(row["bot_definition_id"]))
-        return {
-            **row,
-            "publishing": {
-                "visibility": publishing.get("visibility") or "public",
-                "access_mode": publishing.get("access_mode") or "public",
-                "publish_state": publishing.get("publish_state") or "published",
-                "hero_headline": publishing.get("hero_headline") or "",
-                "access_note": publishing.get("access_note") or "",
-                "featured_collection_title": None,
-                "featured_rank": 0,
-                "is_featured": False,
-                "invite_count": len(invites),
-            },
-            "copy_stats": self._bot_copy_stats(
-                runtime_id=str(row["runtime_id"]),
-                bot_definition_id=str(row["bot_definition_id"]),
-            ),
-        }
-
-    def _augment_creator_summary(self, summary: dict[str, Any]) -> dict[str, Any]:
-        user = self.supabase.maybe_one("users", filters={"id": summary["creator_id"]})
-        if user is None:
-            return {
-                **summary,
-                "headline": summary.get("summary") or "",
-                "bio": "",
-                "slug": "",
-                "follower_count": 0,
-                "featured_bot_count": 0,
-                "marketplace_reach_score": int(summary.get("reputation_score") or 0),
-            }
-        profile = self._ensure_creator_profile(user=user, display_name=str(summary.get("display_name") or user["wallet_address"][:8]))
-        follower_count = self._count_creator_followers(creator_id=str(summary["creator_id"]))
-        return {
-            **summary,
-            "headline": profile.get("headline") or summary.get("summary") or "",
-            "bio": profile.get("bio") or "",
-            "slug": profile.get("slug") or "",
-            "follower_count": follower_count,
-            "featured_bot_count": 0,
-            "marketplace_reach_score": self._marketplace_reach_score(
-                active_mirror_count=int(summary.get("active_mirror_count") or 0),
-                follower_count=follower_count,
-                public_bot_count=int(summary.get("public_bot_count") or 0),
-                reputation_score=int(summary.get("reputation_score") or 0),
-            ),
-        }
-
     def _ensure_creator_profile(
         self,
         *,
@@ -1027,7 +1041,7 @@ class CreatorMarketplaceService:
             ).to_row()
             for wallet_address in deduped
         ]
-        self.supabase.insert("bot_invite_access", payload)
+        self.supabase.insert("bot_invite_access", payload, returning="minimal")
 
     def _list_invites(self, *, bot_id: str) -> list[dict[str, Any]]:
         try:

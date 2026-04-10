@@ -400,12 +400,31 @@ class PortfolioAllocatorService:
     ) -> list[dict[str, Any]]:
         normalized_specs = self._normalize_member_specs(members)
         runtime_map = self._load_runtime_map([spec["source_runtime_id"] for spec in normalized_specs])
+        definition_ids = list(
+            {
+                str(runtime.get("bot_definition_id") or "")
+                for runtime in runtime_map.values()
+                if str(runtime.get("bot_definition_id") or "")
+            }
+        )
+        definition_map = (
+            {
+                row["id"]: row
+                for row in self.supabase.select(
+                    "bot_definitions",
+                    columns="id,visibility",
+                    filters={"id": ("in", definition_ids)},
+                )
+            }
+            if definition_ids
+            else {}
+        )
         rows: list[dict[str, Any]] = []
         for spec in normalized_specs:
             runtime = runtime_map.get(spec["source_runtime_id"])
             if runtime is None:
                 raise ValueError("Source runtime not found")
-            definition = self.supabase.maybe_one("bot_definitions", filters={"id": runtime["bot_definition_id"]})
+            definition = definition_map.get(str(runtime["bot_definition_id"]))
             if definition is None or definition["visibility"] not in {"public", "unlisted"}:
                 raise ValueError("Portfolio members must reference public or unlisted bots")
             target_notional = round(float(basket["target_notional_usd"]) * (float(spec["target_weight_pct"]) / 100.0), 4)
@@ -522,4 +541,5 @@ class PortfolioAllocatorService:
                 status=status,
                 summary_json=summary_json,
             ).to_row(),
+            returning="minimal",
         )

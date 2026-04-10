@@ -152,7 +152,9 @@ class SupabaseRestClient:
 
     def close(self) -> None:
         self._client.close()
-        self._read_cache.clear()
+        read_cache = getattr(self, "_read_cache", None)
+        if isinstance(read_cache, dict):
+            read_cache.clear()
 
     def _build_filters(self, filters: Mapping[str, Any] | None) -> dict[str, str]:
         params: dict[str, str] = {}

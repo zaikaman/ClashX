@@ -183,7 +183,11 @@ class BotCopyEngine:
             )[0]
         else:
             relationship = self.supabase.update("bot_copy_relationships", values, filters={"id": relationship["id"]})[0]
-        self.supabase.insert("audit_events", {"id": str(uuid.uuid4()), "user_id": follower["id"], "action": "bot_copy.mirror.activated", "payload": {"relationship_id": relationship["id"], "source_runtime_id": runtime_id, "scale_bps": scale_bps}, "created_at": now})
+        self.supabase.insert(
+            "audit_events",
+            {"id": str(uuid.uuid4()), "user_id": follower["id"], "action": "bot_copy.mirror.activated", "payload": {"relationship_id": relationship["id"], "source_runtime_id": runtime_id, "scale_bps": scale_bps}, "created_at": now},
+            returning="minimal",
+        )
         await broadcaster.publish(channel=f"user:{follower['id']}", event="bot.copy.updated", payload={"relationship_id": relationship["id"], "status": relationship["status"], "source_runtime_id": relationship["source_runtime_id"], "scale_bps": relationship["scale_bps"], "preview": preview})
         return self.serialize_relationship(None, relationship)
 
@@ -208,7 +212,11 @@ class BotCopyEngine:
         if follower is None:
             raise ValueError("Follower user not found")
         clone_record = self.supabase.insert("bot_clones", {"id": str(uuid.uuid4()), "source_bot_definition_id": source_definition["id"], "new_bot_definition_id": cloned["id"], "created_by_user_id": follower["id"], "created_at": datetime.now(tz=UTC).isoformat()})[0]
-        self.supabase.insert("audit_events", {"id": str(uuid.uuid4()), "user_id": follower["id"], "action": "bot_copy.clone.created", "payload": {"runtime_id": runtime_id, "source_bot_definition_id": source_definition["id"], "new_bot_definition_id": cloned["id"]}, "created_at": datetime.now(tz=UTC).isoformat()})
+        self.supabase.insert(
+            "audit_events",
+            {"id": str(uuid.uuid4()), "user_id": follower["id"], "action": "bot_copy.clone.created", "payload": {"runtime_id": runtime_id, "source_bot_definition_id": source_definition["id"], "new_bot_definition_id": cloned["id"]}, "created_at": datetime.now(tz=UTC).isoformat()},
+            returning="minimal",
+        )
         return {"clone_id": clone_record["id"], "source_runtime_id": runtime_id, "source_bot_definition_id": source_definition["id"], "new_bot_definition_id": cloned["id"], "created_by_user_id": follower["id"], "created_at": clone_record["created_at"]}
 
     def list_relationships(self, db: Any, *, follower_wallet_address: str) -> list[dict]:
@@ -238,7 +246,11 @@ class BotCopyEngine:
         if status is not None:
             values["status"] = status
         relationship = self.supabase.update("bot_copy_relationships", values, filters={"id": relationship_id})[0]
-        self.supabase.insert("audit_events", {"id": str(uuid.uuid4()), "user_id": relationship["follower_user_id"], "action": "bot_copy.mirror.updated", "payload": {"relationship_id": relationship["id"], "scale_bps": relationship["scale_bps"], "status": relationship["status"]}, "created_at": datetime.now(tz=UTC).isoformat()})
+        self.supabase.insert(
+            "audit_events",
+            {"id": str(uuid.uuid4()), "user_id": relationship["follower_user_id"], "action": "bot_copy.mirror.updated", "payload": {"relationship_id": relationship["id"], "scale_bps": relationship["scale_bps"], "status": relationship["status"]}, "created_at": datetime.now(tz=UTC).isoformat()},
+            returning="minimal",
+        )
         await broadcaster.publish(channel=f"user:{relationship['follower_user_id']}", event="bot.copy.updated", payload={"relationship_id": relationship["id"], "status": relationship["status"], "scale_bps": relationship["scale_bps"]})
         return self.serialize_relationship(None, relationship)
 
@@ -264,7 +276,7 @@ class BotCopyEngine:
         return warnings
 
     def _find_or_create_follower(self, *, wallet_address: str, display_name: str | None) -> dict[str, Any]:
-        follower = self.supabase.maybe_one("users", filters={"wallet_address": wallet_address})
+        follower = self.supabase.maybe_one("users", filters={"wallet_address": wallet_address}, cache_ttl_seconds=60)
         if follower is None:
             return self.supabase.insert("users", {"id": str(uuid.uuid4()), "wallet_address": wallet_address, "display_name": (display_name or wallet_address[:8]).strip(), "auth_provider": "privy", "created_at": datetime.now(tz=UTC).isoformat()}, upsert=True, on_conflict="wallet_address")[0]
         if display_name:
