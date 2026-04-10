@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -90,6 +90,8 @@ type AttentionItem = {
   botId?: string;
 };
 
+const RUNTIME_PAGE_SIZE = 10;
+
 export function DashboardPage() {
   const {
     authenticated,
@@ -105,6 +107,7 @@ export function DashboardPage() {
     overviewErrors,
     sessionActive,
   } = useFleetObservability();
+  const [currentRuntimePage, setCurrentRuntimePage] = useState(1);
 
   const summary = useMemo(() => {
     const totals = bots.reduce(
@@ -240,6 +243,16 @@ export function DashboardPage() {
         }),
     [bots],
   );
+
+  const totalRuntimePages = Math.max(1, Math.ceil(runtimeRows.length / RUNTIME_PAGE_SIZE));
+  const runtimePage = Math.min(currentRuntimePage, totalRuntimePages);
+  const paginatedRuntimeRows = useMemo(() => {
+    const startIndex = (runtimePage - 1) * RUNTIME_PAGE_SIZE;
+    return runtimeRows.slice(startIndex, startIndex + RUNTIME_PAGE_SIZE);
+  }, [runtimePage, runtimeRows]);
+  const runtimePageStart =
+    runtimeRows.length === 0 ? 0 : (runtimePage - 1) * RUNTIME_PAGE_SIZE + 1;
+  const runtimePageEnd = Math.min(runtimePage * RUNTIME_PAGE_SIZE, runtimeRows.length);
 
   const hottestPositions = useMemo(
     () =>
@@ -480,7 +493,7 @@ export function DashboardPage() {
             </h2>
           </div>
           <span className="text-xs text-neutral-500">
-            Active and paused runtimes are sorted first
+            Active and paused runtimes are sorted first, 10 per page
           </span>
         </div>
 
@@ -496,7 +509,7 @@ export function DashboardPage() {
           </div>
         ) : (
           <div className="grid gap-3">
-            {runtimeRows.map((bot) => {
+            {paginatedRuntimeRows.map((bot) => {
               const status = getFleetBotStatus(bot);
               const overview = overviewByBot[bot.id];
               const successRate = overview ? overview.metrics.success_rate * 100 : null;
@@ -569,8 +582,39 @@ export function DashboardPage() {
                     </Link>
                   </div>
                 </article>
-              );
-            })}
+                );
+              })}
+
+            {runtimeRows.length > RUNTIME_PAGE_SIZE ? (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-[1.6rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-4 py-3">
+                <span className="text-sm text-neutral-400">
+                  Showing {runtimePageStart}-{runtimePageEnd} of {runtimeRows.length} bots
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentRuntimePage((page) => Math.max(1, page - 1))}
+                    disabled={runtimePage === 1}
+                    className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-white hover:text-neutral-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Previous page
+                  </button>
+                  <span className="text-xs uppercase tracking-[0.16em] text-neutral-500">
+                    {runtimePage} / {totalRuntimePages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCurrentRuntimePage((page) => Math.min(totalRuntimePages, page + 1))
+                    }
+                    disabled={runtimePage === totalRuntimePages}
+                    className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-white hover:text-neutral-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Next page
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         )}
       </section>
