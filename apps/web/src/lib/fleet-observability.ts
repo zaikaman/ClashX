@@ -134,17 +134,32 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
   const [hasLoadedBots, setHasLoadedBots] = useState(false);
   const [hasLoadedOverviews, setHasLoadedOverviews] = useState(false);
   const [hasLoadedPositions, setHasLoadedPositions] = useState(false);
+  const [hasLoadedFullPerformance, setHasLoadedFullPerformance] = useState(false);
   const botsRef = useRef<BotFleetItem[]>([]);
   const hasLoadedBotsRef = useRef(false);
   const hasLoadedOverviewsRef = useRef(false);
   const hasLoadedPositionsRef = useRef(false);
+  const hasLoadedFullPerformanceRef = useRef(false);
+  const sessionWalletRef = useRef<string | null>(null);
+  const fullPerformanceInFlightRef = useRef(false);
+  const fullPerformanceRequestKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     botsRef.current = bots;
     hasLoadedBotsRef.current = hasLoadedBots;
     hasLoadedOverviewsRef.current = hasLoadedOverviews;
     hasLoadedPositionsRef.current = hasLoadedPositions;
-  }, [bots, hasLoadedBots, hasLoadedOverviews, hasLoadedPositions]);
+    hasLoadedFullPerformanceRef.current = hasLoadedFullPerformance;
+    sessionWalletRef.current = sessionActive && walletAddress ? walletAddress : null;
+  }, [
+    bots,
+    hasLoadedBots,
+    hasLoadedFullPerformance,
+    hasLoadedOverviews,
+    hasLoadedPositions,
+    sessionActive,
+    walletAddress,
+  ]);
 
   useEffect(() => {
     if (!sessionActive || !walletAddress) {
@@ -159,6 +174,10 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
       setHasLoadedBots(false);
       setHasLoadedOverviews(false);
       setHasLoadedPositions(false);
+      setHasLoadedFullPerformance(false);
+      sessionWalletRef.current = null;
+      fullPerformanceInFlightRef.current = false;
+      fullPerformanceRequestKeyRef.current = null;
       return;
     }
 
@@ -169,6 +188,7 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
       const hasCachedBots = hasLoadedBotsRef.current;
       const hasCachedOverviews = hasLoadedOverviewsRef.current;
       const hasCachedPositions = hasLoadedPositionsRef.current;
+      const hasCachedFullPerformance = hasLoadedFullPerformanceRef.current;
 
       setLoadingBots(!hasCachedBots);
       setLoadingOverviews(!hasCachedOverviews);
@@ -197,7 +217,9 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
         setBots(mergedBots);
         setError(null);
         setLoadingBots(false);
+        setLoadingPositions(false);
         setHasLoadedBots(true);
+        setHasLoadedPositions(true);
         setLastUpdatedAt(new Date().toISOString());
 
         const botsWithRuntime = mergedBots.filter((bot) => Boolean(bot.runtime?.id));
@@ -208,6 +230,7 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
           setLoadingPositions(false);
           setHasLoadedOverviews(true);
           setHasLoadedPositions(true);
+          setHasLoadedFullPerformance(true);
           setLastUpdatedAt(new Date().toISOString());
           return;
         }
@@ -215,6 +238,7 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
         if (liveRuntimeBots.length === 0) {
           setLoadingPositions(false);
           setHasLoadedPositions(true);
+          setHasLoadedFullPerformance(true);
         }
         const hydrateOverviews = (async () => {
           try {
@@ -257,35 +281,48 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
           }
         })();
 
-        const hydratePerformance = (async () => {
-          try {
-            const response = await fetch(
-              `${API_BASE_URL}/api/bots?wallet_address=${walletQuery}&include_performance=true&performance_mode=full`,
-              {
-                headers,
-                signal: controller.signal,
-              },
-            );
-            const fullFleet = await unwrapResponse<BotFleetItem[]>(
-              response,
-              "Could not load runtime performance",
-            );
+        const shouldHydratePerformance =
+          liveRuntimeBots.length > 0 &&
+          !hasCachedFullPerformance &&
+          !fullPerformanceInFlightRef.current;
 
-            if (controller.signal.aborted) {
-              return;
+        if (shouldHydratePerformance) {
+          const requestKey = `${resolvedWallet}:${Date.now()}`;
+          fullPerformanceInFlightRef.current = true;
+          fullPerformanceRequestKeyRef.current = requestKey;
+
+          void (async () => {
+            try {
+              const response = await fetch(
+                `${API_BASE_URL}/api/bots?wallet_address=${walletQuery}&include_performance=true&performance_mode=full`,
+                {
+                  headers,
+                },
+              );
+              const fullFleet = await unwrapResponse<BotFleetItem[]>(
+                response,
+                "Could not load runtime performance",
+              );
+
+              if (
+                sessionWalletRef.current !== resolvedWallet ||
+                fullPerformanceRequestKeyRef.current !== requestKey
+              ) {
+                return;
+              }
+
+              setBots((current) => mergeFleetSnapshot(current, fullFleet));
+              setHasLoadedFullPerformance(true);
+              setLastUpdatedAt(new Date().toISOString());
+            } finally {
+              if (fullPerformanceRequestKeyRef.current === requestKey) {
+                fullPerformanceInFlightRef.current = false;
+              }
             }
+          })();
+        }
 
-            setBots((current) => mergeFleetSnapshot(current, fullFleet));
-            setHasLoadedPositions(true);
-            setLastUpdatedAt(new Date().toISOString());
-          } finally {
-            if (!controller.signal.aborted) {
-              setLoadingPositions(false);
-            }
-          }
-        })();
-
-        await Promise.allSettled([hydrateOverviews, hydratePerformance]);
+        await Promise.allSettled([hydrateOverviews]);
       } catch (loadError) {
         if (controller.signal.aborted) {
           return;
@@ -299,6 +336,7 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
           setHasLoadedBots(false);
           setHasLoadedOverviews(false);
           setHasLoadedPositions(false);
+          setHasLoadedFullPerformance(false);
         }
       } finally {
         if (!controller.signal.aborted) {

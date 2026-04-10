@@ -364,15 +364,8 @@ async def list_bots(
     runtimes = {runtime["bot_definition_id"]: runtime for runtime in runtimes_for_wallet}
     performances: list[RuntimePerformanceResponse | None]
     if include_performance and runtimes_for_wallet and performance_mode == "fast":
-        live_position_lookup, live_positions_loaded = await bot_performance_service.load_live_position_lookup_for_wallet(
-            resolved_wallet
-        )
         performances = [
-            _build_fast_runtime_performance(
-                runtimes.get(row["id"]),
-                live_position_lookup=live_position_lookup,
-                live_positions_loaded=live_positions_loaded,
-            )
+            _build_fast_runtime_performance(runtimes.get(row["id"]))
             for row in definitions
         ]
     elif include_performance and runtimes_for_wallet:
