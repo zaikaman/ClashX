@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   Bot,
+  CircleX,
   History,
   LoaderCircle,
   Plus,
@@ -288,6 +289,38 @@ export function CopilotPage() {
     }
   }
 
+  async function deleteConversation(conversationId: string) {
+    if (!authenticated || isBusy) {
+      return;
+    }
+    setError(null);
+    try {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${API_BASE_URL}/api/copilot/conversations/${conversationId}`, {
+        method: "DELETE",
+        headers,
+      });
+      if (!response.ok) {
+        const payload = (await parseJson<{ detail?: string }>(response)) as { detail?: string };
+        throw new Error(payload.detail ?? "Failed to delete conversation");
+      }
+
+      const remaining = conversations.filter((conversation) => conversation.id !== conversationId);
+      setConversations(remaining);
+      if (activeConversationId === conversationId) {
+        const nextConversation = remaining[0] ?? null;
+        setActiveConversationId(nextConversation?.id ?? null);
+        setActiveConversation(nextConversation);
+        setMessages([]);
+        if (nextConversation) {
+          await openConversation(nextConversation.id);
+        }
+      }
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Failed to delete conversation");
+    }
+  }
+
   async function sendMessage(seed?: string) {
     const content = (seed ?? input).trim();
     if (!content || status === "sending") {
@@ -389,31 +422,45 @@ export function CopilotPage() {
               {conversations.map((conversation) => {
                 const isActive = conversation.id === activeConversationId;
                 return (
-                  <button
-                    key={conversation.id}
-                    type="button"
-                    onClick={() => void openConversation(conversation.id)}
-                    className={`w-full rounded-[1.35rem] border px-4 py-3 text-left transition ${
-                      isActive
-                        ? "border-[#dce85d]/35 bg-[#dce85d]/10"
-                        : "border-white/[0.04] bg-white/[0.02] hover:border-white/[0.12] hover:bg-white/[0.05]"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <p className={`text-sm font-medium ${isActive ? "text-[#eef5a8]" : "text-neutral-100"}`}>
-                        {conversation.title}
+                  <div key={conversation.id} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => void openConversation(conversation.id)}
+                      className={`w-full rounded-[1.35rem] border px-4 py-3 pr-12 text-left transition ${
+                        isActive
+                          ? "border-[#dce85d]/35 bg-[#dce85d]/10"
+                          : "border-white/[0.04] bg-white/[0.02] hover:border-white/[0.12] hover:bg-white/[0.05]"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <p className={`text-sm font-medium ${isActive ? "text-[#eef5a8]" : "text-neutral-100"}`}>
+                          {conversation.title}
+                        </p>
+                        <span className="shrink-0 text-[10px] uppercase tracking-[0.2em] text-neutral-500">
+                          {formatConversationTime(conversation.latestMessageAt)}
+                        </span>
+                      </div>
+                      <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-neutral-400">
+                        {conversation.lastMessagePreview || "No messages yet."}
                       </p>
-                      <span className="shrink-0 text-[10px] uppercase tracking-[0.2em] text-neutral-500">
-                        {formatConversationTime(conversation.latestMessageAt)}
-                      </span>
-                    </div>
-                    <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-neutral-400">
-                      {conversation.lastMessagePreview || "No messages yet."}
-                    </p>
-                    <p className="mt-3 text-[10px] uppercase tracking-[0.22em] text-neutral-600">
-                      {conversation.messageCount} messages
-                    </p>
-                  </button>
+                      <p className="mt-3 text-[10px] uppercase tracking-[0.22em] text-neutral-600">
+                        {conversation.messageCount} messages
+                      </p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void deleteConversation(conversation.id);
+                      }}
+                      disabled={isBusy}
+                      className="absolute right-3 top-3 rounded-full border border-white/[0.08] bg-black/25 p-1.5 text-neutral-500 transition hover:border-rose-400/30 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40"
+                      aria-label={`Delete ${conversation.title}`}
+                      title="Delete conversation"
+                    >
+                      <CircleX className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 );
               })}
             </div>

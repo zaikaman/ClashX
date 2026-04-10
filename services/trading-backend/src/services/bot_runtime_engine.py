@@ -159,7 +159,11 @@ class BotRuntimeEngine:
 
     def get_active_runtimes(self, db: Any) -> list[dict[str, Any]]:
         del db
-        return self._supabase.select("bot_runtimes", filters={"status": "active"})
+        return self._supabase.select(
+            "bot_runtimes",
+            columns="id,bot_definition_id,user_id,wallet_address,status,mode,risk_policy_json,deployed_at,stopped_at,updated_at",
+            filters={"status": "active"},
+        )
 
     def append_execution_event(
         self,
@@ -266,6 +270,7 @@ class BotRuntimeEngine:
                 "status": "success",
                 "created_at": datetime.now(tz=UTC).isoformat(),
             },
+            returning="minimal",
         )
 
     def _validate_runtime_policy(self, *, bot: dict[str, Any], risk_policy_json: dict[str, Any]) -> None:

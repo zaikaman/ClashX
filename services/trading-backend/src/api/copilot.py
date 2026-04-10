@@ -112,6 +112,17 @@ def get_copilot_conversation(
     return CopilotConversationDetailResponse.model_validate(conversation)
 
 
+@router.delete("/conversations/{conversation_id}", status_code=204)
+def delete_copilot_conversation(
+    conversation_id: str,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> None:
+    try:
+        conversation_service.delete_conversation(user=user, conversation_id=conversation_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/chat", response_model=CopilotChatResponse)
 async def chat_with_copilot(
     payload: CopilotChatRequest,

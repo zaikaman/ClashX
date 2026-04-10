@@ -53,6 +53,7 @@ class BotCopyWorker:
                 active = await asyncio.to_thread(
                     self._supabase.select,
                     "bot_copy_relationships",
+                    columns="id,source_runtime_id,follower_user_id,follower_wallet_address,scale_bps,updated_at",
                     filters={"status": "active", "mode": "mirror"},
                 )
                 for relationship in active:
@@ -84,7 +85,9 @@ class BotCopyWorker:
         runtime = await asyncio.to_thread(
             self._supabase.maybe_one,
             "bot_runtimes",
+            columns="id,status",
             filters={"id": relationship["source_runtime_id"]},
+            cache_ttl_seconds=5,
         )
         if runtime is None or runtime["status"] != "active":
             return
@@ -170,6 +173,7 @@ class BotCopyWorker:
                     },
                     "created_at": datetime.now(tz=UTC).isoformat(),
                     },
+                returning="minimal",
             )
             await broadcaster.publish(
                 channel=f"user:{relationship['follower_user_id']}",

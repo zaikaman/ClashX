@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from html import unescape
 import re
+from time import monotonic
 from typing import Any
 
 import httpx
@@ -24,6 +25,7 @@ class SupabaseRestError(RuntimeError):
 _HTML_TITLE_RE = re.compile(r"<title>\s*(.*?)\s*</title>", re.IGNORECASE | re.DOTALL)
 _WHITESPACE_RE = re.compile(r"\s+")
 _MAX_ERROR_MESSAGE_LENGTH = 240
+_DEFAULT_CACHE_TTL_SECONDS = 15.0
 
 
 class SupabaseRestClient:
@@ -42,6 +44,7 @@ class SupabaseRestClient:
             headers=self._headers,
             timeout=20,
         )
+        self._read_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
     def select(
         self,
@@ -51,7 +54,21 @@ class SupabaseRestClient:
         filters: Mapping[str, Any] | None = None,
         order: str | None = None,
         limit: int | None = None,
+        cache_ttl_seconds: float | None = None,
     ) -> list[dict[str, Any]]:
+        cache_key = self._build_read_cache_key(
+            table,
+            columns=columns,
+            filters=filters,
+            order=order,
+            limit=limit,
+            cache_ttl_seconds=cache_ttl_seconds,
+        )
+        effective_cache_ttl = min(max(0.0, float(cache_ttl_seconds or 0.0)), _DEFAULT_CACHE_TTL_SECONDS)
+        if cache_key is not None:
+            cached = self._read_cache.get(cache_key)
+            if cached is not None and (monotonic() - cached[0]) < effective_cache_ttl:
+                return [dict(row) for row in cached[1]]
         params: dict[str, str] = {"select": columns}
         params.update(self._build_filters(filters))
         if order:
@@ -60,7 +77,10 @@ class SupabaseRestClient:
             params["limit"] = str(limit)
         response = self._request("GET", f"/{table}", params=params)
         data = response.json()
-        return data if isinstance(data, list) else []
+        rows = data if isinstance(data, list) else []
+        if cache_key is not None:
+            self._read_cache[cache_key] = (monotonic(), [dict(row) for row in rows if isinstance(row, dict)])
+        return rows
 
     def maybe_one(
         self,
@@ -69,8 +89,16 @@ class SupabaseRestClient:
         columns: str = "*",
         filters: Mapping[str, Any] | None = None,
         order: str | None = None,
+        cache_ttl_seconds: float | None = None,
     ) -> dict[str, Any] | None:
-        rows = self.select(table, columns=columns, filters=filters, order=order, limit=1)
+        rows = self.select(
+            table,
+            columns=columns,
+            filters=filters,
+            order=order,
+            limit=1,
+            cache_ttl_seconds=cache_ttl_seconds,
+        )
         return rows[0] if rows else None
 
     def insert(
@@ -80,10 +108,17 @@ class SupabaseRestClient:
         *,
         upsert: bool = False,
         on_conflict: str | None = None,
+        returning: str = "representation",
     ) -> list[dict[str, Any]]:
-        headers = {"Prefer": "resolution=merge-duplicates,return=representation" if upsert else "return=representation"}
+        prefer_parts = ["return=minimal" if returning == "minimal" else "return=representation"]
+        if upsert:
+            prefer_parts.insert(0, "resolution=merge-duplicates")
+        headers = {"Prefer": ",".join(prefer_parts)}
         params = {"on_conflict": on_conflict} if on_conflict else None
         response = self._request("POST", f"/{table}", json=payload, headers=headers, params=params)
+        self._invalidate_table_cache(table)
+        if returning == "minimal":
+            return []
         data = response.json()
         if isinstance(data, list):
             return data
@@ -97,9 +132,13 @@ class SupabaseRestClient:
         values: dict[str, Any],
         *,
         filters: Mapping[str, Any],
+        returning: str = "representation",
     ) -> list[dict[str, Any]]:
-        headers = {"Prefer": "return=representation"}
+        headers = {"Prefer": "return=minimal" if returning == "minimal" else "return=representation"}
         response = self._request("PATCH", f"/{table}", json=values, headers=headers, params=self._build_filters(filters))
+        self._invalidate_table_cache(table)
+        if returning == "minimal":
+            return []
         data = response.json()
         if isinstance(data, list):
             return data
@@ -109,9 +148,11 @@ class SupabaseRestClient:
 
     def delete(self, table: str, *, filters: Mapping[str, Any]) -> None:
         self._request("DELETE", f"/{table}", params=self._build_filters(filters), headers={"Prefer": "return=minimal"})
+        self._invalidate_table_cache(table)
 
     def close(self) -> None:
         self._client.close()
+        self._read_cache.clear()
 
     def _build_filters(self, filters: Mapping[str, Any] | None) -> dict[str, str]:
         params: dict[str, str] = {}
@@ -140,6 +181,47 @@ class SupabaseRestClient:
         if value is None:
             return "null"
         return str(value)
+
+    def _build_read_cache_key(
+        self,
+        table: str,
+        *,
+        columns: str,
+        filters: Mapping[str, Any] | None,
+        order: str | None,
+        limit: int | None,
+        cache_ttl_seconds: float | None,
+    ) -> str | None:
+        if cache_ttl_seconds is None:
+            return None
+        if cache_ttl_seconds <= 0:
+            return None
+        normalized_filters = self._normalize_cacheable_filters(filters)
+        if normalized_filters is None:
+            return None
+        ttl = min(float(cache_ttl_seconds), _DEFAULT_CACHE_TTL_SECONDS)
+        return f"{table}|{columns}|{order or ''}|{limit or ''}|{normalized_filters}|{ttl}"
+
+    def _normalize_cacheable_filters(self, filters: Mapping[str, Any] | None) -> tuple[tuple[str, Any], ...] | None:
+        if not filters:
+            return tuple()
+        normalized: list[tuple[str, Any]] = []
+        for key in sorted(filters):
+            value = filters[key]
+            if isinstance(value, tuple):
+                operator, operand = value
+                if operator != "eq":
+                    return None
+                value = operand
+            elif isinstance(value, (list, dict, set)):
+                return None
+            normalized.append((str(key), value))
+        return tuple(normalized)
+
+    def _invalidate_table_cache(self, table: str) -> None:
+        prefix = f"{table}|"
+        for key in [cache_key for cache_key in self._read_cache if cache_key.startswith(prefix)]:
+            self._read_cache.pop(key, None)
 
     def _request(
         self,

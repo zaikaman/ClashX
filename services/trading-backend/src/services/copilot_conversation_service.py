@@ -62,27 +62,43 @@ class CopilotConversationService:
         wallet_address: str | None = None,
         title: str | None = None,
     ) -> dict[str, Any]:
+        created = self._create_conversation_row(
+            user=user,
+            wallet_address=wallet_address,
+            title=title,
+        )
+        return self._serialize_conversation_summary(created)
+
+    def _create_conversation_row(
+        self,
+        *,
+        user: AuthenticatedUser,
+        wallet_address: str | None = None,
+        title: str | None = None,
+    ) -> dict[str, Any]:
         wallet = self._resolve_wallet(user=user, requested_wallet=wallet_address)
         user_row = self._upsert_user(wallet_address=wallet)
         now = _as_iso_now()
-        inserted = self._supabase.insert(
+        row = {
+            "id": str(uuid.uuid4()),
+            "user_id": user_row["id"],
+            "wallet_address": wallet,
+            "title": self._normalize_title(title),
+            "context_summary": "",
+            "summary_message_count": 0,
+            "summary_token_estimate": 0,
+            "message_count": 0,
+            "last_message_preview": "",
+            "created_at": now,
+            "updated_at": now,
+            "latest_message_at": now,
+        }
+        self._supabase.insert(
             "copilot_conversations",
-            {
-                "id": str(uuid.uuid4()),
-                "user_id": user_row["id"],
-                "wallet_address": wallet,
-                "title": self._normalize_title(title),
-                "context_summary": "",
-                "summary_message_count": 0,
-                "summary_token_estimate": 0,
-                "message_count": 0,
-                "last_message_preview": "",
-                "created_at": now,
-                "updated_at": now,
-                "latest_message_at": now,
-            },
-        )[0]
-        return self._serialize_conversation_summary(inserted)
+            row,
+            returning="minimal",
+        )
+        return row
 
     def get_conversation(self, *, user: AuthenticatedUser, conversation_id: str) -> dict[str, Any]:
         conversation = self._require_conversation(user=user, conversation_id=conversation_id)
@@ -93,6 +109,11 @@ class CopilotConversationService:
             "summaryText": str(conversation.get("context_summary") or ""),
             "messages": [self._serialize_message(row) for row in messages],
         }
+
+    def delete_conversation(self, *, user: AuthenticatedUser, conversation_id: str) -> None:
+        conversation = self._require_conversation(user=user, conversation_id=conversation_id)
+        self._supabase.delete("copilot_messages", filters={"conversation_id": conversation["id"]})
+        self._supabase.delete("copilot_conversations", filters={"id": conversation["id"]})
 
     async def send_message(
         self,
@@ -117,21 +138,24 @@ class CopilotConversationService:
             conversation = self._sync_conversation_wallet(conversation=conversation, wallet_address=resolved_wallet)
 
         now = _as_iso_now()
-        user_message = self._supabase.insert(
+        user_message = {
+            "id": str(uuid.uuid4()),
+            "conversation_id": conversation["id"],
+            "role": "user",
+            "content": normalized_content,
+            "tool_calls_json": [],
+            "follow_ups_json": [],
+            "provider": None,
+            "token_estimate": estimate_token_count(normalized_content),
+            "created_at": now,
+        }
+        self._supabase.insert(
             "copilot_messages",
-            {
-                "id": str(uuid.uuid4()),
-                "conversation_id": conversation["id"],
-                "role": "user",
-                "content": normalized_content,
-                "tool_calls_json": [],
-                "follow_ups_json": [],
-                "provider": None,
-                "token_estimate": estimate_token_count(normalized_content),
-                "created_at": now,
-            },
-        )[0]
-        conversation = self._supabase.update(
+            user_message,
+            returning="minimal",
+        )
+        conversation = self._merge_conversation_patch(
+            conversation,
             "copilot_conversations",
             self._conversation_patch(
                 conversation=conversation,
@@ -141,8 +165,7 @@ class CopilotConversationService:
                 updated_at=now,
                 latest_message_at=now,
             ),
-            filters={"id": conversation["id"]},
-        )[0]
+        )
 
         messages = self._list_messages(conversation_id=conversation["id"])
         conversation = await self._compact_context_if_needed(conversation=conversation, messages=messages)
@@ -155,21 +178,24 @@ class CopilotConversationService:
         )
 
         assistant_now = _as_iso_now()
-        assistant_row = self._supabase.insert(
+        assistant_row = {
+            "id": str(uuid.uuid4()),
+            "conversation_id": conversation["id"],
+            "role": "assistant",
+            "content": result["reply"],
+            "tool_calls_json": result.get("toolCalls") or [],
+            "follow_ups_json": result.get("followUps") or [],
+            "provider": result.get("provider"),
+            "token_estimate": estimate_token_count(result["reply"]),
+            "created_at": assistant_now,
+        }
+        self._supabase.insert(
             "copilot_messages",
-            {
-                "id": str(uuid.uuid4()),
-                "conversation_id": conversation["id"],
-                "role": "assistant",
-                "content": result["reply"],
-                "tool_calls_json": result.get("toolCalls") or [],
-                "follow_ups_json": result.get("followUps") or [],
-                "provider": result.get("provider"),
-                "token_estimate": estimate_token_count(result["reply"]),
-                "created_at": assistant_now,
-            },
-        )[0]
-        conversation = self._supabase.update(
+            assistant_row,
+            returning="minimal",
+        )
+        conversation = self._merge_conversation_patch(
+            conversation,
             "copilot_conversations",
             self._conversation_patch(
                 conversation=conversation,
@@ -178,8 +204,7 @@ class CopilotConversationService:
                 updated_at=assistant_now,
                 latest_message_at=assistant_now,
             ),
-            filters={"id": conversation["id"]},
-        )[0]
+        )
 
         return {
             "conversationId": conversation["id"],
@@ -231,7 +256,8 @@ class CopilotConversationService:
             ],
         )
         now = _as_iso_now()
-        updated = self._supabase.update(
+        return self._merge_conversation_patch(
+            conversation,
             "copilot_conversations",
             {
                 "context_summary": updated_summary,
@@ -239,9 +265,7 @@ class CopilotConversationService:
                 "summary_token_estimate": estimate_token_count(updated_summary),
                 "updated_at": now,
             },
-            filters={"id": conversation["id"]},
-        )[0]
-        return updated
+        )
 
     def _build_runtime_messages(
         self,
@@ -275,8 +299,7 @@ class CopilotConversationService:
     ) -> dict[str, Any]:
         if conversation_id:
             return self._require_conversation(user=user, conversation_id=conversation_id)
-        created = self.create_conversation(user=user, wallet_address=wallet_address)
-        return self._require_conversation(user=user, conversation_id=created["id"])
+        return self._create_conversation_row(user=user, wallet_address=wallet_address)
 
     def _require_conversation(self, *, user: AuthenticatedUser, conversation_id: str) -> dict[str, Any]:
         filters: dict[str, Any] = {"id": conversation_id}
@@ -291,15 +314,15 @@ class CopilotConversationService:
 
     def _sync_conversation_wallet(self, *, conversation: dict[str, Any], wallet_address: str) -> dict[str, Any]:
         user_row = self._upsert_user(wallet_address=wallet_address)
-        return self._supabase.update(
+        return self._merge_conversation_patch(
+            conversation,
             "copilot_conversations",
             {
                 "user_id": user_row["id"],
                 "wallet_address": wallet_address,
                 "updated_at": _as_iso_now(),
             },
-            filters={"id": conversation["id"]},
-        )[0]
+        )
 
     def _list_messages(self, *, conversation_id: str) -> list[dict[str, Any]]:
         return self._supabase.select(
@@ -328,7 +351,7 @@ class CopilotConversationService:
         raise ValueError("No linked wallet is available for Copilot.")
 
     def _upsert_user(self, *, wallet_address: str) -> dict[str, Any]:
-        existing = self._supabase.maybe_one("users", filters={"wallet_address": wallet_address})
+        existing = self._supabase.maybe_one("users", filters={"wallet_address": wallet_address}, cache_ttl_seconds=60)
         if existing is not None:
             return existing
         return self._supabase.insert(
@@ -343,6 +366,20 @@ class CopilotConversationService:
             upsert=True,
             on_conflict="wallet_address",
         )[0]
+
+    def _merge_conversation_patch(
+        self,
+        conversation: dict[str, Any],
+        table: str,
+        patch: dict[str, Any],
+    ) -> dict[str, Any]:
+        self._supabase.update(
+            table,
+            patch,
+            filters={"id": conversation["id"]},
+            returning="minimal",
+        )
+        return {**conversation, **patch}
 
     def _normalize_title(self, value: str | None) -> str:
         cleaned = " ".join(str(value or "").split()).strip()

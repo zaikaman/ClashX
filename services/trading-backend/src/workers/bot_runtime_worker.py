@@ -87,7 +87,9 @@ class BotRuntimeWorker:
                     bot = await asyncio.to_thread(
                         self._supabase.maybe_one,
                         "bot_definitions",
+                        columns="id,rules_json",
                         filters={"id": runtime["bot_definition_id"]},
+                        cache_ttl_seconds=10,
                     )
                     runtime_policy = self._risk.normalize_policy(
                         runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {}
@@ -174,7 +176,9 @@ class BotRuntimeWorker:
         bot = bot or await asyncio.to_thread(
             self._supabase.maybe_one,
             "bot_definitions",
+            columns="id,rules_json",
             filters={"id": runtime["bot_definition_id"]},
+            cache_ttl_seconds=10,
         )
         if bot is None:
             logger.error(

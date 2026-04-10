@@ -31,7 +31,7 @@ class WorkerCoordinationService:
             "updated_at": now.isoformat(),
         }
         try:
-            self._supabase.insert("worker_leases", payload)
+            self._supabase.insert("worker_leases", payload, returning="minimal")
             return True
         except SupabaseRestError as exc:
             if exc.status_code == 409:
@@ -81,7 +81,7 @@ class WorkerCoordinationService:
             "created_at": datetime.now(tz=UTC).isoformat(),
         }
         try:
-            self._supabase.insert("bot_action_claims", claim_payload)
+            self._supabase.insert("bot_action_claims", claim_payload, returning="minimal")
             return True
         except SupabaseRestError as exc:
             if exc.status_code == 409:
@@ -116,7 +116,7 @@ class WorkerCoordinationService:
                 return False
             raise
         try:
-            self._supabase.insert("bot_action_claims", claim_payload)
+            self._supabase.insert("bot_action_claims", claim_payload, returning="minimal")
             return True
         except SupabaseRestError as exc:
             if exc.status_code == 409:

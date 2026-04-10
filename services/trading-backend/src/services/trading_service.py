@@ -215,14 +215,18 @@ class TradingService:
 
     def _upsert_user(self, db: Any, wallet_address: str) -> dict[str, Any]:
         del db
-        user = self.supabase.maybe_one("users", filters={"wallet_address": wallet_address})
+        user = self.supabase.maybe_one("users", filters={"wallet_address": wallet_address}, cache_ttl_seconds=60)
         if user is not None:
             return user
         return self.supabase.insert("users", {"id": str(uuid.uuid4()), "wallet_address": wallet_address, "display_name": wallet_address[:8], "auth_provider": "privy", "created_at": datetime.now(tz=UTC).isoformat()})[0]
 
     def _record_audit_event(self, db: Any, *, user_id: str, action: str, payload: dict[str, Any]) -> None:
         del db
-        self.supabase.insert("audit_events", {"id": str(uuid.uuid4()), "user_id": user_id, "action": action, "payload": payload, "created_at": datetime.now(tz=UTC).isoformat()})
+        self.supabase.insert(
+            "audit_events",
+            {"id": str(uuid.uuid4()), "user_id": user_id, "action": action, "payload": payload, "created_at": datetime.now(tz=UTC).isoformat()},
+            returning="minimal",
+        )
 
     def _list_recent_activity(self, *, user_id: str) -> list[dict[str, Any]]:
         events = self.supabase.select("audit_events", filters={"user_id": user_id}, order="created_at.desc", limit=12)

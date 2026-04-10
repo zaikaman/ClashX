@@ -48,6 +48,7 @@ class PortfolioAllocatorWorker:
                 baskets = await asyncio.to_thread(
                     self._supabase.select,
                     "portfolio_baskets",
+                    columns="id",
                     filters={"status": ("in", ["active", "paused", "killed"])},
                 )
                 for basket in baskets:

@@ -45,8 +45,9 @@ class _FakeSupabase:
         filters: dict[str, Any] | None = None,
         order: str | None = None,
         limit: int | None = None,
+        cache_ttl_seconds: float | None = None,
     ) -> list[dict[str, Any]]:
-        del columns
+        del columns, cache_ttl_seconds
         rows = [dict(row) for row in self.tables[table]]
         if filters:
             rows = [
@@ -70,8 +71,9 @@ class _FakeSupabase:
         columns: str = "*",
         filters: dict[str, Any] | None = None,
         order: str | None = None,
+        cache_ttl_seconds: float | None = None,
     ) -> dict[str, Any] | None:
-        rows = self.select(table, columns=columns, filters=filters, order=order, limit=1)
+        rows = self.select(table, columns=columns, filters=filters, order=order, limit=1, cache_ttl_seconds=cache_ttl_seconds)
         return rows[0] if rows else None
 
     def insert(
@@ -81,7 +83,9 @@ class _FakeSupabase:
         *,
         upsert: bool = False,
         on_conflict: str | None = None,
+        returning: str = "representation",
     ) -> list[dict[str, Any]]:
+        del returning
         items = payload if isinstance(payload, list) else [payload]
         inserted: list[dict[str, Any]] = []
         for item in items:
@@ -109,13 +113,22 @@ class _FakeSupabase:
         values: dict[str, Any],
         *,
         filters: dict[str, Any],
+        returning: str = "representation",
     ) -> list[dict[str, Any]]:
+        del returning
         updated: list[dict[str, Any]] = []
         for row in self.tables[table]:
             if all(_matches(row.get(key), expected) for key, expected in filters.items()):
                 row.update(values)
                 updated.append(dict(row))
         return updated
+
+    def delete(self, table: str, *, filters: dict[str, Any]) -> None:
+        self.tables[table] = [
+            row
+            for row in self.tables[table]
+            if not all(_matches(row.get(key), expected) for key, expected in filters.items())
+        ]
 
 
 @dataclass
@@ -220,3 +233,31 @@ def test_send_message_rolls_older_turns_into_summary_before_chat() -> None:
     assert len(copilot.summary_calls) == 1
     assert copilot.chat_calls[0]["messages"][0]["content"].startswith("CONTEXT_SUMMARY")
     assert len(copilot.chat_calls[0]["messages"]) == 7
+
+
+def test_delete_conversation_removes_messages_and_thread() -> None:
+    supabase = _FakeSupabase()
+    copilot = _FakeCopilot()
+    service = CopilotConversationService(copilot=copilot, supabase=supabase)
+    user = _user()
+
+    created = service.create_conversation(user=user, wallet_address="wallet-abc", title="Delete me")
+    supabase.insert(
+        "copilot_messages",
+        {
+            "id": str(uuid.uuid4()),
+            "conversation_id": created["id"],
+            "role": "user",
+            "content": "hello",
+            "tool_calls_json": [],
+            "follow_ups_json": [],
+            "provider": None,
+            "token_estimate": 1,
+            "created_at": _utc_now(),
+        },
+    )
+
+    service.delete_conversation(user=user, conversation_id=created["id"])
+
+    assert supabase.tables["copilot_conversations"] == []
+    assert supabase.tables["copilot_messages"] == []

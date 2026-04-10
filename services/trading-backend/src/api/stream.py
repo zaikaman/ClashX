@@ -13,7 +13,7 @@ supabase = SupabaseRestClient()
 
 
 def _resolve_wallet_address_sync(user_id: str) -> str | None:
-    user = supabase.maybe_one("users", filters={"id": user_id})
+    user = supabase.maybe_one("users", columns="wallet_address", filters={"id": user_id}, cache_ttl_seconds=60)
     return None if user is None else user.get("wallet_address")
 
 
