@@ -11,6 +11,7 @@ from src.api.backtests import router as backtests_router
 from src.api.bot_copy import router as bot_copy_router
 from src.api.bots import router as bots_router
 from src.api.builder import router as builder_router
+from src.api.copilot import router as copilot_router
 from src.api.marketplace import router as marketplace_router
 from src.api.marketplace import marketplace_service
 from src.api.pacifica import router as pacifica_router
@@ -63,6 +64,7 @@ def create_app() -> FastAPI:
     app.include_router(bot_copy_router)
     app.include_router(bots_router)
     app.include_router(builder_router)
+    app.include_router(copilot_router)
     app.include_router(marketplace_router)
     app.include_router(pacifica_router)
     app.include_router(portfolios_router)

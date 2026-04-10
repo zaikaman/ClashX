@@ -279,6 +279,35 @@ CREATE TABLE public.copy_relationships (
   CONSTRAINT copy_relationships_follower_user_id_fkey FOREIGN KEY (follower_user_id) REFERENCES public.users(id),
   CONSTRAINT copy_relationships_source_user_id_fkey FOREIGN KEY (source_user_id) REFERENCES public.users(id)
 );
+CREATE TABLE public.copilot_conversations (
+  id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  wallet_address character varying NOT NULL,
+  title character varying NOT NULL DEFAULT 'New conversation'::character varying,
+  context_summary text NOT NULL DEFAULT ''::text,
+  summary_message_count integer NOT NULL DEFAULT 0,
+  summary_token_estimate integer NOT NULL DEFAULT 0,
+  message_count integer NOT NULL DEFAULT 0,
+  last_message_preview text NOT NULL DEFAULT ''::text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  latest_message_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT copilot_conversations_pkey PRIMARY KEY (id),
+  CONSTRAINT copilot_conversations_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
+);
+CREATE TABLE public.copilot_messages (
+  id uuid NOT NULL,
+  conversation_id uuid NOT NULL,
+  role character varying NOT NULL,
+  content text NOT NULL DEFAULT ''::text,
+  tool_calls_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+  follow_ups_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+  provider character varying,
+  token_estimate integer NOT NULL DEFAULT 0,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT copilot_messages_pkey PRIMARY KEY (id),
+  CONSTRAINT copilot_messages_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES public.copilot_conversations(id)
+);
 CREATE TABLE public.creator_marketplace_profiles (
   id uuid NOT NULL,
   user_id uuid NOT NULL UNIQUE,

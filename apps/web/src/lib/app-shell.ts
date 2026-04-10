@@ -44,6 +44,11 @@ export const appNavGroups: AppNavGroup[] = [
         label: "Builder studio",
         description: "Create, validate, and deploy a bot from one flow.",
       },
+      {
+        href: "/copilot",
+        label: "Copilot",
+        description: "Ask for live workspace context, private account state, and schema help.",
+      },
     ],
   },
   {
@@ -76,6 +81,7 @@ export const appNavGroups: AppNavGroup[] = [
 export const appWorkflow = [
   { href: "/marketplace", label: "Browse the marketplace" },
   { href: "/builder", label: "Draft a strategy" },
+  { href: "/copilot", label: "Ask Copilot for context" },
   { href: "/bots", label: "Deploy and monitor" },
   { href: "/dashboard", label: "Watch the fleet" },
   { href: "/analytics", label: "Read the analytics" },
@@ -177,6 +183,24 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
       actions: [
         { href: "/bots", label: "Open my bots", tone: "primary" },
         { href: "/marketplace", label: "Open marketplace", tone: "secondary" },
+      ],
+    };
+  }
+
+  if (normalizedPathname === "/copilot") {
+    return {
+      eyebrow: "Copilot",
+      title: "Ask for grounded workspace context",
+      description: "Use Copilot when you want live answers about your bots, account state, Pacifica readiness, or the schema behind the product.",
+      guidanceTitle: "Use this desk",
+      guidance: [
+        "Ask direct operational questions when you want a fast answer backed by current account context.",
+        "Use schema questions when you need to trace which tables hold the state behind a feature.",
+        "Follow up after a summary when you want Copilot to drill into one bot, one portfolio, or one risk blocker.",
+      ],
+      actions: [
+        { href: "/builder", label: "Open builder studio", tone: "primary" },
+        { href: "/bots", label: "Open my bots", tone: "secondary" },
       ],
     };
   }

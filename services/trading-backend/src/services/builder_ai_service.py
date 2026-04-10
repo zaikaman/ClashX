@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from src.core.settings import get_settings
+from src.services.ai_response_json import extract_first_json_object
 
 CONDITION_OPTIONS = [
     "price_above",
@@ -258,7 +258,10 @@ class BuilderAiService:
         return contents
 
     def _parse_response_payload(self, response: Any) -> Any:
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise RuntimeError("AI provider returned a non-JSON response.") from exc
         if getattr(response, "status_code", 500) >= 400:
             error = payload.get("error", {}) if isinstance(payload, dict) else {}
             detail = error.get("message") if isinstance(error, dict) else None
@@ -309,19 +312,7 @@ class BuilderAiService:
         return "\n".join(chunks).strip()
 
     def _extract_json(self, value: str) -> dict[str, Any]:
-        trimmed = value.strip()
-        if not trimmed:
-            raise RuntimeError("Empty AI response")
-        fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", trimmed, re.IGNORECASE)
-        candidate = fenced.group(1).strip() if fenced else trimmed
-        first_brace = candidate.find("{")
-        last_brace = candidate.rfind("}")
-        if first_brace == -1 or last_brace == -1 or last_brace < first_brace:
-            raise RuntimeError("AI response did not contain JSON")
-        parsed = json.loads(candidate[first_brace : last_brace + 1])
-        if not isinstance(parsed, dict):
-            raise RuntimeError("AI response JSON must be an object")
-        return parsed
+        return extract_first_json_object(value)
 
     def _normalize_tool_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         nested_function = payload.get("function")

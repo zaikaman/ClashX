@@ -192,3 +192,32 @@ def test_generate_draft_accepts_plain_text_function_call_arguments() -> None:
     assert result["reply"] == "Updated BTC draft."
     assert result["draft"]["name"] == "BTC Scalper"
     assert result["draft"]["conditions"][0]["type"] == "price_above"
+
+
+def test_generate_draft_ignores_extra_json_after_first_object() -> None:
+    service, _ = _service_with(
+        settings=_FakeSettings(
+            openai_api_key="open-key",
+            openai_base_url="https://example.openai.azure.com/openai/v1",
+            openai_model="gpt-5-nano",
+        ),
+        responses=[
+            _FakeResponse(
+                200,
+                {
+                    "output_text": str(_draft_payload(symbol="BTC")).replace("'", '"') + '\n{"debug":"ignore me"}',
+                },
+            ),
+        ],
+    )
+
+    result = asyncio.run(
+        service.generate_draft(
+            messages=[{"role": "user", "content": "Build a BTC momentum bot"}],
+            available_markets=["BTC", "ETH"],
+            current_draft=None,
+        )
+    )
+
+    assert result["draft"]["name"] == "BTC Breakout"
+    assert result["draft"]["markets"] == ["BTC"]
