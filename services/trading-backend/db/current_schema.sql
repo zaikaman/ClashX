@@ -279,6 +279,22 @@ CREATE TABLE public.copy_relationships (
   CONSTRAINT copy_relationships_follower_user_id_fkey FOREIGN KEY (follower_user_id) REFERENCES public.users(id),
   CONSTRAINT copy_relationships_source_user_id_fkey FOREIGN KEY (source_user_id) REFERENCES public.users(id)
 );
+CREATE TABLE public.ai_job_runs (
+  id uuid NOT NULL,
+  job_type character varying NOT NULL,
+  status character varying NOT NULL DEFAULT 'queued'::character varying,
+  wallet_address character varying,
+  conversation_id uuid,
+  request_payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  result_payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  error_detail text,
+  started_at timestamp with time zone,
+  completed_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT ai_job_runs_pkey PRIMARY KEY (id),
+  CONSTRAINT ai_job_runs_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES public.copilot_conversations(id)
+);
 CREATE TABLE public.copilot_conversations (
   id uuid NOT NULL,
   user_id uuid NOT NULL,

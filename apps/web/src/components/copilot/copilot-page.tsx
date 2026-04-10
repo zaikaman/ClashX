@@ -64,6 +64,22 @@ type CopilotChatResponse = {
   detail?: string;
 };
 
+type CopilotChatJobCreateResponse = {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  conversationId?: string | null;
+  detail?: string;
+};
+
+type CopilotChatJobStatusResponse = {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  conversationId?: string | null;
+  result?: CopilotChatResponse | null;
+  errorDetail?: string | null;
+  detail?: string;
+};
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const QUICK_PROMPTS = [
   "What are my active bots doing right now?",
@@ -71,6 +87,8 @@ const QUICK_PROMPTS = [
   "Show my open order exposure",
   "What happened in my recent runtime events?",
 ];
+const JOB_POLL_VISIBLE_MS = 1800;
+const JOB_POLL_HIDDEN_MS = 6000;
 
 function formatWalletAddress(walletAddress: string | null | undefined) {
   if (!walletAddress) return "";
@@ -137,6 +155,7 @@ export function CopilotPage() {
   const [input, setInput] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "creating" | "sending">("idle");
   const [error, setError] = useState<string | null>(null);
+  const [pendingChatJob, setPendingChatJob] = useState<{ jobId: string; optimisticMessageId: string } | null>(null);
   const [resolvedWallet, setResolvedWallet] = useState<string | null>(walletAddress ?? null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
@@ -150,6 +169,83 @@ export function CopilotPage() {
       setResolvedWallet(walletAddress);
     }
   }, [walletAddress]);
+
+  useEffect(() => {
+    if (!authenticated || !pendingChatJob) {
+      return;
+    }
+
+    let cancelled = false;
+    let timeoutId: number | null = null;
+
+    const scheduleNextPoll = () => {
+      if (cancelled) {
+        return;
+      }
+      const delay = typeof document !== "undefined" && document.visibilityState === "hidden"
+        ? JOB_POLL_HIDDEN_MS
+        : JOB_POLL_VISIBLE_MS;
+      timeoutId = window.setTimeout(() => {
+        void pollJob();
+      }, delay);
+    };
+
+    const pollJob = async () => {
+      try {
+        const headers = await getAuthHeaders();
+        const response = await fetch(`${API_BASE_URL}/api/copilot/chat/jobs/${pendingChatJob.jobId}`, { headers });
+        const payload = (await parseJson<CopilotChatJobStatusResponse>(response)) as CopilotChatJobStatusResponse;
+        if (!response.ok) {
+          throw new Error(payload.detail ?? "Failed to poll Copilot job");
+        }
+        if (cancelled) {
+          return;
+        }
+        if (payload.status === "completed" && payload.result) {
+          const result = payload.result;
+          setResolvedWallet(result.usedWalletAddress ?? result.conversation.walletAddress ?? walletAddress ?? null);
+          setConversations((current) => upsertConversation(current, result.conversation));
+          setActiveConversationId(result.conversationId);
+          setActiveConversation(result.conversation);
+          setMessages((current) => {
+            if (current.some((message) => message.id === result.assistantMessage.id)) {
+              return current;
+            }
+            return [...current, result.assistantMessage];
+          });
+          setPendingChatJob(null);
+          setStatus("idle");
+          closeHistoryOnMobile();
+          return;
+        }
+        if (payload.status === "failed") {
+          setMessages((current) => current.filter((message) => message.id !== pendingChatJob.optimisticMessageId));
+          setPendingChatJob(null);
+          setStatus("idle");
+          setError(payload.errorDetail ?? "Copilot request failed");
+          return;
+        }
+        scheduleNextPoll();
+      } catch (pollError) {
+        if (cancelled) {
+          return;
+        }
+        setMessages((current) => current.filter((message) => message.id !== pendingChatJob.optimisticMessageId));
+        setPendingChatJob(null);
+        setStatus("idle");
+        setError(pollError instanceof Error ? pollError.message : "Copilot request failed");
+      }
+    };
+
+    void pollJob();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [authenticated, getAuthHeaders, pendingChatJob, walletAddress]);
 
   function closeHistoryOnMobile() {
     if (typeof window !== "undefined" && window.innerWidth < 1024) {
@@ -339,7 +435,7 @@ export function CopilotPage() {
 
     try {
       const headers = await getAuthHeaders({ "Content-Type": "application/json" });
-      const response = await fetch(`${API_BASE_URL}/api/copilot/chat`, {
+      const response = await fetch(`${API_BASE_URL}/api/copilot/chat/jobs`, {
         method: "POST",
         headers,
         body: JSON.stringify({
@@ -348,25 +444,18 @@ export function CopilotPage() {
           walletAddress: walletAddress ?? activeConversation?.walletAddress ?? null,
         }),
       });
-      const payload = (await parseJson<CopilotChatResponse>(response)) as CopilotChatResponse;
-      if (!response.ok || !payload.reply || !payload.conversation) {
+      const payload = (await parseJson<CopilotChatJobCreateResponse>(response)) as CopilotChatJobCreateResponse;
+      if (!response.ok || !payload.id) {
         throw new Error(payload.detail ?? "Copilot request failed");
       }
-
-      setResolvedWallet(payload.usedWalletAddress ?? payload.conversation.walletAddress ?? walletAddress ?? null);
-      setConversations((current) => upsertConversation(current, payload.conversation));
-      setActiveConversationId(payload.conversationId);
-      setActiveConversation(payload.conversation);
-      setMessages((current) => {
-        const withoutOptimistic = current.filter((message) => message.id !== optimisticMessage.id);
-        return [...withoutOptimistic, optimisticMessage, payload.assistantMessage];
-      });
-      closeHistoryOnMobile();
+      if (payload.conversationId) {
+        setActiveConversationId(payload.conversationId);
+      }
+      setPendingChatJob({ jobId: payload.id, optimisticMessageId: optimisticMessage.id });
     } catch (requestError) {
       setMessages((current) => current.filter((message) => message.id !== optimisticMessage.id));
-      setError(requestError instanceof Error ? requestError.message : "Copilot request failed");
-    } finally {
       setStatus("idle");
+      setError(requestError instanceof Error ? requestError.message : "Copilot request failed");
     }
   }
 
@@ -679,6 +768,7 @@ export function CopilotPage() {
                         <span className="h-2 w-2 animate-bounce rounded-full bg-neutral-500 [animation-delay:-0.15s]" />
                         <span className="h-2 w-2 animate-bounce rounded-full bg-neutral-500" />
                       </div>
+                      <p className="mt-3 text-xs uppercase tracking-[0.22em] text-neutral-500">queued on backend</p>
                     </div>
                   </article>
                 ) : null}

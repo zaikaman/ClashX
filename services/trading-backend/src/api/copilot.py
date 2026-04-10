@@ -7,12 +7,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from src.api.auth import AuthenticatedUser, require_authenticated_user
+from src.services.ai_job_runner_service import AiJobRunnerService
+from src.services.ai_job_service import AiJobStatus, AiJobType, AiJobService
 from src.services.copilot_conversation_service import CopilotConversationService
 from src.services.copilot_service import CopilotService
 
 router = APIRouter(prefix="/api/copilot", tags=["copilot"])
 copilot_service = CopilotService()
 conversation_service = CopilotConversationService(copilot=copilot_service)
+ai_job_service = AiJobService()
+ai_job_runner = AiJobRunnerService(job_service=ai_job_service, copilot_conversation_service=conversation_service)
 
 
 class CopilotChatMessage(BaseModel):
@@ -77,6 +81,25 @@ class CopilotChatResponse(BaseModel):
     usedWalletAddress: str | None = None
 
 
+class CopilotChatJobCreateResponse(BaseModel):
+    id: str
+    jobType: AiJobType
+    status: AiJobStatus
+    conversationId: str | None = None
+
+
+class CopilotChatJobStatusResponse(BaseModel):
+    id: str
+    jobType: AiJobType
+    status: AiJobStatus
+    conversationId: str | None = None
+    result: CopilotChatResponse | None = None
+    errorDetail: str | None = None
+    createdAt: str | None = None
+    updatedAt: str | None = None
+    completedAt: str | None = None
+
+
 @router.get("/conversations", response_model=list[CopilotConversationSummaryResponse])
 def list_copilot_conversations(
     user: AuthenticatedUser = Depends(require_authenticated_user),
@@ -89,6 +112,33 @@ def _runtime_error_status(exc: RuntimeError) -> int:
     if "timed out" in message or "timeout" in message:
         return 504
     return 500
+
+
+def _resolve_requested_wallet(user: AuthenticatedUser, requested_wallet: str | None) -> str | None:
+    wallet = str(requested_wallet or "").strip()
+    if wallet:
+        if wallet not in user.wallet_addresses:
+            raise HTTPException(status_code=400, detail="Wallet is not linked to the authenticated user.")
+        return wallet
+    if user.wallet_addresses:
+        return user.wallet_addresses[0]
+    return None
+
+
+def _serialize_chat_job_status(row: dict[str, Any]) -> CopilotChatJobStatusResponse:
+    result_payload = row.get("result_payload_json")
+    result = CopilotChatResponse.model_validate(result_payload) if isinstance(result_payload, dict) and result_payload else None
+    return CopilotChatJobStatusResponse(
+        id=str(row.get("id") or ""),
+        jobType=str(row.get("job_type") or "copilot_chat"),
+        status=str(row.get("status") or "queued"),
+        conversationId=str(row.get("conversation_id") or "") or None,
+        result=result,
+        errorDetail=str(row.get("error_detail") or "") or None,
+        createdAt=row.get("created_at"),
+        updatedAt=row.get("updated_at"),
+        completedAt=row.get("completed_at"),
+    )
 
 
 @router.post("/conversations", response_model=CopilotConversationSummaryResponse)
@@ -184,3 +234,48 @@ async def chat_with_copilot(
             **result,
         }
     )
+
+
+@router.post("/chat/jobs", response_model=CopilotChatJobCreateResponse)
+async def create_copilot_chat_job(
+    payload: CopilotChatRequest,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> CopilotChatJobCreateResponse:
+    if payload.content is None or not payload.content.strip():
+        raise HTTPException(status_code=400, detail="A chat message is required.")
+
+    resolved_wallet = _resolve_requested_wallet(user, payload.walletAddress)
+    job = ai_job_service.create_job(
+        job_type="copilot_chat",
+        wallet_address=resolved_wallet,
+        conversation_id=payload.conversationId,
+        request_payload={
+            "conversationId": payload.conversationId,
+            "content": payload.content,
+            "walletAddress": resolved_wallet,
+        },
+    )
+    ai_job_runner.start_copilot_chat_job(
+        job_id=job["id"],
+        user=user,
+        content=payload.content,
+        conversation_id=payload.conversationId,
+        wallet_address=resolved_wallet,
+    )
+    return CopilotChatJobCreateResponse(
+        id=job["id"],
+        jobType="copilot_chat",
+        status="queued",
+        conversationId=payload.conversationId,
+    )
+
+
+@router.get("/chat/jobs/{job_id}", response_model=CopilotChatJobStatusResponse)
+async def get_copilot_chat_job(
+    job_id: str,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> CopilotChatJobStatusResponse:
+    job = ai_job_service.get_job_for_wallets(job_id=job_id, wallet_addresses=user.wallet_addresses)
+    if job is None or job.get("job_type") != "copilot_chat":
+        raise HTTPException(status_code=404, detail="Chat job not found.")
+    return _serialize_chat_job_status(job)

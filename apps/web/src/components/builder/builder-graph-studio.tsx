@@ -86,6 +86,18 @@ type BuilderAiRouteResponse = {
   reply: string;
   draft: BuilderAiDraft;
 };
+type BuilderAiJobCreateResponse = {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  detail?: string;
+};
+type BuilderAiJobStatusResponse = {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  result?: BuilderAiRouteResponse | null;
+  errorDetail?: string | null;
+  detail?: string;
+};
 type DraftValidationResponse = {
   valid?: boolean;
   issues?: string[];
@@ -167,6 +179,8 @@ const TIMEFRAME_OPTIONS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"] as const;
 const SIDE_OPTIONS = ["long", "short"] as const;
 const TIF_OPTIONS = ["GTC", "IOC", "FOK"] as const;
 const ACTION_TYPES_WITH_LEVERAGE = new Set(["update_leverage"]);
+const AI_JOB_POLL_VISIBLE_MS = 1800;
+const AI_JOB_POLL_HIDDEN_MS = 6000;
 
 const SIGNAL_CATEGORIES = [
   {
@@ -1137,6 +1151,7 @@ export function BuilderGraphStudio({
   ]);
   const [chatInput, setChatInput] = useState("");
   const [chatStatus, setChatStatus] = useState<"idle" | "sending">("idle");
+  const [pendingAiJobId, setPendingAiJobId] = useState<string | null>(null);
   const chatViewportRef = useRef<HTMLDivElement | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [loadingBotId, setLoadingBotId] = useState<string | null>(null);
@@ -1331,6 +1346,82 @@ export function BuilderGraphStudio({
     if (!viewport) return;
     viewport.scrollTop = viewport.scrollHeight;
   }, [chatMessages]);
+
+  useEffect(() => {
+    if (!pendingAiJobId) {
+      return;
+    }
+
+    let cancelled = false;
+    let timeoutId: number | null = null;
+
+    const scheduleNextPoll = () => {
+      if (cancelled) {
+        return;
+      }
+      const delay = typeof document !== "undefined" && document.visibilityState === "hidden"
+        ? AI_JOB_POLL_HIDDEN_MS
+        : AI_JOB_POLL_VISIBLE_MS;
+      timeoutId = window.setTimeout(() => {
+        void pollJob();
+      }, delay);
+    };
+
+    const pollJob = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/builder/ai-chat/jobs/${pendingAiJobId}`);
+        const payload = (await response.json()) as BuilderAiJobStatusResponse;
+        if (!response.ok) {
+          throw new Error(payload.detail ?? "AI draft failed");
+        }
+        if (cancelled) {
+          return;
+        }
+        if (payload.status === "completed" && payload.result) {
+          applyAiDraft(payload.result.draft);
+          setChatMessages((current) => [
+            ...current,
+            {
+              id: `assistant-${Date.now()}`,
+              role: "assistant",
+              content: payload.result?.reply ?? "The builder draft is ready.",
+            },
+          ]);
+          onNotice?.({
+            eyebrow: "AI Draft",
+            title: "Builder updated",
+            detail: "The canvas has been rebuilt from your latest prompt.",
+          });
+          setPendingAiJobId(null);
+          setChatStatus("idle");
+          return;
+        }
+        if (payload.status === "failed") {
+          setPendingAiJobId(null);
+          setChatStatus("idle");
+          setError(payload.errorDetail ?? "AI draft failed");
+          return;
+        }
+        scheduleNextPoll();
+      } catch (pollError) {
+        if (cancelled) {
+          return;
+        }
+        setPendingAiJobId(null);
+        setChatStatus("idle");
+        setError(pollError instanceof Error ? pollError.message : "AI draft failed");
+      }
+    };
+
+    void pollJob();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [onNotice, pendingAiJobId]);
 
   const route = useMemo(() => buildPrimaryRoute(nodes, edges), [nodes, edges]);
   const primaryNodeIds = useMemo(() => new Set(route.nodeIds), [route.nodeIds]);
@@ -1711,7 +1802,7 @@ export function BuilderGraphStudio({
     setError(null);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/builder/ai-chat`, {
+      const response = await fetch(`${API_BASE_URL}/api/builder/ai-chat/jobs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1720,29 +1811,14 @@ export function BuilderGraphStudio({
           currentDraft: buildCurrentAiDraftContext(),
         }),
       });
-      const payload = (await response.json()) as BuilderAiRouteResponse & { detail?: string };
-      if (!response.ok || !payload.draft) {
+      const payload = (await response.json()) as BuilderAiJobCreateResponse;
+      if (!response.ok || !payload.id) {
         throw new Error(payload.detail ?? "AI draft failed");
       }
-
-      applyAiDraft(payload.draft);
-      setChatMessages((current) => [
-        ...current,
-        {
-          id: `assistant-${Date.now()}`,
-          role: "assistant",
-          content: payload.reply,
-        },
-      ]);
-      onNotice?.({
-        eyebrow: "AI Draft",
-        title: "Builder updated",
-        detail: "The canvas has been rebuilt from your latest prompt.",
-      });
+      setPendingAiJobId(payload.id);
     } catch (chatError) {
-      setError(chatError instanceof Error ? chatError.message : "AI draft failed");
-    } finally {
       setChatStatus("idle");
+      setError(chatError instanceof Error ? chatError.message : "AI draft failed");
     }
   }
 
@@ -2746,7 +2822,7 @@ export function BuilderGraphStudio({
                 ))}
                 {chatStatus === "sending" ? (
                   <div className="rounded-2xl border border-[rgba(220,232,93,0.16)] bg-[rgba(220,232,93,0.04)] px-3 py-3 text-sm text-neutral-300">
-                    Rebuilding the draft...
+                    Rebuilding the draft on the backend...
                   </div>
                 ) : null}
               </div>
