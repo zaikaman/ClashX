@@ -32,6 +32,25 @@ def _default_pacifica_ws_url(network: str) -> str:
     return "wss://ws.pacifica.fi/ws"
 
 
+DEFAULT_CORS_ALLOWED_ORIGINS = (
+    "http://localhost:3000",
+    "https://clash-x.vercel.app",
+)
+
+
+def _parse_cors_allowed_origins(*raw_values: str) -> tuple[str, ...]:
+    origins: list[str] = []
+    seen: set[str] = set()
+    for raw_value in raw_values:
+        for candidate in raw_value.split(","):
+            origin = candidate.strip().rstrip("/")
+            if not origin or origin in seen:
+                continue
+            origins.append(origin)
+            seen.add(origin)
+    return tuple(origins)
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str
@@ -91,10 +110,9 @@ def get_settings() -> Settings:
     workers_enabled = os.getenv("BACKGROUND_WORKERS_ENABLED", "true").strip().lower() in {"1", "true", "yes", "y"}
     worker_instance_id = os.getenv("WORKER_INSTANCE_ID", "").strip() or f"{os.getpid()}"
     cors_allowed_origins_raw = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
-    if cors_allowed_origins_raw:
-        cors_allowed_origins = tuple(origin.strip() for origin in cors_allowed_origins_raw.split(",") if origin.strip())
-    else:
-        cors_allowed_origins = ("http://localhost:3000",)
+    cors_allowed_origins = _parse_cors_allowed_origins(cors_allowed_origins_raw)
+    if not cors_allowed_origins:
+        cors_allowed_origins = DEFAULT_CORS_ALLOWED_ORIGINS
     return Settings(
         app_name=os.getenv("APP_NAME", "ClashX Trading Backend"),
         app_env=os.getenv("APP_ENV", "development"),
