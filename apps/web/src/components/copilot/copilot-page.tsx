@@ -66,10 +66,10 @@ type CopilotChatResponse = {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const QUICK_PROMPTS = [
-  "Summarize my active bots",
-  "Check my Pacifica readiness",
-  "Show open orders exposure",
-  "Inspect recent runtime events",
+  "What are my active bots doing right now?",
+  "Am I ready to trade on Pacifica?",
+  "Show my open order exposure",
+  "What happened in my recent runtime events?",
 ];
 
 function formatWalletAddress(walletAddress: string | null | undefined) {
@@ -385,7 +385,7 @@ export function CopilotPage() {
       <div className="flex items-center justify-between border-b border-white/[0.06] px-5 py-4">
         <div>
           <p className="text-[11px] uppercase tracking-[0.28em] text-neutral-500">History</p>
-          <h2 className="mt-1 text-sm font-semibold text-neutral-100">Previous conversations</h2>
+          <h2 className="mt-1 text-sm font-semibold text-neutral-100">Past conversations</h2>
         </div>
         <button
           type="button"
@@ -460,12 +460,12 @@ export function CopilotPage() {
             </div>
           ) : (
             <div className="rounded-[1.5rem] border border-dashed border-white/[0.08] bg-white/[0.02] px-4 py-6 text-sm text-neutral-400">
-              Your saved conversations will appear here after the first message.
+              Your conversations will show up here after you send your first message.
             </div>
           )
         ) : (
           <div className="rounded-[1.5rem] border border-dashed border-white/[0.08] bg-white/[0.02] px-4 py-6 text-sm text-neutral-400">
-            Connect your wallet to load saved copilot sessions.
+            Connect your wallet to see your saved conversations.
           </div>
         )}
       </div>
@@ -553,13 +553,13 @@ export function CopilotPage() {
             {!authenticated ? (
               <div className="flex h-full flex-col items-center justify-center gap-6 text-center">
                 <div className="space-y-3">
-                  <p className="text-[11px] uppercase tracking-[0.3em] text-neutral-500">Authorized insight</p>
+                  <p className="text-[11px] uppercase tracking-[0.3em] text-neutral-500">Private account context</p>
                   <h2 className="text-3xl font-semibold tracking-tight text-neutral-100 md:text-4xl">
-                    Persistent copilot for your trading account
+                    Pick up where you left off
                   </h2>
                   <p className="mx-auto max-w-xl text-sm leading-relaxed text-neutral-400">
-                    Connect your wallet to keep a saved conversation history, reopen earlier sessions, and let Copilot
-                    compact older context automatically instead of losing it.
+                    Connect your wallet to chat with Copilot using your ClashX account data, keep your past
+                    conversations, and come back to them anytime.
                   </p>
                 </div>
                 <button
@@ -567,19 +567,19 @@ export function CopilotPage() {
                   onClick={login}
                   className="rounded-full bg-[#dce85d] px-5 py-3 text-sm font-semibold text-black transition hover:scale-[1.02]"
                 >
-                  Connect wallet to begin
+                  Connect wallet
                 </button>
               </div>
             ) : showIntro ? (
               <div className="flex h-full flex-col items-center justify-center gap-10 text-center">
                 <div className="max-w-2xl space-y-4">
-                  <p className="text-[11px] uppercase tracking-[0.34em] text-neutral-500">Saved sessions</p>
+                  <p className="text-[11px] uppercase tracking-[0.34em] text-neutral-500">Conversation history</p>
                   <h2 className="text-3xl font-semibold tracking-tight text-neutral-100 md:text-5xl">
-                    Start a fresh thread or reopen an older one.
+                    Start a new conversation or reopen an older one
                   </h2>
                   <p className="text-sm leading-relaxed text-neutral-400">
-                    Copilot now keeps your conversation history, rolls older turns into a compact summary once the
-                    session gets large, and continues from there without dropping the thread.
+                    Ask about your bots, trading account, or runtime activity. Copilot keeps the thread going even in
+                    long conversations by condensing older context in the background.
                   </p>
                 </div>
 
@@ -594,7 +594,7 @@ export function CopilotPage() {
                     >
                       <p className="text-sm font-medium text-neutral-100">{prompt}</p>
                       <p className="mt-2 text-xs leading-relaxed text-neutral-400">
-                        Send this as the opening prompt in a saved conversation.
+                        Use this as your first message.
                       </p>
                     </button>
                   ))}
@@ -708,7 +708,7 @@ export function CopilotPage() {
                     }
                   }}
                   disabled={!authenticated}
-                  placeholder={authenticated ? "Ask Copilot about your account, bots, or runtime state..." : "Connect wallet to start messaging..."}
+                  placeholder={authenticated ? "Ask about your account, bots, or recent activity..." : "Connect your wallet to start chatting..."}
                   rows={1}
                   className="max-h-[220px] min-h-[52px] w-full resize-none bg-transparent px-4 py-3 text-sm text-neutral-100 outline-none placeholder:text-neutral-500 disabled:cursor-not-allowed"
                 />
@@ -725,8 +725,8 @@ export function CopilotPage() {
             </div>
 
             <div className="mt-3 flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.22em] text-neutral-600">
-              <span>Authorized ClashX data only</span>
-              <span>{activeConversation ? `${activeConversation.messageCount} stored messages` : "No active session"}</span>
+              <span>Uses your authorized ClashX data</span>
+              <span>{activeConversation ? `${activeConversation.messageCount} messages saved` : "No conversation selected"}</span>
             </div>
           </div>
         </section>
