@@ -198,8 +198,8 @@ export function BotPublishingPanel({
         </div>
       ) : null}
 
-      <div className={`grid gap-4 ${compact ? "" : "xl:grid-cols-[1.05fr_0.95fr]"}`}>
-        <div className="grid gap-4">
+      <div className={`grid gap-4 ${compact ? "" : "xl:grid-cols-[1.05fr_0.95fr] xl:items-start"}`}>
+        <div className="grid self-start gap-4">
           <label className={FIELD_WRAPPER_CLASS}>
             <span className={FIELD_LABEL_CLASS}>Access</span>
             <select
@@ -251,7 +251,7 @@ export function BotPublishingPanel({
           ) : null}
         </div>
 
-        <div className="grid gap-4">
+        <div className="grid self-start gap-4">
           <label className={FIELD_WRAPPER_CLASS}>
             <span className={FIELD_LABEL_CLASS}>Creator name</span>
             <input

@@ -586,7 +586,7 @@ export function BacktestingLabPage() {
         <article className="rounded-2xl border border-[#dce85d]/30 bg-[#dce85d]/10 px-5 py-4 text-sm text-neutral-50">{pageError}</article>
       ) : null}
 
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+      <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start">
         <div className="grid gap-6">
           <section className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5 md:p-6">
             <div className="grid gap-2">
@@ -1214,7 +1214,7 @@ function BacktestingLabSkeleton() {
         </div>
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+      <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start">
         <div className="grid gap-6">
           <section className="grid gap-5 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5 md:p-6">
             <div className="grid gap-2">

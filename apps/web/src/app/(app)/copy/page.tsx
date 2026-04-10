@@ -109,8 +109,8 @@ function BasketComposerSkeleton() {
         <div className="skeleton h-10 w-32 rounded-full" />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
-        <div className="grid gap-4">
+      <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr] xl:items-start">
+        <div className="grid self-start gap-4">
           <div className="grid gap-2">
             <div className="skeleton h-4 w-24 rounded-sm" />
             <div className="skeleton h-12 w-full rounded-2xl" />
@@ -144,7 +144,7 @@ function BasketComposerSkeleton() {
           </div>
         </div>
 
-        <div className="grid gap-4">
+        <div className="grid self-start gap-4">
           <div className="grid gap-3 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="grid gap-2">
@@ -661,8 +661,8 @@ export default function CopyPage() {
         )}
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[1.18fr_0.82fr]">
-        <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-6">
+      <section className="grid gap-6 xl:grid-cols-[1.18fr_0.82fr] xl:items-start">
+        <article className="grid self-start gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-6">
           <div className="flex items-center justify-between gap-3">
             <div className="grid gap-1">
               <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Live follows</span>
@@ -821,7 +821,7 @@ export default function CopyPage() {
           )}
         </article>
 
-        <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-6">
+        <article className="grid self-start gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-6">
           <div className="flex items-center justify-between gap-3">
             <div className="grid gap-1">
               <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Cloned drafts</span>

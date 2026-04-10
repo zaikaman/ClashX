@@ -356,8 +356,8 @@ export function DashboardPage() {
         </article>
       ) : null}
 
-      <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-        <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
+      <section className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr] xl:items-start">
+        <article className="grid self-start gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div className="grid gap-1">
               <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#74b97f]">
@@ -420,7 +420,7 @@ export function DashboardPage() {
           )}
         </article>
 
-        <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
+        <article className="grid self-start gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
           <div className="grid gap-1">
             <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]">
               Attention queue

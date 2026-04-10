@@ -211,7 +211,7 @@ function FleetRowSkeleton() {
   return (
     <article className="grid gap-6 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-6 xl:grid-cols-[auto_1fr_auto] xl:items-start">
       <div className="skeleton h-6 w-6 rounded-md" />
-      <div className="grid gap-8 xl:grid-cols-[1.5fr_2fr]">
+      <div className="grid gap-8 xl:grid-cols-[1.5fr_2fr] xl:items-start">
         <div className="grid gap-4">
           <div className="flex items-center gap-3">
             <div className="skeleton h-7 w-48 rounded-none" />
@@ -754,7 +754,7 @@ export function BotsFleetPage() {
       ) : (
         <>
           <section className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5 md:p-6">
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(20rem,0.9fr)]">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(20rem,0.9fr)] xl:items-start">
               <label className="grid gap-2">
                 <span className="label text-[#dce85d]">Search your bots</span>
                 <span className="flex items-center gap-3 rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0f1112] px-4 py-3">

@@ -2399,7 +2399,7 @@ export function BuilderGraphStudio({
             aria-hidden="true"
           />
           <div className="relative z-10 flex w-full max-w-4xl flex-col overflow-hidden max-h-full rounded-[2rem] border border-[rgba(220,232,93,0.24)] bg-[linear-gradient(180deg,rgba(18,20,18,0.98),rgba(9,10,10,0.99))] shadow-[0_28px_90px_rgba(0,0,0,0.56)]">
-            <div className="grid shrink-0 gap-6 border-b border-[rgba(255,255,255,0.06)] px-6 py-6 lg:grid-cols-[1.15fr_0.85fr]">
+            <div className="grid shrink-0 gap-6 border-b border-[rgba(255,255,255,0.06)] px-6 py-6 lg:grid-cols-[1.15fr_0.85fr] lg:items-start">
                 <div>
                   <div className="text-[0.62rem] font-semibold uppercase tracking-[0.2em] text-[#dce85d]">Runtime controls</div>
                   <h2 className="mt-2 text-2xl font-semibold text-neutral-50">Choose how this bot behaves once it goes live.</h2>
@@ -2438,7 +2438,7 @@ export function BuilderGraphStudio({
               </div>
             </div>
 
-            <div className="custom-scrollbar grid min-h-0 gap-6 overflow-y-auto px-6 py-6 lg:grid-cols-[1.15fr_0.85fr]">
+            <div className="custom-scrollbar grid min-h-0 gap-6 overflow-y-auto px-6 py-6 lg:grid-cols-[1.15fr_0.85fr] lg:items-start">
               <div className="flex flex-col gap-6">
                 <div>
                   <div className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">Pick a profile</div>

@@ -125,8 +125,8 @@ export function PortfolioHealthPanel({
         </div>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
-        <div className="grid gap-3">
+      <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr] xl:items-start">
+        <div className="grid self-start gap-3">
           <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Allocation legs</span>
           <div className="grid gap-3">
             {portfolio.members.map((member) => (
@@ -165,7 +165,7 @@ export function PortfolioHealthPanel({
           </div>
         </div>
 
-        <div className="grid gap-3">
+        <div className="grid self-start gap-3">
           <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Rebalance tape</span>
           <div className="grid gap-3">
             {portfolio.rebalance_history.length === 0 ? (

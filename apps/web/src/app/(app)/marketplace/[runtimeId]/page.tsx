@@ -60,8 +60,8 @@ export default function MarketplaceRuntimePage({ params: paramsPromise }: { para
           <span className="label text-[#74b97f]">Strategy passport</span>
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr] lg:items-end">
-          <div className="grid gap-3">
+        <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr] lg:items-start">
+          <div className="grid self-start gap-3">
             <h1 className="font-mono text-[clamp(2.2rem,5vw,4.1rem)] font-extrabold uppercase leading-[0.92] tracking-[-0.05em] text-neutral-50">
               {profile?.bot_name ?? "Loading strategy"}
             </h1>
@@ -71,7 +71,7 @@ export default function MarketplaceRuntimePage({ params: paramsPromise }: { para
             {profile ? <TrustBadgeStrip trust={profile.trust} /> : null}
           </div>
 
-          <div className="grid gap-3 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-5">
+          <div className="grid self-start gap-3 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-5">
             <div className="flex items-center justify-between gap-3">
               <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Creator</span>
               {profile?.creator ? (
@@ -100,13 +100,13 @@ export default function MarketplaceRuntimePage({ params: paramsPromise }: { para
           <HeroStat label="Risk grade" value={profile?.trust.risk_grade ?? "--"} accent="text-[#74b97f]" />
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr]">
-        <div className="grid gap-5">
+      <section className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr] xl:items-start">
+        <div className="grid self-start gap-5">
           {profile ? <DriftVisual drift={profile.drift} /> : <LoadingCard copy="Loading replay drift..." />}
           {profile ? <StrategyPassportPanel passport={profile.passport} /> : <LoadingCard copy="Loading strategy passport..." />}
         </div>
 
-        <div className="grid gap-5">
+        <div className="grid self-start gap-5">
           <article className="grid gap-4 rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
             <div className="flex items-center justify-between gap-3">
               <div>

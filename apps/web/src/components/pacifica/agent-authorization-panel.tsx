@@ -282,7 +282,7 @@ export function AgentAuthorizationPanel() {
   }
 
   return (
-    <div className="grid gap-8 lg:grid-cols-[1fr_1fr]">
+    <div className="grid gap-8 lg:grid-cols-[1fr_1fr] lg:items-start">
       {/* Left panel — form */}
       <section className="grid gap-6 border-l-2 border-[#dce85d] bg-[#16181a] p-6 md:p-8">
         <div className="grid gap-3 border-b border-[rgba(255,255,255,0.06)] pb-5">

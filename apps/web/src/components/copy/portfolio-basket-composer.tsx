@@ -92,8 +92,8 @@ export function PortfolioBasketComposer({
         ) : null}
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
-        <div className="grid gap-4">
+      <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr] xl:items-start">
+        <div className="grid self-start gap-4">
           <label className="grid gap-1.5 text-sm text-neutral-400">
             Basket name
             <input
@@ -248,7 +248,7 @@ export function PortfolioBasketComposer({
           </div>
         </div>
 
-        <div className="grid gap-4">
+        <div className="grid self-start gap-4">
           <div className="grid gap-3 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="grid gap-1">

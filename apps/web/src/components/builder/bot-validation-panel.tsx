@@ -81,8 +81,8 @@ export function BotValidationPanel({
   }
 
   return (
-    <section className="grid gap-6 rounded-3xl border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-6 md:p-8 xl:grid-cols-[0.92fr_1.08fr]">
-      <div className="grid gap-4">
+    <section className="grid gap-6 rounded-3xl border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-6 md:p-8 xl:grid-cols-[0.92fr_1.08fr] xl:items-start">
+      <div className="grid self-start gap-4">
         <div className="grid gap-2">
           <span className="label text-[#74b97f]">Flight check</span>
           <p className="font-mono text-[clamp(1.5rem,3vw,2.4rem)] font-bold uppercase leading-[0.94] tracking-[-0.03em] text-neutral-50">
@@ -119,7 +119,7 @@ export function BotValidationPanel({
         ) : null}
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid self-start gap-4 md:grid-cols-2">
         <article className="grid gap-3 rounded-2xl bg-[#090a0a] p-5">
           <span className="label text-[#dce85d]">Schema check</span>
           <div
