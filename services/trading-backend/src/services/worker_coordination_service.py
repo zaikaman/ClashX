@@ -42,6 +42,23 @@ class WorkerCoordinationService:
             else:
                 raise
         try:
+            renewed = self._supabase.update(
+                "worker_leases",
+                {"owner_id": self._owner_id, "expires_at": expires_at, "updated_at": now.isoformat()},
+                filters={"lease_key": lease_key, "owner_id": self._owner_id},
+            )
+        except SupabaseRestError as exc:
+            if exc.is_retryable:
+                logger.warning(
+                    "Skipping lease renewal for %s because Supabase is temporarily unavailable: %s",
+                    lease_key,
+                    exc,
+                )
+                return False
+            raise
+        if renewed:
+            return True
+        try:
             updated = self._supabase.update(
                 "worker_leases",
                 {"owner_id": self._owner_id, "expires_at": expires_at, "updated_at": now.isoformat()},

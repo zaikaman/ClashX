@@ -24,12 +24,22 @@ class BotLeaderboardEngine:
             row["id"]: row
             for row in self.supabase.select("bot_definitions", filters={"id": ("in", definition_ids), "visibility": "public"})
         } if definition_ids else {}
+        public_runtimes = [runtime for runtime in runtimes if definitions.get(runtime["bot_definition_id"]) is not None]
+        performance_by_runtime: dict[str, dict[str, Any]] = {}
+        runtimes_by_wallet: dict[str, list[dict[str, Any]]] = {}
+        for runtime in public_runtimes:
+            wallet_key = str(runtime.get("wallet_address") or runtime.get("id") or "")
+            runtimes_by_wallet.setdefault(wallet_key, []).append(runtime)
+        for wallet_runtimes in runtimes_by_wallet.values():
+            performance_by_runtime.update(await self.performance_service.calculate_runtimes_performance_map(wallet_runtimes))
         ranked_rows: list[dict] = []
-        for runtime in runtimes:
+        for runtime in public_runtimes:
             definition = definitions.get(runtime["bot_definition_id"])
             if definition is None:
                 continue
-            performance = await self.performance_service.calculate_runtime_performance(runtime)
+            performance = performance_by_runtime.get(str(runtime["id"]) or "")
+            if performance is None:
+                continue
             ranked_rows.append(
                 {
                     "runtime": runtime,

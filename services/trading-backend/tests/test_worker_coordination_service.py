@@ -203,6 +203,25 @@ def test_try_claim_lease_returns_false_when_takeover_hits_transient_supabase_err
     assert supabase.tables["worker_leases"][0]["owner_id"] == "worker-1"
 
 
+def test_try_claim_lease_renews_existing_lease_for_same_owner() -> None:
+    supabase = _FakeSupabaseRestClient()
+    now = datetime.now(tz=UTC)
+    previous_expiry = (now + timedelta(seconds=5)).isoformat()
+    supabase.tables["worker_leases"] = [
+        {
+            "lease_key": "lease-1",
+            "owner_id": "worker-2",
+            "expires_at": previous_expiry,
+            "updated_at": now.isoformat(),
+        }
+    ]
+    service = _build_service(supabase)
+
+    assert service.try_claim_lease("lease-1", ttl_seconds=30) is True
+    assert supabase.tables["worker_leases"][0]["owner_id"] == "worker-2"
+    assert supabase.tables["worker_leases"][0]["expires_at"] > previous_expiry
+
+
 def test_release_lease_ignores_transient_supabase_error() -> None:
     supabase = _FakeSupabaseRestClient()
     now = datetime.now(tz=UTC)

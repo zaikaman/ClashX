@@ -180,6 +180,51 @@ class FakeSupabaseRestClient:
         return True
 
 
+class CountingFakeSupabaseRestClient(FakeSupabaseRestClient):
+    def __init__(self, tables: dict[str, list[dict[str, Any]]]) -> None:
+        super().__init__(tables)
+        self.select_calls: list[tuple[str, dict[str, Any] | None, str]] = []
+        self.maybe_one_calls: list[tuple[str, dict[str, Any] | None, str]] = []
+
+    def select(
+        self,
+        table: str,
+        *,
+        columns: str = "*",
+        filters: dict[str, Any] | None = None,
+        order: str | None = None,
+        limit: int | None = None,
+        cache_ttl_seconds: float | None = None,
+    ) -> list[dict[str, Any]]:
+        self.select_calls.append((table, deepcopy(filters), columns))
+        return super().select(
+            table,
+            columns=columns,
+            filters=filters,
+            order=order,
+            limit=limit,
+            cache_ttl_seconds=cache_ttl_seconds,
+        )
+
+    def maybe_one(
+        self,
+        table: str,
+        *,
+        columns: str = "*",
+        filters: dict[str, Any] | None = None,
+        order: str | None = None,
+        cache_ttl_seconds: float | None = None,
+    ) -> dict[str, Any] | None:
+        self.maybe_one_calls.append((table, deepcopy(filters), columns))
+        return super().maybe_one(
+            table,
+            columns=columns,
+            filters=filters,
+            order=order,
+            cache_ttl_seconds=cache_ttl_seconds,
+        )
+
+
 class FakeAuthService:
     def get_trading_credentials(self, db: Any, wallet_address: str) -> dict[str, str] | None:
         del db
@@ -692,6 +737,85 @@ def test_runtime_worker_deduplicates_identical_skip_events_within_recent_window(
     )
 
     assert should_record is False
+
+
+def test_runtime_worker_batches_bot_definition_reads_per_iteration(monkeypatch: Any) -> None:
+    tables = _seed_tables()
+    tables["bot_definitions"].append(
+        {
+            "id": "bot-2",
+            "user_id": "user-1",
+            "wallet_address": "wallet-1",
+            "name": "Second Bot",
+            "description": "Batch read test",
+            "visibility": "private",
+            "market_scope": "Pacifica perpetuals",
+            "strategy_type": "rules",
+            "authoring_mode": "visual",
+            "rules_version": 1,
+            "rules_json": _graph_rules(),
+            "created_at": "2026-03-16T00:00:00+00:00",
+            "updated_at": "2026-03-16T00:00:00+00:00",
+        }
+    )
+    tables["bot_runtimes"].append(
+        {
+            "id": "runtime-2",
+            "bot_definition_id": "bot-2",
+            "user_id": "user-1",
+            "wallet_address": "wallet-1",
+            "status": "active",
+            "mode": "live",
+            "risk_policy_json": {"_runtime_state": {}},
+            "deployed_at": "2026-03-16T00:00:00+00:00",
+            "stopped_at": None,
+            "updated_at": "2026-03-16T00:00:00+00:00",
+        }
+    )
+    fake_supabase = CountingFakeSupabaseRestClient(tables)
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+    worker._supabase = fake_supabase
+    worker._engine._supabase = fake_supabase
+
+    class _FakeCoordination:
+        def try_claim_lease(self, lease_key: str, *, ttl_seconds: int) -> bool:
+            del lease_key, ttl_seconds
+            return True
+
+        def release_lease(self, lease_key: str) -> None:
+            del lease_key
+
+    seen_bots: list[str] = []
+
+    async def _fake_process_runtime(
+        db: Any,
+        runtime: dict[str, Any],
+        *,
+        bot: dict[str, Any] | None = None,
+        bot_loaded: bool = False,
+        **_: Any,
+    ) -> None:
+        del db, runtime
+        assert bot_loaded is True
+        seen_bots.append(str((bot or {}).get("id") or ""))
+
+    async def _stop_after_iteration(delay: float) -> None:
+        del delay
+        worker._running = False
+
+    worker._coordination = _FakeCoordination()  # type: ignore[assignment]
+    worker._process_runtime = _fake_process_runtime  # type: ignore[method-assign]
+    worker._running = True
+    monkeypatch.setattr("src.workers.bot_runtime_worker.asyncio.sleep", _stop_after_iteration)
+
+    asyncio.run(worker.run_forever())
+
+    bot_definition_selects = [call for call in fake_supabase.select_calls if call[0] == "bot_definitions"]
+    bot_definition_reads = [call for call in fake_supabase.maybe_one_calls if call[0] == "bot_definitions"]
+
+    assert len(bot_definition_selects) == 1
+    assert bot_definition_reads == []
+    assert seen_bots == ["bot-1", "bot-2"]
 
 
 def test_runtime_worker_idempotency_key_tracks_execution_state_not_fixed_time_bucket() -> None:

@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 from datetime import UTC, datetime
+from time import monotonic
 from decimal import ROUND_DOWN, Decimal
 from time import perf_counter
 from typing import Any
@@ -29,6 +30,7 @@ class BotCopyWorker:
         self._supabase = SupabaseRestClient()
         self._coordination = WorkerCoordinationService(self._supabase)
         self._metrics = get_performance_metrics_store()
+        self._held_leases: dict[str, float] = {}
         self.last_iteration_at: str | None = None
         self.last_error: str | None = None
 
@@ -45,6 +47,7 @@ class BotCopyWorker:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
+        self._release_held_leases()
 
     async def run_forever(self) -> None:
         while self._running:
@@ -58,14 +61,12 @@ class BotCopyWorker:
                 )
                 for relationship in active:
                     lease_key = f"bot-copy:{relationship['id']}"
-                    if not self._coordination.try_claim_lease(
-                        lease_key, ttl_seconds=max(20, int(self.poll_interval_seconds * 3))
+                    if not self._claim_local_lease(
+                        lease_key,
+                        ttl_seconds=max(20, int(self.poll_interval_seconds * 3)),
                     ):
                         continue
-                    try:
-                        await self._process_relationship(relationship)
-                    finally:
-                        self._coordination.release_lease(lease_key)
+                    await self._process_relationship(relationship)
                 self.last_iteration_at = datetime.now(tz=UTC).isoformat()
                 self.last_error = None
             except SupabaseRestError as exc:
@@ -192,6 +193,22 @@ class BotCopyWorker:
             {"updated_at": datetime.now(tz=UTC).isoformat()},
             filters={"id": relationship["id"]},
         )
+
+    def _claim_local_lease(self, lease_key: str, *, ttl_seconds: int) -> bool:
+        refresh_at = self._held_leases.get(lease_key)
+        if refresh_at is not None and monotonic() < refresh_at:
+            return True
+        claimed = self._coordination.try_claim_lease(lease_key, ttl_seconds=ttl_seconds)
+        if not claimed:
+            self._held_leases.pop(lease_key, None)
+            return False
+        self._held_leases[lease_key] = monotonic() + max(1.0, ttl_seconds * 0.6)
+        return True
+
+    def _release_held_leases(self) -> None:
+        for lease_key in list(self._held_leases):
+            self._coordination.release_lease(lease_key)
+        self._held_leases.clear()
 
     async def _execute_action(
         self,

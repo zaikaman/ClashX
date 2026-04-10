@@ -517,6 +517,70 @@ def test_public_bot_leaderboard_ranks_runtime_specific_results(monkeypatch: Any)
     assert rows[1]["pnl_total"] == -20.0
 
 
+def test_public_bot_leaderboard_groups_performance_refresh_by_wallet(monkeypatch: Any) -> None:
+    fake_supabase = FakeSupabaseRestClient(_tables())
+    fake_supabase.tables["bot_definitions"].append(
+        {
+            "id": "bot-c",
+            "user_id": "user-c",
+            "wallet_address": "other-wallet",
+            "name": "Gamma",
+            "description": "",
+            "visibility": "public",
+            "market_scope": "Pacifica perpetuals",
+            "strategy_type": "rules",
+            "authoring_mode": "visual",
+            "rules_version": 1,
+            "rules_json": {},
+            "created_at": "2026-03-16T00:00:00+00:00",
+            "updated_at": "2026-03-16T00:00:00+00:00",
+        }
+    )
+    fake_supabase.tables["bot_runtimes"].append(
+        {
+            "id": "runtime-c",
+            "bot_definition_id": "bot-c",
+            "user_id": "user-c",
+            "wallet_address": "other-wallet",
+            "status": "active",
+            "mode": "live",
+            "risk_policy_json": {"_runtime_state": {}},
+            "deployed_at": "2026-03-16T00:00:00+00:00",
+            "stopped_at": None,
+            "updated_at": "2026-03-16T00:00:00+00:00",
+        }
+    )
+    engine = BotLeaderboardEngine()
+    engine.supabase = fake_supabase
+
+    class _StubPerformanceService:
+        def __init__(self) -> None:
+            self.group_calls: list[list[str]] = []
+
+        async def calculate_runtimes_performance_map(self, runtimes: list[dict[str, Any]], **_: Any) -> dict[str, dict[str, Any]]:
+            self.group_calls.append([str(runtime["id"]) for runtime in runtimes])
+            return {
+                str(runtime["id"]): {
+                    "pnl_total": 100.0 - index,
+                    "pnl_unrealized": float(index),
+                    "win_streak": 3 - index,
+                }
+                for index, runtime in enumerate(runtimes)
+            }
+
+        async def calculate_runtime_performance(self, runtime: dict[str, Any], **_: Any) -> dict[str, Any]:
+            raise AssertionError(f"per-runtime refresh should not be used for {runtime['id']}")
+
+    stub_performance = _StubPerformanceService()
+    engine.performance_service = stub_performance  # type: ignore[assignment]
+    monkeypatch.setattr("src.services.bot_leaderboard_engine.broadcaster.publish", _noop_publish)
+
+    rows = asyncio.run(engine.refresh_public_leaderboard(None, limit=10))
+
+    assert sorted(sorted(group) for group in stub_performance.group_calls) == [["runtime-a", "runtime-b"], ["runtime-c"]]
+    assert {row["runtime_id"] for row in rows} == {"runtime-a", "runtime-b", "runtime-c"}
+
+
 def test_mirror_preview_uses_runtime_positions_not_wallet_positions() -> None:
     fake_supabase = FakeSupabaseRestClient(_tables())
     fake_pacifica = FakePacificaClient()

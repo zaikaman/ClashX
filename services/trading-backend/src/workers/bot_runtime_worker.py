@@ -9,6 +9,7 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
+from time import monotonic
 from time import perf_counter
 from typing import Any
 
@@ -56,6 +57,7 @@ class BotRuntimeWorker:
         self._supabase = SupabaseRestClient()
         self._coordination = WorkerCoordinationService(self._supabase)
         self._metrics = get_performance_metrics_store()
+        self._held_leases: dict[str, float] = {}
         self.last_iteration_at: str | None = None
         self.last_error: str | None = None
 
@@ -73,6 +75,7 @@ class BotRuntimeWorker:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
+        self._release_held_leases()
         logger.info("Stopped bot runtime worker")
 
     async def run_forever(self) -> None:
@@ -80,17 +83,12 @@ class BotRuntimeWorker:
             iteration_started = perf_counter()
             try:
                 runtimes = await asyncio.to_thread(lambda: list(self._engine.get_active_runtimes(None)))
+                bot_lookup = await self._load_runtime_bot_lookup(runtimes)
                 runtime_specs: list[dict[str, Any]] = []
                 shared_candle_requests: list[dict[str, Any]] = []
                 need_shared_markets = False
                 for runtime in runtimes:
-                    bot = await asyncio.to_thread(
-                        self._supabase.maybe_one,
-                        "bot_definitions",
-                        columns="id,rules_json",
-                        filters={"id": runtime["bot_definition_id"]},
-                        cache_ttl_seconds=10,
-                    )
+                    bot = bot_lookup.get(str(runtime["bot_definition_id"]))
                     runtime_policy = self._risk.normalize_policy(
                         runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {}
                     )
@@ -127,23 +125,22 @@ class BotRuntimeWorker:
                 for runtime_spec in runtime_specs:
                     runtime = runtime_spec["runtime"]
                     lease_key = f"bot-runtime:{runtime['id']}"
-                    if not self._coordination.try_claim_lease(
-                        lease_key, ttl_seconds=max(15, int(self.poll_interval_seconds * 3))
+                    if not self._claim_local_runtime_lease(
+                        lease_key,
+                        ttl_seconds=max(15, int(self.poll_interval_seconds * 3)),
                     ):
                         continue
-                    try:
-                        await self._process_runtime(
-                            None,
-                            runtime,
-                            bot=runtime_spec.get("bot"),
-                            market_lookup=market_lookup,
-                            candle_lookup=candle_lookup,
-                            price_lookup=price_lookup,
-                            wallet_due=bool(runtime_spec.get("wallet_due")),
-                            evaluation_due=bool(runtime_spec.get("evaluation_due")),
-                        )
-                    finally:
-                        self._coordination.release_lease(lease_key)
+                    await self._process_runtime(
+                        None,
+                        runtime,
+                        bot=runtime_spec.get("bot"),
+                        bot_loaded=True,
+                        market_lookup=market_lookup,
+                        candle_lookup=candle_lookup,
+                        price_lookup=price_lookup,
+                        wallet_due=bool(runtime_spec.get("wallet_due")),
+                        evaluation_due=bool(runtime_spec.get("evaluation_due")),
+                    )
                 self.last_iteration_at = datetime.now(tz=UTC).isoformat()
                 self.last_error = None
             except SupabaseRestError as exc:
@@ -165,6 +162,7 @@ class BotRuntimeWorker:
         runtime: dict[str, Any],
         *,
         bot: dict[str, Any] | None = None,
+        bot_loaded: bool = False,
         market_lookup: dict[str, dict[str, Any]] | None = None,
         candle_lookup: dict[str, dict[str, list[dict[str, Any]]]] | None = None,
         price_lookup: dict[str, float] | None = None,
@@ -173,13 +171,14 @@ class BotRuntimeWorker:
     ) -> None:
         del db
         now = datetime.now(tz=UTC)
-        bot = bot or await asyncio.to_thread(
-            self._supabase.maybe_one,
-            "bot_definitions",
-            columns="id,rules_json",
-            filters={"id": runtime["bot_definition_id"]},
-            cache_ttl_seconds=10,
-        )
+        if not bot_loaded:
+            bot = bot or await asyncio.to_thread(
+                self._supabase.maybe_one,
+                "bot_definitions",
+                columns="id,rules_json",
+                filters={"id": runtime["bot_definition_id"]},
+                cache_ttl_seconds=10,
+            )
         if bot is None:
             logger.error(
                 "Runtime %s failed because bot definition %s was not found",
@@ -1241,6 +1240,47 @@ class BotRuntimeWorker:
     def _update_runtime(self, runtime: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
         serialized_updates = {key: value.isoformat() if isinstance(value, datetime) else value for key, value in updates.items()}
         return self._supabase.update("bot_runtimes", serialized_updates, filters={"id": runtime["id"]})[0]
+
+    async def _load_runtime_bot_lookup(self, runtimes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        definition_ids = sorted(
+            {
+                str(runtime.get("bot_definition_id") or "").strip()
+                for runtime in runtimes
+                if str(runtime.get("bot_definition_id") or "").strip()
+            }
+        )
+        if not definition_ids:
+            return {}
+        rows = await asyncio.to_thread(
+            self._supabase.select,
+            "bot_definitions",
+            columns="id,rules_json",
+            filters={"id": ("in", definition_ids)},
+        )
+        return {
+            str(row["id"]): row
+            for row in rows
+            if isinstance(row, dict) and str(row.get("id") or "").strip()
+        }
+
+    def _claim_local_runtime_lease(self, lease_key: str, *, ttl_seconds: int) -> bool:
+        if self._lease_refresh_not_due(lease_key):
+            return True
+        claimed = self._coordination.try_claim_lease(lease_key, ttl_seconds=ttl_seconds)
+        if not claimed:
+            self._held_leases.pop(lease_key, None)
+            return False
+        self._held_leases[lease_key] = monotonic() + max(1.0, ttl_seconds * 0.6)
+        return True
+
+    def _lease_refresh_not_due(self, lease_key: str) -> bool:
+        refresh_at = self._held_leases.get(lease_key)
+        return refresh_at is not None and monotonic() < refresh_at
+
+    def _release_held_leases(self) -> None:
+        for lease_key in list(self._held_leases):
+            self._coordination.release_lease(lease_key)
+        self._held_leases.clear()
 
     def _should_refresh_wallet(self, *, runtime_state: dict[str, Any]) -> bool:
         last_sync_at = self._parse_runtime_state_timestamp(str(runtime_state.get("wallet_synced_at") or ""))
