@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useClashxAuth } from "@/lib/clashx-auth";
 import type { BotPerformance, BotPosition } from "@/lib/bot-performance";
@@ -57,6 +57,55 @@ export function getBotOpenPositionCount(bot: BotFleetItem) {
   return getBotOpenPositions(bot).length;
 }
 
+function mergePerformanceSnapshot(
+  previous: BotPerformance | null | undefined,
+  next: BotPerformance | null | undefined,
+  options?: { preservePositions?: boolean },
+): BotPerformance | null | undefined {
+  if (next == null) {
+    return next;
+  }
+
+  if (previous == null) {
+    return next;
+  }
+
+  const shouldPreservePositions =
+    options?.preservePositions === true &&
+    previous.positions.length > 0 &&
+    next.positions.length === 0;
+
+  return {
+    ...previous,
+    ...next,
+    positions: shouldPreservePositions ? previous.positions : next.positions,
+  };
+}
+
+function mergeFleetSnapshot(
+  currentBots: BotFleetItem[],
+  incomingBots: BotFleetItem[],
+  options?: { preservePositions?: boolean },
+) {
+  const currentByBotId = new Map(currentBots.map((bot) => [bot.id, bot]));
+
+  return [...incomingBots]
+    .map((bot) => {
+      const current = currentByBotId.get(bot.id);
+      if (!current) {
+        return bot;
+      }
+
+      return {
+        ...current,
+        ...bot,
+        runtime: bot.runtime ?? null,
+        performance: mergePerformanceSnapshot(current.performance, bot.performance, options),
+      };
+    })
+    .sort((left, right) => new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime());
+}
+
 async function unwrapResponse<T>(response: Response, fallback: string): Promise<T> {
   const payload = (await response.json()) as unknown;
   if (!response.ok) {
@@ -82,6 +131,20 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
   const [loadingPositions, setLoadingPositions] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
+  const [hasLoadedBots, setHasLoadedBots] = useState(false);
+  const [hasLoadedOverviews, setHasLoadedOverviews] = useState(false);
+  const [hasLoadedPositions, setHasLoadedPositions] = useState(false);
+  const botsRef = useRef<BotFleetItem[]>([]);
+  const hasLoadedBotsRef = useRef(false);
+  const hasLoadedOverviewsRef = useRef(false);
+  const hasLoadedPositionsRef = useRef(false);
+
+  useEffect(() => {
+    botsRef.current = bots;
+    hasLoadedBotsRef.current = hasLoadedBots;
+    hasLoadedOverviewsRef.current = hasLoadedOverviews;
+    hasLoadedPositionsRef.current = hasLoadedPositions;
+  }, [bots, hasLoadedBots, hasLoadedOverviews, hasLoadedPositions]);
 
   useEffect(() => {
     if (!sessionActive || !walletAddress) {
@@ -93,6 +156,9 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
       setLoadingOverviews(false);
       setLoadingPositions(false);
       setLastUpdatedAt(null);
+      setHasLoadedBots(false);
+      setHasLoadedOverviews(false);
+      setHasLoadedPositions(false);
       return;
     }
 
@@ -100,10 +166,13 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
     const controller = new AbortController();
 
     async function loadFleet() {
-      setLoadingBots(true);
-      setLoadingOverviews(true);
-      setLoadingPositions(true);
-      setOverviewErrors({});
+      const hasCachedBots = hasLoadedBotsRef.current;
+      const hasCachedOverviews = hasLoadedOverviewsRef.current;
+      const hasCachedPositions = hasLoadedPositionsRef.current;
+
+      setLoadingBots(!hasCachedBots);
+      setLoadingOverviews(!hasCachedOverviews);
+      setLoadingPositions(!hasCachedPositions);
 
       try {
         const headers = await getAuthHeaders();
@@ -121,28 +190,31 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
           return;
         }
 
-        const sortedBots = [...nextBots].sort(
-          (left, right) => new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime(),
-        );
+        const mergedBots = mergeFleetSnapshot(botsRef.current, nextBots, {
+          preservePositions: hasCachedPositions,
+        });
 
-        setBots(sortedBots);
+        setBots(mergedBots);
         setError(null);
         setLoadingBots(false);
+        setHasLoadedBots(true);
         setLastUpdatedAt(new Date().toISOString());
 
-        const botsWithRuntime = sortedBots.filter((bot) => Boolean(bot.runtime?.id));
+        const botsWithRuntime = mergedBots.filter((bot) => Boolean(bot.runtime?.id));
         const liveRuntimeBots = botsWithRuntime.filter((bot) => isLiveFleetStatus(getFleetBotStatus(bot)));
 
         if (botsWithRuntime.length === 0) {
           setLoadingOverviews(false);
           setLoadingPositions(false);
+          setHasLoadedOverviews(true);
+          setHasLoadedPositions(true);
           setLastUpdatedAt(new Date().toISOString());
           return;
         }
 
-        setOverviewByBot({});
         if (liveRuntimeBots.length === 0) {
           setLoadingPositions(false);
+          setHasLoadedPositions(true);
         }
         const hydrateOverviews = (async () => {
           try {
@@ -164,6 +236,7 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
 
             setOverviewByBot(overviewPayload);
             setOverviewErrors({});
+            setHasLoadedOverviews(true);
             setLastUpdatedAt(new Date().toISOString());
           } catch (loadError) {
             if (controller.signal.aborted) {
@@ -202,19 +275,8 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
               return;
             }
 
-            const fullFleetByBot = new Map(fullFleet.map((bot) => [bot.id, bot]));
-            setBots((current) =>
-              current.map((bot) => {
-                const nextBot = fullFleetByBot.get(bot.id);
-                return nextBot
-                  ? {
-                      ...bot,
-                      runtime: nextBot.runtime ?? bot.runtime,
-                      performance: nextBot.performance ?? bot.performance,
-                    }
-                  : bot;
-              }),
-            );
+            setBots((current) => mergeFleetSnapshot(current, fullFleet));
+            setHasLoadedPositions(true);
             setLastUpdatedAt(new Date().toISOString());
           } finally {
             if (!controller.signal.aborted) {
@@ -230,9 +292,14 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
         }
 
         setError(loadError instanceof Error ? loadError.message : "Could not load fleet activity");
-        setBots([]);
-        setOverviewByBot({});
-        setOverviewErrors({});
+        if (!hasCachedBots) {
+          setBots([]);
+          setOverviewByBot({});
+          setOverviewErrors({});
+          setHasLoadedBots(false);
+          setHasLoadedOverviews(false);
+          setHasLoadedPositions(false);
+        }
       } finally {
         if (!controller.signal.aborted) {
           setLoadingBots(false);

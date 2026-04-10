@@ -344,8 +344,9 @@ export function AnalyticsPage() {
         </article>
       ) : null}
 
-      <section className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-        <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
+      <section className="grid gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.95fr)] xl:items-start">
+        <div className="grid gap-6">
+        <article className="grid gap-4 self-start rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div className="grid gap-1">
               <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#74b97f]">
@@ -421,74 +422,7 @@ export function AnalyticsPage() {
           )}
         </article>
 
-        <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
-          <div className="grid gap-1">
-            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]">
-              Exposure concentration
-            </span>
-            <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
-              Which markets dominate current risk
-            </h2>
-          </div>
-
-          {loading || (loadingPositions && exposureBySymbol.length === 0) ? (
-            <div className="grid gap-3">
-              <div className="skeleton h-24 w-full rounded-[1.5rem]" />
-              <div className="skeleton h-24 w-full rounded-[1.5rem]" />
-              <div className="skeleton h-24 w-full rounded-[1.5rem]" />
-            </div>
-          ) : exposureBySymbol.length === 0 ? (
-            <div className="rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-5 py-6 text-sm leading-7 text-neutral-400">
-              No open symbol exposure right now. Once bots are holding trades, this section will rank concentration by approximate notional and current live PnL.
-            </div>
-          ) : (
-            <div className="grid gap-3">
-              {exposureBySymbol.map((item) => (
-                <article
-                  key={item.symbol}
-                  className="grid gap-3 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-4"
-                >
-                  <div className="flex flex-wrap items-end justify-between gap-3">
-                    <div className="grid gap-1">
-                      <div className="font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">
-                        {item.symbol}
-                      </div>
-                      <div className="text-sm text-neutral-400">
-                        {item.positions} position{item.positions === 1 ? "" : "s"} across {item.bots.size} bot{item.bots.size === 1 ? "" : "s"}
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">
-                        {formatUsd(item.approximateNotional)}
-                      </div>
-                      <div className={`text-sm ${item.unrealizedPnl >= 0 ? "text-[#74b97f]" : "text-[#dce85d]"}`}>
-                        {formatSignedUsd(item.unrealizedPnl)}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-[rgba(255,255,255,0.06)]">
-                    <div
-                      className="h-full rounded-full bg-[linear-gradient(90deg,#dce85d_0%,#74b97f_100%)]"
-                      style={{ width: `${percentWidth(item.approximateNotional, maxNotional)}%` }}
-                    />
-                  </div>
-                  <div className="flex flex-wrap gap-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
-                    <span className="rounded-full border border-[rgba(255,255,255,0.08)] px-2.5 py-1">
-                      long {item.longs}
-                    </span>
-                    <span className="rounded-full border border-[rgba(255,255,255,0.08)] px-2.5 py-1">
-                      short {item.shorts}
-                    </span>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </article>
-      </section>
-
-      <section className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-        <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
+        <article className="grid gap-4 self-start rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
           <div className="grid gap-1">
             <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-400">
               Action quality
@@ -566,7 +500,131 @@ export function AnalyticsPage() {
           </div>
         </article>
 
-        <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
+        <article className="grid gap-4 self-start rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
+          <div className="grid gap-1">
+            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]">
+              Failure pressure
+            </span>
+            <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
+              Most common failure reasons
+            </h2>
+          </div>
+
+          {loading || (loadingOverviews && failurePressure.length === 0) ? (
+            <div className="grid gap-3">
+              <div className="skeleton h-20 w-full rounded-[1.5rem]" />
+              <div className="skeleton h-20 w-full rounded-[1.5rem]" />
+              <div className="skeleton h-20 w-full rounded-[1.5rem]" />
+            </div>
+          ) : failurePressure.length === 0 ? (
+            <div className="rounded-[1.5rem] border border-[#74b97f]/20 bg-[#74b97f]/8 px-5 py-6 text-sm leading-7 text-neutral-300">
+              No recurring runtime failures are showing up in the current observability window.
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              {failurePressure.map((item) => (
+                <article
+                  key={item.reason}
+                  className="grid gap-3 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="grid gap-1">
+                      <div className="inline-flex items-center gap-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#dce85d]">
+                        <TriangleAlert className="h-3.5 w-3.5" />
+                        Failure reason
+                      </div>
+                      <div className="font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">
+                        {item.reason}
+                      </div>
+                    </div>
+                    <div className="font-mono text-lg font-bold uppercase tracking-tight text-[#dce85d]">
+                      {item.count}
+                    </div>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-[rgba(255,255,255,0.06)]">
+                    <div
+                      className="h-full rounded-full bg-[#dce85d]"
+                      style={{ width: `${percentWidth(item.count, maxFailureCount)}%` }}
+                    />
+                  </div>
+                  <div className="text-sm text-neutral-400">
+                    Affecting {item.bots.size} bot{item.bots.size === 1 ? "" : "s"}: {[...item.bots].slice(0, 3).join(", ")}
+                    {item.bots.size > 3 ? ` +${item.bots.size - 3} more` : ""}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </article>
+        </div>
+
+        <div className="grid gap-6">
+        <article className="grid gap-4 self-start rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
+          <div className="grid gap-1">
+            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]">
+              Exposure concentration
+            </span>
+            <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
+              Which markets dominate current risk
+            </h2>
+          </div>
+
+          {loading || (loadingPositions && exposureBySymbol.length === 0) ? (
+            <div className="grid gap-3">
+              <div className="skeleton h-24 w-full rounded-[1.5rem]" />
+              <div className="skeleton h-24 w-full rounded-[1.5rem]" />
+              <div className="skeleton h-24 w-full rounded-[1.5rem]" />
+            </div>
+          ) : exposureBySymbol.length === 0 ? (
+            <div className="rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-5 py-6 text-sm leading-7 text-neutral-400">
+              No open symbol exposure right now. Once bots are holding trades, this section will rank concentration by approximate notional and current live PnL.
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              {exposureBySymbol.map((item) => (
+                <article
+                  key={item.symbol}
+                  className="grid gap-3 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-4"
+                >
+                  <div className="flex flex-wrap items-end justify-between gap-3">
+                    <div className="grid gap-1">
+                      <div className="font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">
+                        {item.symbol}
+                      </div>
+                      <div className="text-sm text-neutral-400">
+                        {item.positions} position{item.positions === 1 ? "" : "s"} across {item.bots.size} bot{item.bots.size === 1 ? "" : "s"}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">
+                        {formatUsd(item.approximateNotional)}
+                      </div>
+                      <div className={`text-sm ${item.unrealizedPnl >= 0 ? "text-[#74b97f]" : "text-[#dce85d]"}`}>
+                        {formatSignedUsd(item.unrealizedPnl)}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-[rgba(255,255,255,0.06)]">
+                    <div
+                      className="h-full rounded-full bg-[linear-gradient(90deg,#dce85d_0%,#74b97f_100%)]"
+                      style={{ width: `${percentWidth(item.approximateNotional, maxNotional)}%` }}
+                    />
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
+                    <span className="rounded-full border border-[rgba(255,255,255,0.08)] px-2.5 py-1">
+                      long {item.longs}
+                    </span>
+                    <span className="rounded-full border border-[rgba(255,255,255,0.08)] px-2.5 py-1">
+                      short {item.shorts}
+                    </span>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </article>
+
+        <article className="grid gap-4 self-start rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
           <div className="grid gap-1">
             <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#74b97f]">
               Runtime health matrix
@@ -628,67 +686,8 @@ export function AnalyticsPage() {
             </div>
           )}
         </article>
-      </section>
 
-      <section className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-        <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
-          <div className="grid gap-1">
-            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]">
-              Failure pressure
-            </span>
-            <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
-              Most common failure reasons
-            </h2>
-          </div>
-
-          {loading || (loadingOverviews && failurePressure.length === 0) ? (
-            <div className="grid gap-3">
-              <div className="skeleton h-20 w-full rounded-[1.5rem]" />
-              <div className="skeleton h-20 w-full rounded-[1.5rem]" />
-              <div className="skeleton h-20 w-full rounded-[1.5rem]" />
-            </div>
-          ) : failurePressure.length === 0 ? (
-            <div className="rounded-[1.5rem] border border-[#74b97f]/20 bg-[#74b97f]/8 px-5 py-6 text-sm leading-7 text-neutral-300">
-              No recurring runtime failures are showing up in the current observability window.
-            </div>
-          ) : (
-            <div className="grid gap-3">
-              {failurePressure.map((item) => (
-                <article
-                  key={item.reason}
-                  className="grid gap-3 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-4"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="grid gap-1">
-                      <div className="inline-flex items-center gap-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#dce85d]">
-                        <TriangleAlert className="h-3.5 w-3.5" />
-                        Failure reason
-                      </div>
-                      <div className="font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">
-                        {item.reason}
-                      </div>
-                    </div>
-                    <div className="font-mono text-lg font-bold uppercase tracking-tight text-[#dce85d]">
-                      {item.count}
-                    </div>
-                  </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-[rgba(255,255,255,0.06)]">
-                    <div
-                      className="h-full rounded-full bg-[#dce85d]"
-                      style={{ width: `${percentWidth(item.count, maxFailureCount)}%` }}
-                    />
-                  </div>
-                  <div className="text-sm text-neutral-400">
-                    Affecting {item.bots.size} bot{item.bots.size === 1 ? "" : "s"}: {[...item.bots].slice(0, 3).join(", ")}
-                    {item.bots.size > 3 ? ` +${item.bots.size - 3} more` : ""}
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </article>
-
-        <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
+        <article className="grid gap-4 self-start rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
           <div className="grid gap-1">
             <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-400">
               Reading guide
@@ -716,6 +715,7 @@ export function AnalyticsPage() {
             />
           </div>
         </article>
+        </div>
       </section>
     </main>
   );

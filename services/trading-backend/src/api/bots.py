@@ -236,7 +236,83 @@ async def _build_runtime_performance(runtime: dict[str, Any] | None) -> RuntimeP
     return RuntimePerformanceResponse.model_validate(payload)
 
 
-def _build_fast_runtime_performance(runtime: dict[str, Any] | None) -> RuntimePerformanceResponse | None:
+def _normalize_symbol(value: Any) -> str:
+    return str(value or "").upper().replace("-PERP", "").strip()
+
+
+def _normalize_position_side(value: Any) -> str:
+    normalized = str(value or "").lower().strip()
+    if normalized in {"bid", "long", "buy"}:
+        return "long"
+    if normalized in {"ask", "short", "sell"}:
+        return "short"
+    return normalized
+
+
+def _to_float(value: Any) -> float:
+    try:
+        if value in (None, ""):
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _build_fast_runtime_positions(
+    runtime_state: dict[str, Any],
+    *,
+    live_position_lookup: dict[str, dict[str, Any]],
+    live_positions_loaded: bool,
+) -> tuple[list[RuntimePositionResponse], float]:
+    managed_positions = runtime_state.get("managed_positions")
+    if not isinstance(managed_positions, dict):
+        return [], 0.0
+
+    positions: list[RuntimePositionResponse] = []
+    unrealized_total = 0.0
+    for managed_position in managed_positions.values():
+        if not isinstance(managed_position, dict):
+            continue
+        symbol = _normalize_symbol(managed_position.get("symbol"))
+        amount = abs(_to_float(managed_position.get("amount")))
+        side = _normalize_position_side(managed_position.get("side"))
+        entry_price = _to_float(managed_position.get("entry_price"))
+        if not symbol or amount <= 0 or entry_price <= 0 or side not in {"long", "short"}:
+            continue
+
+        live_position = live_position_lookup.get(symbol)
+        live_side = _normalize_position_side((live_position or {}).get("side"))
+        if live_positions_loaded and (
+            live_position is None or live_side != side or abs(_to_float((live_position or {}).get("amount"))) <= 0
+        ):
+            continue
+
+        mark_price = _to_float((live_position or {}).get("mark_price")) or _to_float(managed_position.get("mark_price"))
+        if mark_price <= 0:
+            mark_price = entry_price
+
+        unrealized_pnl = (mark_price - entry_price) * amount if side == "long" else (entry_price - mark_price) * amount
+        unrealized_total += unrealized_pnl
+        positions.append(
+            RuntimePositionResponse(
+                symbol=symbol,
+                side=side,
+                amount=round(amount, 8),
+                entry_price=round(entry_price, 8),
+                mark_price=round(mark_price, 8),
+                unrealized_pnl=round(unrealized_pnl, 8),
+            )
+        )
+
+    return positions, round(unrealized_total, 2)
+
+
+def _build_fast_runtime_performance(
+    runtime: dict[str, Any] | None,
+    *,
+    live_position_lookup: dict[str, dict[str, Any]] | None = None,
+    live_positions_loaded: bool = False,
+) -> RuntimePerformanceResponse | None:
     if runtime is None:
         return None
     risk_policy = runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {}
@@ -247,6 +323,14 @@ def _build_fast_runtime_performance(runtime: dict[str, Any] | None) -> RuntimePe
     pnl_realized = float(runtime_state.get("realized_pnl_usd") or 0.0)
     pnl_unrealized = float(runtime_state.get("unrealized_pnl_usd") or 0.0)
     win_streak = int(runtime_state.get("win_streak") or 0)
+    positions, live_unrealized = _build_fast_runtime_positions(
+        runtime_state,
+        live_position_lookup=live_position_lookup or {},
+        live_positions_loaded=live_positions_loaded,
+    )
+    if positions:
+        pnl_unrealized = live_unrealized
+        pnl_total = pnl_realized + pnl_unrealized
     pnl_total_pct = (pnl_total / allocated_capital * 100.0) if allocated_capital > 0 else 0.0
 
     return RuntimePerformanceResponse(
@@ -255,7 +339,7 @@ def _build_fast_runtime_performance(runtime: dict[str, Any] | None) -> RuntimePe
         pnl_realized=pnl_realized,
         pnl_unrealized=pnl_unrealized,
         win_streak=win_streak,
-        positions=[],
+        positions=positions,
     )
 
 
@@ -280,7 +364,17 @@ async def list_bots(
     runtimes = {runtime["bot_definition_id"]: runtime for runtime in runtimes_for_wallet}
     performances: list[RuntimePerformanceResponse | None]
     if include_performance and runtimes_for_wallet and performance_mode == "fast":
-        performances = [_build_fast_runtime_performance(runtimes.get(row["id"])) for row in definitions]
+        live_position_lookup, live_positions_loaded = await bot_performance_service.load_live_position_lookup_for_wallet(
+            resolved_wallet
+        )
+        performances = [
+            _build_fast_runtime_performance(
+                runtimes.get(row["id"]),
+                live_position_lookup=live_position_lookup,
+                live_positions_loaded=live_positions_loaded,
+            )
+            for row in definitions
+        ]
     elif include_performance and runtimes_for_wallet:
         market_lookup = await bot_performance_service.load_market_lookup()
         live_position_lookup, live_positions_loaded = await bot_performance_service.load_live_position_lookup_for_wallet(
