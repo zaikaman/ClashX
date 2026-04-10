@@ -656,42 +656,52 @@ class CopilotService:
         )
 
     async def _request_gemini(self, messages: list[dict[str, str]], system_prompt: str) -> str:
-        response = await self._http.post(
-            self._build_gemini_url(self.settings.gemini_base_url, self.settings.gemini_model),
-            headers={
-                "Authorization": f"Bearer {self.settings.gemini_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "systemInstruction": {"parts": [{"text": system_prompt}]},
-                "contents": self._build_gemini_contents(messages),
-                "generationConfig": {
-                    "temperature": 0.35,
-                    "topP": 0.95,
-                    "thinkingConfig": {
-                        "includeThoughts": True,
-                        "thinkingBudget": 24576,
+        try:
+            response = await self._http.post(
+                self._build_gemini_url(self.settings.gemini_base_url, self.settings.gemini_model),
+                headers={
+                    "Authorization": f"Bearer {self.settings.gemini_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "systemInstruction": {"parts": [{"text": system_prompt}]},
+                    "contents": self._build_gemini_contents(messages),
+                    "generationConfig": {
+                        "temperature": 0.35,
+                        "topP": 0.95,
+                        "thinkingConfig": {
+                            "includeThoughts": True,
+                            "thinkingBudget": 24576,
+                        },
                     },
                 },
-            },
-        )
+            )
+        except httpx.TimeoutException as exc:
+            raise RuntimeError("Gemini request timed out.") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"Gemini request failed: {exc}") from exc
         return self._extract_gemini_text(self._parse_response_payload(response))
 
     async def _request_openai(self, messages: list[dict[str, str]], system_prompt: str) -> str:
-        response = await self._http.post(
-            self._build_responses_url(self.settings.openai_base_url),
-            headers={
-                "Authorization": f"Bearer {self.settings.openai_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": self.settings.openai_model,
-                "input": [
-                    {"role": "system", "content": system_prompt},
-                    *messages,
-                ],
-            },
-        )
+        try:
+            response = await self._http.post(
+                self._build_responses_url(self.settings.openai_base_url),
+                headers={
+                    "Authorization": f"Bearer {self.settings.openai_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.settings.openai_model,
+                    "input": [
+                        {"role": "system", "content": system_prompt},
+                        *messages,
+                    ],
+                },
+            )
+        except httpx.TimeoutException as exc:
+            raise RuntimeError("OpenAI request timed out.") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"OpenAI request failed: {exc}") from exc
         return self._extract_openai_text(self._parse_response_payload(response))
 
     def _sanitize_message(self, message: dict[str, str]) -> dict[str, str] | None:

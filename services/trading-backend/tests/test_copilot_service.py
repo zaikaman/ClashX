@@ -4,6 +4,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
+
 from src.api.auth import AuthenticatedUser
 from src.services.copilot_service import CopilotService
 
@@ -37,6 +39,15 @@ class _FakeHttpClient:
         if not self._responses:
             raise AssertionError("No fake responses remaining")
         return self._responses.pop(0)
+
+
+class _TimeoutHttpClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def post(self, url: str, *, headers: dict[str, str], json: dict[str, Any]) -> _FakeResponse:
+        self.calls.append({"url": url, "headers": headers, "json": json})
+        raise httpx.ReadTimeout("timed out")
 
 
 def _user() -> AuthenticatedUser:
@@ -185,3 +196,26 @@ def test_copilot_ignores_extra_json_after_first_object() -> None:
 
     assert result["reply"] == "Here is the summary."
     assert result["followUps"] == ["Show recent activity"]
+
+
+def test_copilot_converts_openai_timeouts_to_runtime_errors() -> None:
+    service = CopilotService()
+    service.settings = _FakeSettings(
+        openai_api_key="open-key",
+        openai_base_url="https://example.openai.test/v1",
+        openai_model="gpt-5-mini",
+    )
+    service._http = _TimeoutHttpClient()
+
+    try:
+        asyncio.run(
+            service.chat(
+                messages=[{"role": "user", "content": "Can I trade right now?"}],
+                user=_user(),
+                wallet_address="wallet-abc",
+            )
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "OpenAI: OpenAI request timed out."
+    else:
+        raise AssertionError("Expected RuntimeError")

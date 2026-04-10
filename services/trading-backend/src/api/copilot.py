@@ -84,6 +84,13 @@ def list_copilot_conversations(
     return [CopilotConversationSummaryResponse.model_validate(row) for row in conversation_service.list_conversations(user=user)]
 
 
+def _runtime_error_status(exc: RuntimeError) -> int:
+    message = str(exc).lower()
+    if "timed out" in message or "timeout" in message:
+        return 504
+    return 500
+
+
 @router.post("/conversations", response_model=CopilotConversationSummaryResponse)
 def create_copilot_conversation(
     payload: CopilotCreateConversationRequest,
@@ -139,7 +146,7 @@ async def chat_with_copilot(
         except ValueError as exc:
             raise HTTPException(status_code=400 if "required" in str(exc).lower() or "wallet" in str(exc).lower() else 404, detail=str(exc)) from exc
         except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise HTTPException(status_code=_runtime_error_status(exc), detail=str(exc)) from exc
         return CopilotChatResponse.model_validate(result)
 
     if not payload.messages:
@@ -151,7 +158,7 @@ async def chat_with_copilot(
             wallet_address=payload.walletAddress,
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=_runtime_error_status(exc), detail=str(exc)) from exc
     return CopilotChatResponse.model_validate(
         {
             "conversationId": payload.conversationId or "legacy-session",
