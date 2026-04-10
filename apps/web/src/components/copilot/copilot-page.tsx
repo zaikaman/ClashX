@@ -151,12 +151,6 @@ export function CopilotPage() {
     }
   }, [walletAddress]);
 
-  useEffect(() => {
-    if (typeof window !== "undefined" && window.innerWidth >= 1024) {
-      setHistoryOpen(true);
-    }
-  }, []);
-
   function closeHistoryOnMobile() {
     if (typeof window !== "undefined" && window.innerWidth < 1024) {
       setHistoryOpen(false);
