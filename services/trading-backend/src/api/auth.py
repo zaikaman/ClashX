@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
+import uuid
 from typing import Any
 
 import jwt
@@ -8,6 +9,7 @@ from privy import AuthenticationError, PrivyAPI, PrivyAPIError
 from pydantic import BaseModel, Field
 
 from src.core.settings import get_settings
+from src.services.supabase_rest import SupabaseRestClient
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 PRIVY_JWT_LEEWAY_SECONDS = 60
@@ -24,6 +26,7 @@ class AuthenticatedUser(BaseModel):
     user_id: str
     session_id: str | None = None
     wallet_addresses: list[str] = Field(default_factory=list)
+    wallet_user_ids: dict[str, str] = Field(default_factory=dict)
     expires_at: datetime | None = None
 
 
@@ -94,6 +97,48 @@ def _extract_wallet_addresses(privy_user: Any) -> list[str]:
     return unique_addresses
 
 
+def _resolve_wallet_user_ids(wallet_addresses: list[str]) -> dict[str, str]:
+    normalized_wallets: list[str] = []
+    seen_wallets: set[str] = set()
+    for wallet_address in wallet_addresses:
+        normalized = str(wallet_address or "").strip()
+        if not normalized or normalized in seen_wallets:
+            continue
+        seen_wallets.add(normalized)
+        normalized_wallets.append(normalized)
+    if not normalized_wallets:
+        return {}
+
+    supabase = SupabaseRestClient()
+    existing_rows = supabase.select(
+        "users",
+        columns="id,wallet_address",
+        filters={"wallet_address": ("in", normalized_wallets)},
+        cache_ttl_seconds=60,
+    )
+    wallet_user_ids = {
+        str(row.get("wallet_address") or ""): str(row.get("id") or "")
+        for row in existing_rows
+        if str(row.get("wallet_address") or "") and str(row.get("id") or "")
+    }
+    missing_wallets = [wallet for wallet in normalized_wallets if wallet not in wallet_user_ids]
+    for wallet_address in missing_wallets:
+        created = supabase.insert(
+            "users",
+            {
+                "id": str(uuid.uuid4()),
+                "wallet_address": wallet_address,
+                "display_name": wallet_address[:8],
+                "auth_provider": "privy",
+                "created_at": datetime.now(tz=UTC).isoformat(),
+            },
+            upsert=True,
+            on_conflict="wallet_address",
+        )[0]
+        wallet_user_ids[wallet_address] = str(created["id"])
+    return wallet_user_ids
+
+
 def _verify_access_token_with_leeway(client: PrivyAPI, token: str, verification_key: str | None) -> dict[str, str]:
     try:
         return client.users.verify_access_token(auth_token=token, verification_key=verification_key)
@@ -136,10 +181,12 @@ def authenticate_bearer_token(token: str) -> AuthenticatedUser:
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
+    wallet_addresses = _extract_wallet_addresses(privy_user)
     return AuthenticatedUser(
         user_id=claims["user_id"],
         session_id=claims.get("session_id"),
-        wallet_addresses=_extract_wallet_addresses(privy_user),
+        wallet_addresses=wallet_addresses,
+        wallet_user_ids=_resolve_wallet_user_ids(wallet_addresses),
         expires_at=_parse_datetime(claims.get("expiration")),
     )
 
@@ -168,6 +215,22 @@ def ensure_wallet_owned(user: AuthenticatedUser, wallet_address: str) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Wallet is not linked to the authenticated Privy user")
 
 
+def resolve_app_user_id(user: AuthenticatedUser, wallet_address: str) -> str:
+    ensure_wallet_owned(user, wallet_address)
+    resolved = str(user.wallet_user_ids.get(wallet_address) or "").strip()
+    if resolved:
+        return resolved
+    if not user.wallet_user_ids and str(user.user_id or "").strip():
+        return str(user.user_id).strip()
+
+    wallet_user_ids = _resolve_wallet_user_ids([wallet_address])
+    resolved = str(wallet_user_ids.get(wallet_address) or "").strip()
+    if not resolved:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Unable to resolve authenticated wallet user")
+    user.wallet_user_ids[wallet_address] = resolved
+    return resolved
+
+
 @router.get("/me", response_model=AuthenticatedUser)
 def get_authenticated_me(user: AuthenticatedUser = Depends(require_authenticated_user)) -> AuthenticatedUser:
     return user
@@ -185,5 +248,6 @@ async def verify_privy_session(payload: PrivyVerifyRequest) -> PrivyVerifyRespon
         user_id=user.user_id,
         session_id=user.session_id,
         wallet_addresses=user.wallet_addresses,
+        wallet_user_ids=user.wallet_user_ids,
         expires_at=user.expires_at or (datetime.now(tz=UTC) + timedelta(hours=1)),
     )

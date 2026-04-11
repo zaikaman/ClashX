@@ -5,7 +5,7 @@ import pytest
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from src.api.auth import AuthenticatedUser
+from src.api.auth import AuthenticatedUser, resolve_app_user_id
 from src.middleware.auth import AuthMiddleware
 
 
@@ -104,6 +104,23 @@ def test_protected_route_accepts_valid_bearer_token(monkeypatch: pytest.MonkeyPa
             "user_id": "user_123",
             "session_id": None,
             "wallet_addresses": ["wallet_abc"],
+            "wallet_user_ids": {},
             "expires_at": None,
         }
     ]
+
+
+def test_resolve_app_user_id_prefers_wallet_mapping() -> None:
+    user = AuthenticatedUser(
+        user_id="did:privy:abc",
+        wallet_addresses=["wallet_a", "wallet_b"],
+        wallet_user_ids={"wallet_a": "uuid-a", "wallet_b": "uuid-b"},
+    )
+
+    assert resolve_app_user_id(user, "wallet_b") == "uuid-b"
+
+
+def test_resolve_app_user_id_falls_back_to_legacy_user_id() -> None:
+    user = AuthenticatedUser(user_id="legacy-user-id", wallet_addresses=["wallet_a"])
+
+    assert resolve_app_user_id(user, "wallet_a") == "legacy-user-id"

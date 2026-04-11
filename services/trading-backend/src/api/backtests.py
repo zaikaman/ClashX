@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import Any as Session
 
-from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authenticated_user
+from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authenticated_user, resolve_app_user_id
 from src.db.session import get_db
 from src.services.bot_builder_service import BotBuilderService
 from src.services.bot_backtest_service import BotBacktestService
@@ -86,19 +86,24 @@ def _resolve_wallet(user: AuthenticatedUser, wallet_address: str | None) -> str:
     return resolved
 
 
+def _resolve_wallet_user_id(user: AuthenticatedUser, wallet_address: str | None) -> tuple[str, str]:
+    resolved_wallet = _resolve_wallet(user, wallet_address)
+    return resolved_wallet, resolve_app_user_id(user, resolved_wallet)
+
+
 @router.post("/runs", response_model=BacktestRunDetailResponse)
 async def create_backtest_run(
     payload: BacktestRunRequest,
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> BacktestRunDetailResponse:
-    resolved_wallet = _resolve_wallet(user, payload.wallet_address)
+    resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, payload.wallet_address)
     try:
         run = await bot_backtest_service.run_backtest(
             db,
             bot_id=payload.bot_id,
             wallet_address=resolved_wallet,
-            user_id=user.user_id,
+            user_id=resolved_user_id,
             interval=payload.interval,
             start_time=payload.start_time,
             end_time=payload.end_time,
@@ -117,13 +122,13 @@ def list_backtest_runs(
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> list[BacktestRunSummaryResponse]:
-    resolved_wallet = _resolve_wallet(user, wallet_address)
+    resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, wallet_address)
     return [
         BacktestRunSummaryResponse.model_validate(row)
         for row in bot_backtest_service.list_runs(
             db,
             wallet_address=resolved_wallet,
-            user_id=user.user_id,
+            user_id=resolved_user_id,
             bot_id=bot_id,
         )
     ]
@@ -136,12 +141,12 @@ def get_backtests_bootstrap(
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> BacktestsBootstrapResponse:
-    resolved_wallet = _resolve_wallet(user, wallet_address)
+    resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, wallet_address)
     bots = bot_builder_service.list_bots(db, wallet_address=resolved_wallet)
     runs = bot_backtest_service.list_runs(
         db,
         wallet_address=resolved_wallet,
-        user_id=user.user_id,
+        user_id=resolved_user_id,
         bot_id=bot_id,
     )
     return BacktestsBootstrapResponse.model_validate(
@@ -159,13 +164,13 @@ def get_backtest_run(
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> BacktestRunDetailResponse:
-    resolved_wallet = _resolve_wallet(user, wallet_address)
+    resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, wallet_address)
     try:
         run = bot_backtest_service.get_run(
             db,
             run_id=run_id,
             wallet_address=resolved_wallet,
-            user_id=user.user_id,
+            user_id=resolved_user_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

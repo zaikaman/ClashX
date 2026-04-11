@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from typing import Any as Session
 
-from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authenticated_user
+from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authenticated_user, resolve_app_user_id
 from src.db.session import get_db
 from src.services.bot_builder_service import BotBuilderService
 from src.services.bot_performance_service import BotPerformanceService
@@ -231,6 +231,11 @@ def _resolve_wallet(user: AuthenticatedUser, wallet_address: str | None) -> str:
     return resolved
 
 
+def _resolve_wallet_user_id(user: AuthenticatedUser, wallet_address: str | None) -> tuple[str, str]:
+    resolved_wallet = _resolve_wallet(user, wallet_address)
+    return resolved_wallet, resolve_app_user_id(user, resolved_wallet)
+
+
 async def _build_runtime_performance(runtime: dict[str, Any] | None) -> RuntimePerformanceResponse | None:
     if runtime is None:
         return None
@@ -376,12 +381,12 @@ async def list_bots(
 ) -> list[BotFleetItemResponse]:
     if include_performance:
         response.headers["Cache-Control"] = "private, max-age=2, stale-while-revalidate=8"
-    resolved_wallet = _resolve_wallet(user, wallet_address)
+    resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, wallet_address)
     definitions = bot_builder_service.list_bots(db, wallet_address=resolved_wallet)
     runtimes_for_wallet = bot_runtime_engine.list_runtimes_for_wallet(
         db,
         wallet_address=resolved_wallet,
-        user_id=user.user_id,
+        user_id=resolved_user_id,
     )
     runtimes = {runtime["bot_definition_id"]: runtime for runtime in runtimes_for_wallet}
     snapshots_by_bot = (
@@ -478,12 +483,12 @@ def list_runtime_overviews(
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> dict[str, RuntimeOverviewResponse]:
     response.headers["Cache-Control"] = "private, max-age=2, stale-while-revalidate=8"
-    resolved_wallet = _resolve_wallet(user, wallet_address)
+    resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, wallet_address)
     definitions = bot_builder_service.list_bots(db, wallet_address=resolved_wallet)
     runtimes_for_wallet = bot_runtime_engine.list_runtimes_for_wallet(
         db,
         wallet_address=resolved_wallet,
-        user_id=user.user_id,
+        user_id=resolved_user_id,
     )
     runtime_by_bot = {
         str(runtime.get("bot_definition_id") or "").strip(): runtime
@@ -509,7 +514,7 @@ def list_runtime_overviews(
         live_payload = runtime_observability_service.get_overviews_for_wallet(
             db,
             wallet_address=resolved_wallet,
-            user_id=user.user_id,
+            user_id=resolved_user_id,
         )
         for definition in definitions:
             bot_id = str(definition.get("id") or "").strip()
@@ -620,13 +625,13 @@ def deploy_bot_runtime(
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> BotRuntimeResponse:
-    resolved_wallet = _resolve_wallet(user, payload.wallet_address)
+    resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, payload.wallet_address)
     try:
         runtime = bot_runtime_engine.deploy_runtime(
             db,
             bot_id=bot_id,
             wallet_address=resolved_wallet,
-            user_id=user.user_id,
+            user_id=resolved_user_id,
             risk_policy_json=payload.risk_policy_json,
         )
     except ValueError as exc:
@@ -641,13 +646,13 @@ def pause_bot_runtime(
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> BotRuntimeResponse:
-    resolved_wallet = _resolve_wallet(user, wallet_address)
+    resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, wallet_address)
     try:
         runtime = bot_runtime_engine.pause_runtime(
             db,
             bot_id=bot_id,
             wallet_address=resolved_wallet,
-            user_id=user.user_id,
+            user_id=resolved_user_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -661,13 +666,13 @@ def resume_bot_runtime(
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> BotRuntimeResponse:
-    resolved_wallet = _resolve_wallet(user, wallet_address)
+    resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, wallet_address)
     try:
         runtime = bot_runtime_engine.resume_runtime(
             db,
             bot_id=bot_id,
             wallet_address=resolved_wallet,
-            user_id=user.user_id,
+            user_id=resolved_user_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -681,13 +686,13 @@ def stop_bot_runtime(
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> BotRuntimeResponse:
-    resolved_wallet = _resolve_wallet(user, wallet_address)
+    resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, wallet_address)
     try:
         runtime = bot_runtime_engine.stop_runtime(
             db,
             bot_id=bot_id,
             wallet_address=resolved_wallet,
-            user_id=user.user_id,
+            user_id=resolved_user_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -704,13 +709,13 @@ def list_bot_runtime_events(
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> list[BotExecutionEventSummaryResponse]:
     response.headers["Cache-Control"] = "private, max-age=2, stale-while-revalidate=8"
-    resolved_wallet = _resolve_wallet(user, wallet_address)
+    resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, wallet_address)
     try:
         rows = bot_runtime_engine.list_runtime_events(
             db,
             bot_id=bot_id,
             wallet_address=resolved_wallet,
-            user_id=user.user_id,
+            user_id=resolved_user_id,
             limit=limit,
         )
     except ValueError as exc:
@@ -725,7 +730,7 @@ def get_runtime_health(
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> RuntimeHealthResponse:
-    resolved_wallet = _resolve_wallet(user, wallet_address)
+    resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, wallet_address)
     snapshot = bot_runtime_snapshot_service.get_snapshot_for_bot(bot_id=bot_id, wallet_address=resolved_wallet)
     snapshot_payload = _snapshot_overview_payload(snapshot)
     if snapshot_payload is not None:
@@ -735,7 +740,7 @@ def get_runtime_health(
             db,
             bot_id=bot_id,
             wallet_address=resolved_wallet,
-            user_id=user.user_id,
+            user_id=resolved_user_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -749,7 +754,7 @@ def get_runtime_metrics(
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> RuntimeMetricsResponse:
-    resolved_wallet = _resolve_wallet(user, wallet_address)
+    resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, wallet_address)
     snapshot = bot_runtime_snapshot_service.get_snapshot_for_bot(bot_id=bot_id, wallet_address=resolved_wallet)
     snapshot_payload = _snapshot_overview_payload(snapshot)
     if snapshot_payload is not None:
@@ -759,7 +764,7 @@ def get_runtime_metrics(
             db,
             bot_id=bot_id,
             wallet_address=resolved_wallet,
-            user_id=user.user_id,
+            user_id=resolved_user_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -777,7 +782,7 @@ async def get_runtime_overview(
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> RuntimeOverviewResponse:
     response.headers["Cache-Control"] = "private, max-age=2, stale-while-revalidate=8"
-    resolved_wallet = _resolve_wallet(user, wallet_address)
+    resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, wallet_address)
     snapshot = bot_runtime_snapshot_service.get_snapshot_for_bot(bot_id=bot_id, wallet_address=resolved_wallet)
     payload = _snapshot_overview_payload(snapshot)
     if payload is None:
@@ -786,7 +791,7 @@ async def get_runtime_overview(
                 db,
                 bot_id=bot_id,
                 wallet_address=resolved_wallet,
-                user_id=user.user_id,
+                user_id=resolved_user_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -800,7 +805,7 @@ async def get_runtime_overview(
                 db,
                 bot_id=bot_id,
                 wallet_address=resolved_wallet,
-                user_id=user.user_id,
+                user_id=resolved_user_id,
             )
             performance = _build_fast_runtime_performance(runtime)
         elif performance is None:
@@ -808,12 +813,12 @@ async def get_runtime_overview(
                 db,
                 bot_id=bot_id,
                 wallet_address=resolved_wallet,
-                user_id=user.user_id,
+                user_id=resolved_user_id,
             )
             sibling_runtimes = bot_runtime_engine.list_runtimes_for_wallet(
                 db,
                 wallet_address=resolved_wallet,
-                user_id=user.user_id,
+                user_id=resolved_user_id,
             )
             cached_performance = await bot_performance_service.get_cached_runtime_performance(
                 runtime,
@@ -834,13 +839,13 @@ def get_runtime_risk_state(
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> RuntimeRiskStateResponse:
-    resolved_wallet = _resolve_wallet(user, wallet_address)
+    resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, wallet_address)
     try:
         payload = runtime_observability_service.get_risk_state(
             db,
             bot_id=bot_id,
             wallet_address=resolved_wallet,
-            user_id=user.user_id,
+            user_id=resolved_user_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -854,13 +859,13 @@ def patch_runtime_risk_state(
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> RuntimeRiskStateResponse:
-    resolved_wallet = _resolve_wallet(user, payload.wallet_address)
+    resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, payload.wallet_address)
     try:
         state = runtime_observability_service.update_risk_policy(
             db,
             bot_id=bot_id,
             wallet_address=resolved_wallet,
-            user_id=user.user_id,
+            user_id=resolved_user_id,
             risk_policy_json=payload.risk_policy_json,
         )
     except ValueError as exc:

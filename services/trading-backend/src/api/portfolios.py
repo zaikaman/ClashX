@@ -6,7 +6,7 @@ from typing import Any as Session
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authenticated_user
+from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authenticated_user, resolve_app_user_id
 from src.db.session import get_db
 from src.services.portfolio_allocator_service import PortfolioAllocatorService
 
@@ -171,7 +171,7 @@ async def create_portfolio(
     ensure_wallet_owned(user, payload.wallet_address)
     try:
         result = await portfolio_allocator_service.create_portfolio(
-            owner_user_id=user.user_id,
+            owner_user_id=resolve_app_user_id(user, payload.wallet_address),
             wallet_address=payload.wallet_address,
             name=payload.name,
             description=payload.description,

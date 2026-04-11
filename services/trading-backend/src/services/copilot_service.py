@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from src.api.auth import AuthenticatedUser
+from src.api.auth import AuthenticatedUser, resolve_app_user_id
 from src.core.settings import get_settings
 from src.services.ai_response_json import extract_first_json_object
 from src.services.bot_builder_service import BotBuilderService
@@ -350,15 +350,17 @@ class CopilotService:
                         "wallet_addresses": user.wallet_addresses,
                         "default_wallet_address": wallet,
                         "user_id": user.user_id,
+                        "wallet_user_ids": user.wallet_user_ids,
                     },
                 }
 
             if tool_name == "list_bots":
                 wallet = self._resolve_wallet(user=user, requested_wallet=arguments.get("wallet_address") or default_wallet_address)
+                app_user_id = resolve_app_user_id(user, wallet)
                 scope_cache["default_wallet_address"] = wallet
                 definitions = self._bot_builder.list_bots(None, wallet_address=wallet)
-                runtimes = self._bot_runtime.list_runtimes_for_wallet(None, wallet_address=wallet, user_id=user.user_id)
-                overviews = self._runtime_observability.get_overviews_for_wallet(None, wallet_address=wallet, user_id=user.user_id)
+                runtimes = self._bot_runtime.list_runtimes_for_wallet(None, wallet_address=wallet, user_id=app_user_id)
+                overviews = self._runtime_observability.get_overviews_for_wallet(None, wallet_address=wallet, user_id=app_user_id)
                 runtime_by_bot_id = {str(runtime.get("bot_definition_id") or ""): runtime for runtime in runtimes}
                 data = [
                     {
@@ -372,26 +374,29 @@ class CopilotService:
 
             if tool_name == "get_bot":
                 wallet = self._resolve_wallet(user=user, requested_wallet=arguments.get("wallet_address") or default_wallet_address)
+                app_user_id = resolve_app_user_id(user, wallet)
                 scope_cache["default_wallet_address"] = wallet
                 bot_id = str(arguments.get("bot_id") or "").strip()
                 if not bot_id:
                     raise RuntimeError("get_bot requires bot_id")
                 bot = self._bot_builder.get_bot(None, bot_id=bot_id, wallet_address=wallet)
-                runtime = self._bot_runtime.get_runtime(None, bot_id=bot_id, wallet_address=wallet, user_id=user.user_id)
+                runtime = self._bot_runtime.get_runtime(None, bot_id=bot_id, wallet_address=wallet, user_id=app_user_id)
                 return {"ok": True, "data": {"wallet_address": wallet, "bot": bot, "runtime": runtime}}
 
             if tool_name == "get_runtime_overview":
                 wallet = self._resolve_wallet(user=user, requested_wallet=arguments.get("wallet_address") or default_wallet_address)
+                app_user_id = resolve_app_user_id(user, wallet)
                 scope_cache["default_wallet_address"] = wallet
                 bot_id = str(arguments.get("bot_id") or "").strip()
                 if not bot_id:
                     raise RuntimeError("get_runtime_overview requires bot_id")
-                overview = self._runtime_observability.get_overview(None, bot_id=bot_id, wallet_address=wallet, user_id=user.user_id)
-                runtime = self._bot_runtime.get_runtime(None, bot_id=bot_id, wallet_address=wallet, user_id=user.user_id)
+                overview = self._runtime_observability.get_overview(None, bot_id=bot_id, wallet_address=wallet, user_id=app_user_id)
+                runtime = self._bot_runtime.get_runtime(None, bot_id=bot_id, wallet_address=wallet, user_id=app_user_id)
                 return {"ok": True, "data": {"wallet_address": wallet, "bot_id": bot_id, "runtime": runtime, "overview": overview}}
 
             if tool_name == "get_bot_events":
                 wallet = self._resolve_wallet(user=user, requested_wallet=arguments.get("wallet_address") or default_wallet_address)
+                app_user_id = resolve_app_user_id(user, wallet)
                 scope_cache["default_wallet_address"] = wallet
                 bot_id = str(arguments.get("bot_id") or "").strip()
                 limit = self._bounded_int(arguments.get("limit"), default=20, minimum=1, maximum=100)
@@ -401,7 +406,7 @@ class CopilotService:
                     None,
                     bot_id=bot_id,
                     wallet_address=wallet,
-                    user_id=user.user_id,
+                    user_id=app_user_id,
                     limit=limit,
                 )
                 return {"ok": True, "data": {"wallet_address": wallet, "bot_id": bot_id, "events": events}}
@@ -535,9 +540,12 @@ class CopilotService:
         if table in self._PUBLIC_QUERY_TABLES:
             return {}
         if table in {"audit_events", "pacifica_authorizations", "users"}:
+            wallet = self._resolve_wallet(user=user, requested_wallet=requested_wallet_address or default_wallet_address)
+            scope_cache["default_wallet_address"] = wallet
+            app_user_id = resolve_app_user_id(user, wallet)
             if table == "users":
-                return {"id": user.user_id}
-            return {"user_id": user.user_id}
+                return {"id": app_user_id}
+            return {"user_id": app_user_id}
 
         wallet = self._resolve_wallet(user=user, requested_wallet=requested_wallet_address or default_wallet_address)
         scope_cache["default_wallet_address"] = wallet
@@ -628,6 +636,12 @@ class CopilotService:
                 "If the user asks about tables or raw data, prefer list_schema_tables, describe_schema_table, or query_database.",
                 "Use query_database sparingly, with a small limit and explicit relevant tables only.",
                 f"Authenticated user id: {user.user_id}",
+                (
+                    "Resolved app user ids by wallet: "
+                    + ", ".join(f"{wallet}={user_id}" for wallet, user_id in sorted(user.wallet_user_ids.items()))
+                    if user.wallet_user_ids
+                    else "Resolved app user ids by wallet: none"
+                ),
                 f"Linked wallet addresses: {', '.join(user.wallet_addresses) if user.wallet_addresses else 'none'}",
                 f"Default wallet address: {default_wallet or 'none'}",
                 "Available tools:",
