@@ -352,7 +352,7 @@ async def list_bots(
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> list[BotFleetItemResponse]:
-    if performance_mode == "fast":
+    if include_performance:
         response.headers["Cache-Control"] = "private, max-age=2, stale-while-revalidate=8"
     resolved_wallet = _resolve_wallet(user, wallet_address)
     definitions = bot_builder_service.list_bots(db, wallet_address=resolved_wallet)
@@ -369,18 +369,7 @@ async def list_bots(
             for row in definitions
         ]
     elif include_performance and runtimes_for_wallet:
-        market_lookup = await bot_performance_service.load_market_lookup()
-        live_position_lookup, live_positions_loaded = await bot_performance_service.load_live_position_lookup_for_wallet(
-            resolved_wallet
-        )
-        manual_close_history = await bot_performance_service.load_position_history_for_wallet(resolved_wallet)
-        performance_by_runtime = await bot_performance_service.calculate_runtimes_performance_map(
-            runtimes_for_wallet,
-            market_lookup=market_lookup,
-            live_position_lookup=live_position_lookup,
-            manual_close_history=manual_close_history,
-            live_positions_loaded=live_positions_loaded,
-        )
+        performance_by_runtime = await bot_performance_service.get_cached_runtimes_performance_map(runtimes_for_wallet)
         performances = [
             RuntimePerformanceResponse.model_validate(payload)
             if (payload := performance_by_runtime.get(str((runtimes.get(row["id"]) or {}).get("id") or "").strip()))
@@ -698,12 +687,11 @@ async def get_runtime_overview(
     response: Response,
     wallet_address: str | None = Query(default=None, min_length=8),
     include_performance: bool = Query(default=False),
-    performance_mode: Literal["full", "fast"] = Query(default="fast"),
+    performance_mode: Literal["full", "fast"] = Query(default="full"),
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> RuntimeOverviewResponse:
-    if not include_performance or performance_mode == "fast":
-        response.headers["Cache-Control"] = "private, max-age=2, stale-while-revalidate=8"
+    response.headers["Cache-Control"] = "private, max-age=2, stale-while-revalidate=8"
     resolved_wallet = _resolve_wallet(user, wallet_address)
     try:
         payload = runtime_observability_service.get_overview(
@@ -725,7 +713,20 @@ async def get_runtime_overview(
         if performance_mode == "fast":
             performance = _build_fast_runtime_performance(runtime)
         else:
-            performance = await _build_runtime_performance(runtime)
+            sibling_runtimes = bot_runtime_engine.list_runtimes_for_wallet(
+                db,
+                wallet_address=resolved_wallet,
+                user_id=user.user_id,
+            )
+            cached_performance = await bot_performance_service.get_cached_runtime_performance(
+                runtime,
+                sibling_runtimes=sibling_runtimes,
+            )
+            performance = (
+                RuntimePerformanceResponse.model_validate(cached_performance)
+                if cached_performance is not None
+                else None
+            )
     return RuntimeOverviewResponse.model_validate({**payload, "performance": performance})
 
 

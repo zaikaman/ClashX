@@ -55,6 +55,7 @@ function percentWidth(value: number, total: number) {
 
 export function AnalyticsPage() {
   const {
+    ready,
     authenticated,
     bots,
     error,
@@ -263,7 +264,7 @@ export function AnalyticsPage() {
         </div>
       </section>
 
-      {!authenticated ? (
+      {ready && !authenticated ? (
         <article className="flex flex-wrap items-center justify-between gap-4 rounded-[1.8rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-5 py-5">
           <div className="grid gap-1">
             <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-400">Sign in required</span>

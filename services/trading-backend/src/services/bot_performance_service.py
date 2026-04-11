@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
+from copy import deepcopy
 from datetime import UTC, datetime
+from time import time
 from typing import Any
 
+from src.core.settings import get_settings
 from src.services.bot_risk_service import BotRiskService
 from src.services.pacifica_client import PacificaClient, PacificaClientError, get_pacifica_client
 from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
@@ -18,6 +22,10 @@ class BotPerformanceService:
         self._pacifica = pacifica_client or get_pacifica_client()
         self._supabase = supabase or SupabaseRestClient()
         self._risk = BotRiskService()
+        configured_ttl = get_settings().pacifica_snapshot_cache_ttl_seconds
+        self._wallet_performance_cache_ttl = float(max(1, min(configured_ttl, 2)))
+        self._wallet_performance_cache: dict[str, tuple[float, dict[str, dict[str, Any]]]] = {}
+        self._wallet_performance_locks: dict[str, asyncio.Lock] = {}
 
     async def calculate_runtime_performance(
         self,
@@ -52,6 +60,50 @@ class BotPerformanceService:
         if not str(wallet_address or "").strip():
             return []
         return await self._load_manual_history_rows(wallet_address, limit=limit, offset=offset)
+
+    async def get_cached_runtimes_performance_map(
+        self,
+        runtimes: list[dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        normalized_runtimes = [runtime for runtime in runtimes if str(runtime.get("id") or "").strip()]
+        if not normalized_runtimes:
+            return {}
+
+        cache_key = self._build_wallet_performance_cache_key(normalized_runtimes)
+        if cache_key is None:
+            return await self.calculate_runtimes_performance_map(normalized_runtimes)
+
+        cached = self._load_cached_wallet_performance_map(cache_key)
+        if cached is not None:
+            return cached
+
+        lock = self._wallet_performance_locks.setdefault(cache_key, asyncio.Lock())
+        async with lock:
+            cached = self._load_cached_wallet_performance_map(cache_key)
+            if cached is not None:
+                return cached
+
+            performance_by_runtime = await self.calculate_runtimes_performance_map(normalized_runtimes)
+            self._store_cached_wallet_performance_map(cache_key, performance_by_runtime)
+            return deepcopy(performance_by_runtime)
+
+    async def get_cached_runtime_performance(
+        self,
+        runtime: dict[str, Any] | None,
+        *,
+        sibling_runtimes: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any] | None:
+        if runtime is None:
+            return None
+
+        runtime_id = str(runtime.get("id") or "").strip()
+        if not runtime_id:
+            return None
+
+        runtimes = sibling_runtimes if sibling_runtimes is not None else [runtime]
+        performance_by_runtime = await self.get_cached_runtimes_performance_map(runtimes)
+        payload = performance_by_runtime.get(runtime_id)
+        return deepcopy(payload) if payload is not None else None
 
     async def calculate_runtimes_performance_map(
         self,
@@ -109,6 +161,52 @@ class BotPerformanceService:
                 runtime_events=runtime_events_by_id.get(runtime_id),
             )
         return performance_by_runtime
+
+    def _build_wallet_performance_cache_key(
+        self,
+        runtimes: list[dict[str, Any]],
+    ) -> str | None:
+        ordered_runtimes = sorted(
+            (runtime for runtime in runtimes if str(runtime.get("id") or "").strip()),
+            key=lambda runtime: str(runtime.get("id") or "").strip(),
+        )
+        if not ordered_runtimes:
+            return None
+
+        wallet_address = str(ordered_runtimes[0].get("wallet_address") or "").strip()
+        if not wallet_address:
+            return None
+
+        signature = [
+            f"{str(runtime.get('id') or '').strip()}:{str(runtime.get('status') or '').strip()}:{str(runtime.get('updated_at') or '').strip()}"
+            for runtime in ordered_runtimes
+        ]
+        return f"{wallet_address}|{'|'.join(signature)}"
+
+    def _load_cached_wallet_performance_map(
+        self,
+        cache_key: str,
+    ) -> dict[str, dict[str, Any]] | None:
+        cached = self._wallet_performance_cache.get(cache_key)
+        if cached is None:
+            return None
+
+        if (time() - cached[0]) >= self._wallet_performance_cache_ttl:
+            self._wallet_performance_cache.pop(cache_key, None)
+            return None
+
+        return deepcopy(cached[1])
+
+    def _store_cached_wallet_performance_map(
+        self,
+        cache_key: str,
+        performance_by_runtime: dict[str, dict[str, Any]],
+    ) -> None:
+        wallet_prefix = f"{cache_key.split('|', 1)[0]}|"
+        for existing_key in [key for key in self._wallet_performance_cache if key.startswith(wallet_prefix) and key != cache_key]:
+            self._wallet_performance_cache.pop(existing_key, None)
+
+        self._wallet_performance_cache[cache_key] = (time(), deepcopy(performance_by_runtime))
 
     async def calculate_runtime_performance_with_context(
         self,

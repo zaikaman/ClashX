@@ -119,8 +119,8 @@ async function unwrapResponse<T>(response: Response, fallback: string): Promise<
 }
 
 export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIntervalMs?: number } = {}) {
-  const { authenticated, login, walletAddress, getAuthHeaders } = useClashxAuth();
-  const sessionActive = authenticated && Boolean(walletAddress);
+  const { ready, authenticated, login, walletAddress, getAuthHeaders } = useClashxAuth();
+  const sessionActive = ready && authenticated && Boolean(walletAddress);
 
   const [bots, setBots] = useState<BotFleetItem[]>([]);
   const [overviewByBot, setOverviewByBot] = useState<Record<string, RuntimeOverview | null>>({});
@@ -162,6 +162,10 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
   ]);
 
   useEffect(() => {
+    if (!ready) {
+      return;
+    }
+
     if (!sessionActive || !walletAddress) {
       setBots([]);
       setOverviewByBot({});
@@ -189,6 +193,7 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
       const hasCachedOverviews = hasLoadedOverviewsRef.current;
       const hasCachedPositions = hasLoadedPositionsRef.current;
       const hasCachedFullPerformance = hasLoadedFullPerformanceRef.current;
+      const performanceMode = "full";
 
       setLoadingBots(!hasCachedBots);
       setLoadingOverviews(!hasCachedOverviews);
@@ -198,7 +203,7 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
         const headers = await getAuthHeaders();
         const walletQuery = encodeURIComponent(resolvedWallet);
         const fleetResponse = await fetch(
-          `${API_BASE_URL}/api/bots?wallet_address=${walletQuery}&include_performance=true&performance_mode=fast`,
+          `${API_BASE_URL}/api/bots?wallet_address=${walletQuery}&include_performance=true&performance_mode=${performanceMode}`,
           {
             headers,
             signal: controller.signal,
@@ -220,6 +225,9 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
         setLoadingPositions(false);
         setHasLoadedBots(true);
         setHasLoadedPositions(true);
+        if (performanceMode === "full") {
+          setHasLoadedFullPerformance(true);
+        }
         setLastUpdatedAt(new Date().toISOString());
 
         const botsWithRuntime = mergedBots.filter((bot) => Boolean(bot.runtime?.id));
@@ -282,6 +290,7 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
         })();
 
         const shouldHydratePerformance =
+          performanceMode !== "full" &&
           liveRuntimeBots.length > 0 &&
           !hasCachedFullPerformance &&
           !fullPerformanceInFlightRef.current;
@@ -349,10 +358,10 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
 
     void loadFleet();
     return () => controller.abort();
-  }, [getAuthHeaders, refreshToken, sessionActive, walletAddress]);
+  }, [getAuthHeaders, ready, refreshToken, sessionActive, walletAddress]);
 
   useEffect(() => {
-    if (!sessionActive || refreshIntervalMs <= 0) {
+    if (!ready || !sessionActive || refreshIntervalMs <= 0) {
       return;
     }
 
@@ -361,7 +370,7 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
     }, refreshIntervalMs);
 
     return () => window.clearInterval(interval);
-  }, [refreshIntervalMs, sessionActive]);
+  }, [ready, refreshIntervalMs, sessionActive]);
 
   const liveBots = useMemo(
     () => bots.filter((bot) => isLiveFleetStatus(getFleetBotStatus(bot))),
@@ -382,6 +391,7 @@ export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIn
   );
 
   return {
+    ready,
     authenticated,
     login,
     walletAddress,
