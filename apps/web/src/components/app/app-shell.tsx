@@ -46,7 +46,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
   const sidebarContent = (
-    <div className="w-64 h-full flex-shrink-0 border-r border-[rgba(255,255,255,0.06)] bg-secondary flex flex-col">
+    <div className="w-72 h-full flex-shrink-0 border-r border-[rgba(255,255,255,0.06)] bg-secondary flex flex-col">
       {/* Logo Area */}
       <div className="h-16 p-4 border-b border-[rgba(255,255,255,0.06)] flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2.5 group pl-2">
@@ -65,7 +65,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto px-3 py-6 flex flex-col gap-8">
+      <nav className="flex-1 overflow-y-auto custom-scrollbar px-3 py-6 flex flex-col gap-8">
         {navSections.map((section) => (
           <div key={section.label} className="space-y-1">
             <h3 className="text-[11px] font-bold text-neutral-500 uppercase tracking-widest px-4 mb-3">
@@ -135,9 +135,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 lg:hidden"
             />
             <motion.div
-              initial={{ x: -280 }}
+              initial={{ x: -288 }}
               animate={{ x: 0 }}
-              exit={{ x: -280 }}
+              exit={{ x: -288 }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
               className="fixed left-0 top-0 bottom-0 z-50 lg:hidden"
             >
