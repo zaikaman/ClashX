@@ -21,6 +21,8 @@ from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
 
 SNAPSHOT_TTL_SECONDS = 60
 VALID_VISIBILITY = {"private", "public", "unlisted", "invite_only"}
+MARKETPLACE_RUNTIME_SNAPSHOT_TABLE = "marketplace_runtime_snapshots"
+MARKETPLACE_CREATOR_SNAPSHOT_TABLE = "marketplace_creator_snapshots"
 logger = logging.getLogger(__name__)
 
 
@@ -63,6 +65,14 @@ class CreatorMarketplaceService:
         strategy_type: str | None = None,
         creator_id: str | None = None,
     ) -> list[dict[str, Any]]:
+        snapshot_rows = self._list_runtime_snapshot_rows(
+            limit=limit,
+            strategy_type=strategy_type,
+            creator_id=creator_id,
+        )
+        if snapshot_rows:
+            return snapshot_rows
+
         normalized_strategy_type = (strategy_type or "").strip().lower()
         requires_filter_scan = bool(normalized_strategy_type or creator_id)
         rows = await self._load_marketplace_rows(limit=max(limit * 3, 60) if requires_filter_scan else limit)
@@ -82,6 +92,10 @@ class CreatorMarketplaceService:
         return []
 
     async def list_creator_highlights(self, *, limit: int = 6) -> list[dict[str, Any]]:
+        creator_snapshots = self._list_creator_snapshot_rows(limit=limit)
+        if creator_snapshots:
+            return creator_snapshots
+
         public_rows = await self._load_marketplace_rows(limit=96)
         return self._build_creator_highlights(public_rows=public_rows, limit=limit)
 
@@ -93,6 +107,15 @@ class CreatorMarketplaceService:
         creator_limit: int = 6,
     ) -> dict[str, Any]:
         del featured_limit
+        snapshot_discover = self._list_runtime_snapshot_rows(limit=discover_limit)
+        snapshot_creators = self._list_creator_snapshot_rows(limit=creator_limit)
+        if snapshot_discover or snapshot_creators:
+            return {
+                "discover": snapshot_discover,
+                "featured": [],
+                "creators": snapshot_creators,
+            }
+
         public_rows = await self._load_marketplace_overview_rows(limit=max(discover_limit, 120))
         discover_rows = public_rows[:discover_limit]
         return {
@@ -102,6 +125,21 @@ class CreatorMarketplaceService:
         }
 
     async def list_candidate_bots(self, *, limit: int = 24) -> list[dict[str, Any]]:
+        snapshot_rows = self._list_runtime_snapshot_rows(limit=limit)
+        if snapshot_rows:
+            return [
+                {
+                    "runtime_id": row["runtime_id"],
+                    "bot_definition_id": row["bot_definition_id"],
+                    "bot_name": row["bot_name"],
+                    "strategy_type": row["strategy_type"],
+                    "rank": row["rank"],
+                    "drawdown": row.get("drawdown", 0.0),
+                    "trust": row["trust"],
+                }
+                for row in snapshot_rows[:limit]
+            ]
+
         rows = await self._load_marketplace_overview_rows(limit=max(limit, 60))
         return [
             {
@@ -142,7 +180,348 @@ class CreatorMarketplaceService:
                 logger.exception("Marketplace overview warm refresh failed")
             finally:
                 self._clear_marketplace_cache()
-        await self._load_marketplace_overview_rows(limit=max(limit, 120))
+        await self.refresh_public_snapshots(limit=max(limit, 120))
+
+    async def refresh_public_snapshots(self, *, limit: int = 120) -> None:
+        target_limit = max(limit, 120)
+        public_rows = await self._load_public_leaderboard(limit=target_limit)
+        if not public_rows:
+            self._delete_stale_marketplace_runtime_snapshots(active_runtime_ids=[])
+            self._delete_stale_marketplace_creator_snapshots(active_creator_ids=[])
+            self._clear_marketplace_cache()
+            return
+
+        runtime_ids = [str(row.get("runtime_id") or "").strip() for row in public_rows if str(row.get("runtime_id") or "").strip()]
+        creator_ids = sorted(
+            {
+                str((row.get("creator") or {}).get("creator_id") or "").strip()
+                for row in public_rows
+                if str((row.get("creator") or {}).get("creator_id") or "").strip()
+            }
+        )
+        recent_events_by_runtime = self._load_recent_runtime_events_map(runtime_ids)
+        creator_profiles_by_id: dict[str, dict[str, Any]] = {}
+        for creator_id in creator_ids:
+            creator_rows = [
+                row
+                for row in public_rows
+                if str((row.get("creator") or {}).get("creator_id") or "").strip() == creator_id
+            ]
+            creator_profiles_by_id[creator_id] = await self._build_creator_profile_live(
+                creator_id=creator_id,
+                public_rows=creator_rows,
+            )
+
+        creator_highlights = self._build_creator_highlights(public_rows=public_rows, limit=max(len(creator_ids), 24))
+        creator_highlight_by_id = {
+            str(row.get("creator_id") or "").strip(): row
+            for row in creator_highlights
+            if str(row.get("creator_id") or "").strip()
+        }
+
+        runtime_snapshot_rows: list[dict[str, Any]] = []
+        now = datetime.now(tz=UTC).isoformat()
+        for row in public_rows:
+            runtime_id = str(row.get("runtime_id") or "").strip()
+            creator_id = str((row.get("creator") or {}).get("creator_id") or "").strip()
+            detail_payload = {
+                "runtime_id": runtime_id,
+                "bot_definition_id": row["bot_definition_id"],
+                "bot_name": row["bot_name"],
+                "description": row.get("description") or "",
+                "strategy_type": row["strategy_type"],
+                "authoring_mode": row["authoring_mode"],
+                "status": row.get("status") or "draft",
+                "mode": row.get("mode") or "live",
+                "risk_policy_json": row.get("risk_policy_json") if isinstance(row.get("risk_policy_json"), dict) else {},
+                "rank": row.get("rank"),
+                "pnl_total": row.get("pnl_total", 0.0),
+                "pnl_unrealized": row.get("pnl_unrealized", 0.0),
+                "win_streak": row.get("win_streak", 0),
+                "drawdown": row.get("drawdown", 0.0),
+                "recent_events": recent_events_by_runtime.get(runtime_id, []),
+                "trust": row["trust"],
+                "drift": row["drift"],
+                "passport": row["passport"],
+                "creator": creator_profiles_by_id.get(creator_id) or row["creator"],
+            }
+            runtime_snapshot_rows.append(
+                {
+                    "runtime_id": runtime_id,
+                    "bot_definition_id": row["bot_definition_id"],
+                    "creator_id": creator_id,
+                    "strategy_type": row["strategy_type"],
+                    "rank": int(row.get("rank") or 0),
+                    "captured_at": row.get("captured_at"),
+                    "row_json": row,
+                    "detail_json": detail_payload,
+                    "last_computed_at": now,
+                }
+            )
+
+        if runtime_snapshot_rows:
+            self.supabase.insert(
+                MARKETPLACE_RUNTIME_SNAPSHOT_TABLE,
+                runtime_snapshot_rows,
+                upsert=True,
+                on_conflict="runtime_id",
+                returning="minimal",
+            )
+
+        creator_snapshot_rows: list[dict[str, Any]] = []
+        for creator_id in creator_ids:
+            profile_payload = creator_profiles_by_id.get(creator_id)
+            if not isinstance(profile_payload, dict):
+                continue
+            highlight_payload = creator_highlight_by_id.get(creator_id) or self._creator_profile_to_highlight(profile_payload)
+            creator_snapshot_rows.append(
+                {
+                    "creator_id": creator_id,
+                    "display_name": str(profile_payload.get("display_name") or "")[:80],
+                    "marketplace_reach_score": int(
+                        highlight_payload.get("marketplace_reach_score")
+                        or profile_payload.get("marketplace_reach_score")
+                        or 0
+                    ),
+                    "highlight_json": highlight_payload,
+                    "profile_json": profile_payload,
+                    "last_computed_at": now,
+                }
+            )
+        if creator_snapshot_rows:
+            self.supabase.insert(
+                MARKETPLACE_CREATOR_SNAPSHOT_TABLE,
+                creator_snapshot_rows,
+                upsert=True,
+                on_conflict="creator_id",
+                returning="minimal",
+            )
+
+        self._delete_stale_marketplace_runtime_snapshots(active_runtime_ids=runtime_ids)
+        self._delete_stale_marketplace_creator_snapshots(active_creator_ids=creator_ids)
+        self._clear_marketplace_cache()
+
+    async def get_runtime_profile(self, *, runtime_id: str) -> dict[str, Any]:
+        snapshot = self.supabase.maybe_one(
+            MARKETPLACE_RUNTIME_SNAPSHOT_TABLE,
+            columns="detail_json",
+            filters={"runtime_id": runtime_id},
+            cache_ttl_seconds=5,
+        )
+        payload = (snapshot or {}).get("detail_json")
+        if isinstance(payload, dict) and payload:
+            return payload
+        return await self._build_runtime_profile_live(runtime_id=runtime_id)
+
+    def _list_runtime_snapshot_rows(
+        self,
+        *,
+        limit: int,
+        strategy_type: str | None = None,
+        creator_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        filters: dict[str, Any] = {}
+        normalized_strategy_type = str(strategy_type or "").strip()
+        normalized_creator_id = str(creator_id or "").strip()
+        if normalized_strategy_type:
+            filters["strategy_type"] = normalized_strategy_type
+        if normalized_creator_id:
+            filters["creator_id"] = normalized_creator_id
+        rows = self.supabase.select(
+            MARKETPLACE_RUNTIME_SNAPSHOT_TABLE,
+            columns="row_json",
+            filters=filters or None,
+            order="rank.asc",
+            limit=limit,
+        )
+        return [
+            row["row_json"]
+            for row in rows
+            if isinstance(row.get("row_json"), dict) and row.get("row_json")
+        ]
+
+    def _list_creator_snapshot_rows(self, *, limit: int) -> list[dict[str, Any]]:
+        rows = self.supabase.select(
+            MARKETPLACE_CREATOR_SNAPSHOT_TABLE,
+            columns="highlight_json",
+            order="marketplace_reach_score.desc",
+            limit=limit,
+        )
+        return [
+            row["highlight_json"]
+            for row in rows
+            if isinstance(row.get("highlight_json"), dict) and row.get("highlight_json")
+        ]
+
+    async def _build_creator_profile_live(
+        self,
+        *,
+        creator_id: str,
+        public_rows: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        base_profile = self.trust_service.get_creator_profile(creator_id=creator_id, include_bots=True)
+        user = self.supabase.maybe_one("users", filters={"id": creator_id})
+        if user is None:
+            raise ValueError("Creator not found")
+
+        marketplace_profile = self._ensure_creator_profile(
+            user=user,
+            display_name=str(base_profile.get("display_name") or user.get("display_name") or user["wallet_address"][:8]),
+        )
+        creator_rows = public_rows
+        if creator_rows is None:
+            creator_rows = [
+                row
+                for row in await self._load_marketplace_rows(limit=96)
+                if str((row.get("creator") or {}).get("creator_id") or "") == creator_id
+            ]
+        follower_count = self._count_creator_followers(creator_id=creator_id)
+        marketplace_reach_score = self._marketplace_reach_score(
+            active_mirror_count=int(base_profile["active_mirror_count"]),
+            follower_count=follower_count,
+            public_bot_count=int(base_profile["public_bot_count"]),
+            reputation_score=int(base_profile["reputation_score"]),
+        )
+        return {
+            **base_profile,
+            "headline": marketplace_profile["headline"],
+            "bio": marketplace_profile["bio"],
+            "slug": marketplace_profile["slug"],
+            "social_links_json": marketplace_profile.get("social_links_json") or {},
+            "follower_count": follower_count,
+            "featured_bot_count": 0,
+            "marketplace_reach_score": marketplace_reach_score,
+            "bots": creator_rows,
+            "featured_bots": [],
+        }
+
+    async def _build_runtime_profile_live(self, *, runtime_id: str) -> dict[str, Any]:
+        runtime = self.supabase.maybe_one("bot_runtimes", filters={"id": runtime_id})
+        if runtime is None:
+            raise ValueError("Runtime not found")
+        definition = self.supabase.maybe_one("bot_definitions", filters={"id": runtime["bot_definition_id"]})
+        if definition is None or str(definition.get("visibility") or "private") != "public":
+            raise ValueError("Runtime not found")
+
+        latest_snapshot = self.supabase.maybe_one(
+            "bot_leaderboard_snapshots",
+            filters={"runtime_id": runtime_id},
+            order="captured_at.desc",
+        )
+        if latest_snapshot is None or self._snapshot_is_stale(latest_snapshot.get("captured_at")):
+            await self.leaderboard_engine.refresh_public_leaderboard(None, limit=100)
+            latest_snapshot = self.supabase.maybe_one(
+                "bot_leaderboard_snapshots",
+                filters={"runtime_id": runtime_id},
+                order="captured_at.desc",
+            )
+
+        public_context = self.trust_service.build_public_runtime_context(
+            runtime=runtime,
+            definition=definition,
+            latest_snapshot=latest_snapshot,
+        )
+        creator = await self._build_creator_profile_live(creator_id=str(definition["user_id"]))
+        recent_events = self._load_recent_runtime_events_map([runtime_id]).get(runtime_id, [])
+        return {
+            "runtime_id": runtime["id"],
+            "bot_definition_id": definition["id"],
+            "bot_name": definition["name"],
+            "description": definition["description"],
+            "strategy_type": definition["strategy_type"],
+            "authoring_mode": definition["authoring_mode"],
+            "status": runtime["status"],
+            "mode": runtime["mode"],
+            "risk_policy_json": runtime["risk_policy_json"] if isinstance(runtime.get("risk_policy_json"), dict) else {},
+            "rank": latest_snapshot["rank"] if latest_snapshot else None,
+            "pnl_total": latest_snapshot["pnl_total"] if latest_snapshot else 0.0,
+            "pnl_unrealized": latest_snapshot["pnl_unrealized"] if latest_snapshot else 0.0,
+            "win_streak": latest_snapshot["win_streak"] if latest_snapshot else 0,
+            "drawdown": latest_snapshot["drawdown"] if latest_snapshot else 0.0,
+            "recent_events": recent_events,
+            "trust": public_context["trust"],
+            "drift": public_context["drift"],
+            "passport": public_context["passport"],
+            "creator": creator,
+        }
+
+    def _load_recent_runtime_events_map(self, runtime_ids: list[str], *, limit_per_runtime: int = 12) -> dict[str, list[dict[str, Any]]]:
+        normalized_runtime_ids = [runtime_id for runtime_id in runtime_ids if runtime_id]
+        if not normalized_runtime_ids:
+            return {}
+
+        rows = self.supabase.select(
+            "bot_execution_events",
+            columns="id,runtime_id,event_type,decision_summary,status,created_at",
+            filters={"runtime_id": ("in", normalized_runtime_ids)},
+            order="created_at.desc",
+            limit=max(200, len(normalized_runtime_ids) * limit_per_runtime * 3),
+        )
+        events_by_runtime: dict[str, list[dict[str, Any]]] = {runtime_id: [] for runtime_id in normalized_runtime_ids}
+        for row in rows:
+            runtime_id = str(row.get("runtime_id") or "").strip()
+            if runtime_id not in events_by_runtime or len(events_by_runtime[runtime_id]) >= limit_per_runtime:
+                continue
+            events_by_runtime[runtime_id].append(
+                {
+                    "id": row["id"],
+                    "event_type": row["event_type"],
+                    "decision_summary": row["decision_summary"],
+                    "status": row["status"],
+                    "created_at": row["created_at"],
+                }
+            )
+        return events_by_runtime
+
+    @staticmethod
+    def _creator_profile_to_highlight(profile: dict[str, Any]) -> dict[str, Any]:
+        bots = profile.get("bots") if isinstance(profile.get("bots"), list) else []
+        spotlight = bots[0] if bots else {}
+        return {
+            "creator_id": profile.get("creator_id") or "",
+            "wallet_address": profile.get("wallet_address") or "",
+            "display_name": profile.get("display_name") or "",
+            "public_bot_count": profile.get("public_bot_count") or 0,
+            "active_runtime_count": profile.get("active_runtime_count") or 0,
+            "mirror_count": profile.get("mirror_count") or 0,
+            "active_mirror_count": profile.get("active_mirror_count") or 0,
+            "clone_count": profile.get("clone_count") or 0,
+            "average_trust_score": profile.get("average_trust_score") or 0,
+            "best_rank": profile.get("best_rank"),
+            "reputation_score": profile.get("reputation_score") or 0,
+            "reputation_label": profile.get("reputation_label") or "",
+            "summary": profile.get("summary") or "",
+            "tags": profile.get("tags") or [],
+            "headline": profile.get("headline") or "",
+            "bio": profile.get("bio") or "",
+            "follower_count": profile.get("follower_count") or 0,
+            "featured_bot_count": profile.get("featured_bot_count") or 0,
+            "marketplace_reach_score": profile.get("marketplace_reach_score") or 0,
+            "spotlight_bot": {
+                "runtime_id": spotlight.get("runtime_id") or "",
+                "bot_definition_id": spotlight.get("bot_definition_id") or "",
+                "bot_name": spotlight.get("bot_name") or "",
+                "rank": spotlight.get("rank") or 0,
+                "trust_score": ((spotlight.get("trust") or {}).get("trust_score") if isinstance(spotlight.get("trust"), dict) else spotlight.get("trust_score")) or 0,
+                "copy_stats": spotlight.get("copy_stats") or {"mirror_count": 0, "active_mirror_count": 0, "clone_count": 0},
+            },
+        }
+
+    def _delete_stale_marketplace_runtime_snapshots(self, *, active_runtime_ids: list[str]) -> None:
+        existing_rows = self.supabase.select(MARKETPLACE_RUNTIME_SNAPSHOT_TABLE, columns="runtime_id")
+        active_ids = set(active_runtime_ids)
+        for row in existing_rows:
+            runtime_id = str(row.get("runtime_id") or "").strip()
+            if runtime_id and runtime_id not in active_ids:
+                self.supabase.delete(MARKETPLACE_RUNTIME_SNAPSHOT_TABLE, filters={"runtime_id": runtime_id})
+
+    def _delete_stale_marketplace_creator_snapshots(self, *, active_creator_ids: list[str]) -> None:
+        existing_rows = self.supabase.select(MARKETPLACE_CREATOR_SNAPSHOT_TABLE, columns="creator_id")
+        active_ids = set(active_creator_ids)
+        for row in existing_rows:
+            creator_id = str(row.get("creator_id") or "").strip()
+            if creator_id and creator_id not in active_ids:
+                self.supabase.delete(MARKETPLACE_CREATOR_SNAPSHOT_TABLE, filters={"creator_id": creator_id})
 
     def _build_creator_highlights(self, *, public_rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
         highlights: dict[str, dict[str, Any]] = {}
@@ -180,35 +559,16 @@ class CreatorMarketplaceService:
         return ordered[:limit]
 
     async def get_creator_profile(self, *, creator_id: str) -> dict[str, Any]:
-        base_profile = self.trust_service.get_creator_profile(creator_id=creator_id, include_bots=True)
-        user = self.supabase.maybe_one("users", filters={"id": creator_id})
-        if user is None:
-            raise ValueError("Creator not found")
-
-        marketplace_profile = self._ensure_creator_profile(
-            user=user,
-            display_name=str(base_profile.get("display_name") or user.get("display_name") or user["wallet_address"][:8]),
+        snapshot = self.supabase.maybe_one(
+            MARKETPLACE_CREATOR_SNAPSHOT_TABLE,
+            columns="profile_json",
+            filters={"creator_id": creator_id},
+            cache_ttl_seconds=5,
         )
-        public_rows = await self.discover_public_bots(limit=96, creator_id=creator_id)
-        follower_count = self._count_creator_followers(creator_id=creator_id)
-        marketplace_reach_score = self._marketplace_reach_score(
-            active_mirror_count=int(base_profile["active_mirror_count"]),
-            follower_count=follower_count,
-            public_bot_count=int(base_profile["public_bot_count"]),
-            reputation_score=int(base_profile["reputation_score"]),
-        )
-        return {
-            **base_profile,
-            "headline": marketplace_profile["headline"],
-            "bio": marketplace_profile["bio"],
-            "slug": marketplace_profile["slug"],
-            "social_links_json": marketplace_profile.get("social_links_json") or {},
-            "follower_count": follower_count,
-            "featured_bot_count": 0,
-            "marketplace_reach_score": marketplace_reach_score,
-            "bots": public_rows,
-            "featured_bots": [],
-        }
+        payload = (snapshot or {}).get("profile_json")
+        if isinstance(payload, dict) and payload:
+            return payload
+        return await self._build_creator_profile_live(creator_id=creator_id)
 
     def get_publishing_settings(self, *, bot_id: str, wallet_address: str) -> dict[str, Any]:
         bot = self._require_owned_bot(bot_id=bot_id, wallet_address=wallet_address)

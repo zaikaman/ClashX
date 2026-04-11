@@ -313,8 +313,9 @@ async def get_runtime_profile(
     db: Session = Depends(get_db),
 ) -> BotRuntimeProfileResponse:
     response.headers["Cache-Control"] = "public, max-age=10, stale-while-revalidate=30"
+    del db
     try:
-        profile = await bot_copy_engine.runtime_profile(db, runtime_id=runtime_id)
+        profile = await marketplace_service.get_runtime_profile(runtime_id=runtime_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return BotRuntimeProfileResponse.model_validate(profile)

@@ -26,6 +26,7 @@ class BotBuilderService:
     RUNTIME_DEPENDENT_TABLES = (
         "bot_execution_events",
         "bot_action_claims",
+        "marketplace_runtime_snapshots",
         "bot_runtime_snapshots",
         "bot_trade_sync_state",
         "bot_trade_closures",

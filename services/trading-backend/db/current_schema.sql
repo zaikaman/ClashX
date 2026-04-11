@@ -382,6 +382,31 @@ CREATE TABLE public.leaderboard_snapshots (
   CONSTRAINT leaderboard_snapshots_pkey PRIMARY KEY (id),
   CONSTRAINT leaderboard_snapshots_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
+CREATE TABLE public.marketplace_creator_snapshots (
+  creator_id uuid NOT NULL,
+  display_name character varying NOT NULL DEFAULT ''::character varying,
+  marketplace_reach_score integer NOT NULL DEFAULT 0,
+  highlight_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  profile_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  last_computed_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT marketplace_creator_snapshots_pkey PRIMARY KEY (creator_id),
+  CONSTRAINT marketplace_creator_snapshots_creator_id_fkey FOREIGN KEY (creator_id) REFERENCES public.users(id)
+);
+CREATE TABLE public.marketplace_runtime_snapshots (
+  runtime_id uuid NOT NULL,
+  bot_definition_id uuid NOT NULL,
+  creator_id uuid NOT NULL,
+  strategy_type character varying NOT NULL DEFAULT ''::character varying,
+  rank integer NOT NULL DEFAULT 0,
+  row_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  detail_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  captured_at timestamp with time zone,
+  last_computed_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT marketplace_runtime_snapshots_pkey PRIMARY KEY (runtime_id),
+  CONSTRAINT marketplace_runtime_snapshots_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id),
+  CONSTRAINT marketplace_runtime_snapshots_bot_definition_id_fkey FOREIGN KEY (bot_definition_id) REFERENCES public.bot_definitions(id),
+  CONSTRAINT marketplace_runtime_snapshots_creator_id_fkey FOREIGN KEY (creator_id) REFERENCES public.users(id)
+);
 CREATE TABLE public.pacifica_authorizations (
   id uuid NOT NULL,
   user_id uuid NOT NULL UNIQUE,
