@@ -32,6 +32,9 @@ logger = logging.getLogger(__name__)
 PENDING_ENTRY_TTL_SECONDS = 120
 RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 30
 SKIP_EVENT_DEDUP_SECONDS = 300
+IDLE_RUNTIME_DISCOVERY_SECONDS = 5.0
+RUNTIME_SET_REFRESH_SECONDS = 15.0
+MIN_WORKER_SLEEP_SECONDS = 1.0
 ENTRY_ACTION_TYPES = {
     "open_long",
     "open_short",
@@ -81,6 +84,7 @@ class BotRuntimeWorker:
     async def run_forever(self) -> None:
         while self._running:
             iteration_started = perf_counter()
+            next_sleep_seconds = IDLE_RUNTIME_DISCOVERY_SECONDS
             try:
                 runtimes = await asyncio.to_thread(lambda: list(self._engine.get_active_runtimes(None)))
                 bot_lookup = await self._load_runtime_bot_lookup(runtimes)
@@ -107,6 +111,10 @@ class BotRuntimeWorker:
                             "bot": bot,
                             "evaluation_due": evaluation_due,
                             "wallet_due": wallet_due,
+                            "next_due_seconds": self._next_runtime_check_seconds(
+                                runtime_state=runtime_state,
+                                rules_json=rules_json,
+                            ),
                         }
                     )
                 market_lookup: dict[str, dict[str, Any]] = {}
@@ -130,7 +138,7 @@ class BotRuntimeWorker:
                         ttl_seconds=max(15, int(self.poll_interval_seconds * 3)),
                     ):
                         continue
-                    await self._process_runtime(
+                    updated_runtime = await self._process_runtime(
                         None,
                         runtime,
                         bot=runtime_spec.get("bot"),
@@ -140,6 +148,37 @@ class BotRuntimeWorker:
                         price_lookup=price_lookup,
                         wallet_due=bool(runtime_spec.get("wallet_due")),
                         evaluation_due=bool(runtime_spec.get("evaluation_due")),
+                    )
+                    updated_bot = runtime_spec.get("bot")
+                    updated_rules_json = (
+                        updated_bot["rules_json"]
+                        if isinstance(updated_bot, dict) and isinstance(updated_bot.get("rules_json"), dict)
+                        else {}
+                    )
+                    updated_policy = self._risk.normalize_policy(
+                        updated_runtime.get("risk_policy_json")
+                        if isinstance(updated_runtime.get("risk_policy_json"), dict)
+                        else {}
+                    )
+                    updated_runtime_state = (
+                        updated_policy.get("_runtime_state")
+                        if isinstance(updated_policy.get("_runtime_state"), dict)
+                        else {}
+                    )
+                    if str(updated_runtime.get("status") or "") == "active":
+                        runtime_spec["next_due_seconds"] = self._next_runtime_check_seconds(
+                            runtime_state=updated_runtime_state,
+                            rules_json=updated_rules_json,
+                        )
+                    else:
+                        runtime_spec["next_due_seconds"] = RUNTIME_SET_REFRESH_SECONDS
+                if runtime_specs:
+                    next_sleep_seconds = min(
+                        RUNTIME_SET_REFRESH_SECONDS,
+                        max(
+                            MIN_WORKER_SLEEP_SECONDS,
+                            min(float(spec.get("next_due_seconds") or 0.0) for spec in runtime_specs),
+                        ),
                     )
                 self.last_iteration_at = datetime.now(tz=UTC).isoformat()
                 self.last_error = None
@@ -154,7 +193,7 @@ class BotRuntimeWorker:
                 logger.exception("Bot runtime worker iteration failed")
             finally:
                 self._metrics.record("worker:bot_runtime:iteration", (perf_counter() - iteration_started) * 1000.0)
-            await asyncio.sleep(self.poll_interval_seconds)
+            await asyncio.sleep(max(MIN_WORKER_SLEEP_SECONDS, next_sleep_seconds))
 
     async def _process_runtime(
         self,
@@ -168,7 +207,7 @@ class BotRuntimeWorker:
         price_lookup: dict[str, float] | None = None,
         wallet_due: bool = True,
         evaluation_due: bool = True,
-    ) -> None:
+    ) -> dict[str, Any]:
         del db
         now = datetime.now(tz=UTC)
         if not bot_loaded:
@@ -196,13 +235,13 @@ class BotRuntimeWorker:
                 status="error",
                 error_reason="Bot definition not found",
             )
-            return
+            return runtime
 
         rules_json = bot["rules_json"] if isinstance(bot.get("rules_json"), dict) else {}
         runtime_policy = self._risk.normalize_policy(runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {})
         runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
         if not wallet_due and not evaluation_due:
-            return
+            return runtime
 
         resolved_price_lookup = dict(price_lookup or {})
         positions: list[dict[str, Any]] = []
@@ -292,10 +331,10 @@ class BotRuntimeWorker:
                 event="bot.runtime.stopped",
                 payload=self._serialize_event_payload(event),
             )
-            return
+            return runtime
 
         if not evaluation_due:
-            return
+            return runtime
 
         credentials = self._auth.get_trading_credentials(None, runtime["wallet_address"])
         if credentials is None:
@@ -320,7 +359,7 @@ class BotRuntimeWorker:
                 event="bot.runtime.authorization_required",
                 payload={"runtime_id": runtime["id"], "bot_id": bot["id"]},
             )
-            return
+            return runtime
 
         if self._should_suspend_entry_evaluation(
             rules_json=rules_json,
@@ -331,7 +370,7 @@ class BotRuntimeWorker:
                 "Runtime %s skipped rule evaluation because entry capacity is full and no exit actions are declared",
                 runtime["id"],
             )
-            return
+            return runtime
 
         resolved_market_lookup = market_lookup or self._build_market_lookup(await self._load_markets())
         resolved_candle_lookup = candle_lookup or await self._indicator_context.load_candle_lookup(rules_json)
@@ -352,7 +391,7 @@ class BotRuntimeWorker:
             },
         )
         if not evaluation.get("triggered"):
-            return
+            return runtime
 
         actions = evaluation.get("actions") or []
         logger.debug(
@@ -380,8 +419,8 @@ class BotRuntimeWorker:
         if batch_result is not None:
             runtime_touched = batch_result
             if not runtime_touched:
-                return
-            return
+                return runtime
+            return runtime
         for action_index, raw_action in enumerate(actions):
             action = self._apply_runtime_sizing_policy(
                 action=raw_action,
@@ -535,7 +574,8 @@ class BotRuntimeWorker:
                     exc,
                 )
         if not runtime_touched:
-            return
+            return runtime
+        return runtime
 
     async def _maybe_execute_batch_actions(
         self,
@@ -1363,6 +1403,49 @@ class BotRuntimeWorker:
         return (
             datetime.now(tz=UTC) - last_executed_at
         ).total_seconds() < self._settings.pacifica_recent_activity_window_seconds
+
+    def _next_runtime_check_seconds(
+        self,
+        *,
+        runtime_state: dict[str, Any],
+        rules_json: dict[str, Any],
+    ) -> float:
+        return min(
+            self._seconds_until_rule_evaluation(rules_json=rules_json),
+            self._seconds_until_wallet_refresh(runtime_state=runtime_state),
+        )
+
+    def _seconds_until_wallet_refresh(self, *, runtime_state: dict[str, Any]) -> float:
+        last_sync_at = self._parse_runtime_state_timestamp(str(runtime_state.get("wallet_synced_at") or ""))
+        if last_sync_at is None:
+            return 0.0
+        interval_seconds = float(self._wallet_poll_interval_seconds(runtime_state=runtime_state))
+        due_at = last_sync_at + timedelta(seconds=interval_seconds)
+        return max(0.0, (due_at - datetime.now(tz=UTC)).total_seconds())
+
+    def _seconds_until_rule_evaluation(self, *, rules_json: dict[str, Any]) -> float:
+        requests = extract_candle_requests(rules_json)
+        if not requests:
+            interval_seconds = float(self._settings.pacifica_fast_evaluation_seconds)
+            now_seconds = datetime.now(tz=UTC).timestamp()
+            next_due_seconds = (int(now_seconds // interval_seconds) + 1) * interval_seconds
+            return max(0.0, next_due_seconds - now_seconds)
+
+        now_ms = int(datetime.now(tz=UTC).timestamp() * 1_000)
+        next_due_ms: int | None = None
+        for timeframe in {str(item.get("timeframe") or "") for item in requests}:
+            timeframe_ms = TIMEFRAME_TO_MS.get(timeframe)
+            if timeframe_ms is None:
+                continue
+            candidate_due_ms = ((now_ms // timeframe_ms) + 1) * timeframe_ms
+            if next_due_ms is None or candidate_due_ms < next_due_ms:
+                next_due_ms = candidate_due_ms
+        if next_due_ms is None:
+            interval_seconds = float(self._settings.pacifica_fast_evaluation_seconds)
+            now_seconds = datetime.now(tz=UTC).timestamp()
+            next_due_seconds = (int(now_seconds // interval_seconds) + 1) * interval_seconds
+            return max(0.0, next_due_seconds - now_seconds)
+        return max(0.0, (next_due_ms - now_ms) / 1_000)
 
     def _persist_runtime_policy(
         self,
