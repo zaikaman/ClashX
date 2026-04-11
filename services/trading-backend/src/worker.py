@@ -7,6 +7,7 @@ from src.core.settings import get_settings
 from src.services.pacifica_market_data_service import get_pacifica_market_data_service
 from src.workers.bot_copy_worker import BotCopyWorker
 from src.workers.bot_runtime_worker import BotRuntimeWorker
+from src.workers.bot_runtime_snapshot_worker import BotRuntimeSnapshotWorker
 from src.workers.portfolio_allocator_worker import PortfolioAllocatorWorker
 
 
@@ -22,6 +23,7 @@ async def run_worker() -> None:
     workers = [
         BotRuntimeWorker(),
         BotCopyWorker(),
+        BotRuntimeSnapshotWorker(),
         PortfolioAllocatorWorker(),
     ]
     stop_event = asyncio.Event()
