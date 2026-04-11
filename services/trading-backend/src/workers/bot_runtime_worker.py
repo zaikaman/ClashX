@@ -864,7 +864,10 @@ class BotRuntimeWorker:
             position = position_lookup.get(symbol)
             if not isinstance(position, dict):
                 raise ValueError(f"No open position to close for {symbol}")
-            amount = abs(float(managed_position.get("amount") or position.get("amount") or 0))
+            amount = self._resolve_position_amount(
+                managed_position=managed_position,
+                wallet_position=position,
+            )
             if amount <= 0:
                 raise ValueError(f"No open position to close for {symbol}")
             side = str(position.get("side") or "").lower()
@@ -887,7 +890,10 @@ class BotRuntimeWorker:
             position = position_lookup.get(symbol)
             if not isinstance(position, dict):
                 raise ValueError(f"No open position available for TP/SL on {symbol}")
-            amount = abs(float(managed_position.get("amount") or position.get("amount") or 0))
+            amount = self._resolve_position_amount(
+                managed_position=managed_position,
+                wallet_position=position,
+            )
             market = self._resolve_market(market_lookup, symbol)
             mark_price = float(position.get("mark_price") or market.get("mark_price") or 0)
             tick_size = float(market.get("tick_size") or 0)
@@ -1592,6 +1598,10 @@ class BotRuntimeWorker:
             side = str(wallet_position.get("side") or managed_position.get("side") or "").lower()
             reconciled_positions[symbol] = {
                 **managed_position,
+                "amount": self._resolve_position_amount(
+                    managed_position=managed_position,
+                    wallet_position=wallet_position,
+                ),
                 "side": side,
                 "mark_price": wallet_position.get("mark_price"),
                 "entry_price": managed_position.get("entry_price") or wallet_position.get("entry_price"),
@@ -1700,6 +1710,16 @@ class BotRuntimeWorker:
         if not isinstance(managed_position, dict):
             return None
         return managed_position
+
+    @staticmethod
+    def _resolve_position_amount(*, managed_position: dict[str, Any], wallet_position: dict[str, Any]) -> float:
+        managed_amount = abs(float(managed_position.get("amount") or 0.0)) if isinstance(managed_position, dict) else 0.0
+        wallet_amount = abs(float(wallet_position.get("amount") or 0.0)) if isinstance(wallet_position, dict) else 0.0
+        if managed_amount > 0 and wallet_amount > 0:
+            return min(managed_amount, wallet_amount)
+        if managed_amount > 0:
+            return managed_amount
+        return wallet_amount
 
     @staticmethod
     def _entry_retry_generation(*, runtime_state: dict[str, Any], symbol: str) -> int:

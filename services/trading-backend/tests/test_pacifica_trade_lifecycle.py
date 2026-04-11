@@ -24,8 +24,9 @@ class FakeSupabaseRestClient:
         filters: dict[str, Any] | None = None,
         order: str | None = None,
         limit: int | None = None,
+        cache_ttl_seconds: int | None = None,
     ) -> list[dict[str, Any]]:
-        del columns
+        del columns, cache_ttl_seconds
         rows = [deepcopy(row) for row in self.tables.get(table, []) if self._matches(row, filters)]
         if order:
             field, _, direction = order.partition(".")
@@ -41,8 +42,16 @@ class FakeSupabaseRestClient:
         columns: str = "*",
         filters: dict[str, Any] | None = None,
         order: str | None = None,
+        cache_ttl_seconds: int | None = None,
     ) -> dict[str, Any] | None:
-        rows = self.select(table, columns=columns, filters=filters, order=order, limit=1)
+        rows = self.select(
+            table,
+            columns=columns,
+            filters=filters,
+            order=order,
+            limit=1,
+            cache_ttl_seconds=cache_ttl_seconds,
+        )
         return rows[0] if rows else None
 
     def insert(
@@ -52,8 +61,9 @@ class FakeSupabaseRestClient:
         *,
         upsert: bool = False,
         on_conflict: str | None = None,
+        returning: str | None = None,
     ) -> list[dict[str, Any]]:
-        del upsert, on_conflict
+        del upsert, on_conflict, returning
         items = payload if isinstance(payload, list) else [payload]
         stored = [deepcopy(item) for item in items]
         self.tables.setdefault(table, []).extend(stored)
@@ -439,6 +449,55 @@ def test_bot_runtime_worker_sets_tpsl_with_required_close_side() -> None:
     assert pacifica.order_calls[0]["side"] == "ask"
     assert pacifica.order_calls[0]["take_profit"]["stop_price"] == 106890.0
     assert pacifica.order_calls[0]["stop_loss"]["stop_price"] == 104055.0
+
+
+def test_bot_runtime_worker_caps_tpsl_amount_to_live_position_size() -> None:
+    worker = BotRuntimeWorker()
+    pacifica = FakePacificaClient()
+    worker._pacifica = pacifica
+
+    credentials = {
+        "account_address": "wallet-1",
+        "agent_wallet_address": "agent-1",
+        "agent_private_key": "secret",
+    }
+    market_lookup = {
+        "BTC": {
+            "symbol": "BTC-PERP",
+            "mark_price": 105_000.0,
+            "lot_size": 0.001,
+            "tick_size": 0.5,
+        }
+    }
+
+    asyncio.run(
+        worker._execute_action(
+            runtime_state={
+                "managed_positions": {
+                    "BTC": {
+                        "symbol": "BTC",
+                        "side": "bid",
+                        "amount": 0.01213,
+                    }
+                }
+            },
+            action={"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.8, "stop_loss_pct": 0.9},
+            credentials=credentials,
+            market_lookup=market_lookup,
+            position_lookup={
+                "BTC": {
+                    "symbol": "BTC",
+                    "side": "bid",
+                    "amount": 0.01212,
+                    "mark_price": 105_000.0,
+                }
+            },
+        )
+    )
+
+    assert pacifica.order_calls[0]["type"] == "set_position_tpsl"
+    assert pacifica.order_calls[0]["take_profit"]["amount"] == 0.01212
+    assert pacifica.order_calls[0]["stop_loss"]["amount"] == 0.01212
 
 
 def test_bot_runtime_worker_does_not_reject_small_btc_quantity_from_min_order_size_metadata() -> None:
