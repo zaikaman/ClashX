@@ -25,6 +25,7 @@ from src.middleware.auth import AuthMiddleware
 from src.services.pacifica_market_data_service import get_pacifica_market_data_service
 from src.workers.bot_copy_worker import BotCopyWorker
 from src.workers.bot_runtime_worker import BotRuntimeWorker
+from src.workers.bot_runtime_snapshot_worker import BotRuntimeSnapshotWorker
 from src.workers.portfolio_allocator_worker import PortfolioAllocatorWorker
 
 
@@ -48,6 +49,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name)
     bot_copy_worker = BotCopyWorker()
     bot_runtime_worker = BotRuntimeWorker()
+    bot_runtime_snapshot_worker = BotRuntimeSnapshotWorker()
     portfolio_allocator_worker = PortfolioAllocatorWorker()
     market_data_service = get_pacifica_market_data_service()
 
@@ -93,15 +95,18 @@ def create_app() -> FastAPI:
         await market_data_service.start()
         app.state.bot_runtime_worker = bot_runtime_worker
         app.state.bot_copy_worker = bot_copy_worker
+        app.state.bot_runtime_snapshot_worker = bot_runtime_snapshot_worker
         app.state.portfolio_allocator_worker = portfolio_allocator_worker
         bot_runtime_worker.start()
         bot_copy_worker.start()
+        bot_runtime_snapshot_worker.start()
         portfolio_allocator_worker.start()
 
     @app.on_event("shutdown")
     async def shutdown() -> None:
         running_bot_copy_worker: BotCopyWorker | None = getattr(app.state, "bot_copy_worker", None)
         running_bot_runtime_worker: BotRuntimeWorker | None = getattr(app.state, "bot_runtime_worker", None)
+        running_bot_runtime_snapshot_worker: BotRuntimeSnapshotWorker | None = getattr(app.state, "bot_runtime_snapshot_worker", None)
         running_portfolio_allocator_worker: PortfolioAllocatorWorker | None = getattr(app.state, "portfolio_allocator_worker", None)
         await marketplace_service.stop_background_warmup()
         if running_bot_copy_worker is not None:
@@ -110,6 +115,9 @@ def create_app() -> FastAPI:
         if running_bot_runtime_worker is not None:
             with contextlib.suppress(asyncio.CancelledError):
                 await running_bot_runtime_worker.stop()
+        if running_bot_runtime_snapshot_worker is not None:
+            with contextlib.suppress(asyncio.CancelledError):
+                await running_bot_runtime_snapshot_worker.stop()
         if running_portfolio_allocator_worker is not None:
             with contextlib.suppress(asyncio.CancelledError):
                 await running_portfolio_allocator_worker.stop()
@@ -118,7 +126,7 @@ def create_app() -> FastAPI:
     @app.get("/healthz", tags=["ops"])
     async def healthz() -> dict[str, object]:
         workers: dict[str, object] = {}
-        for key in ("bot_runtime_worker", "bot_copy_worker", "portfolio_allocator_worker"):
+        for key in ("bot_runtime_worker", "bot_copy_worker", "bot_runtime_snapshot_worker", "portfolio_allocator_worker"):
             worker_ref = getattr(app.state, key, None)
             if worker_ref is None:
                 workers[key] = {"enabled": False}

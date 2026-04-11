@@ -118,7 +118,7 @@ async function unwrapResponse<T>(response: Response, fallback: string): Promise<
   return payload as T;
 }
 
-export function useFleetObservability({ refreshIntervalMs = 15000 }: { refreshIntervalMs?: number } = {}) {
+export function useFleetObservability({ refreshIntervalMs = 30000 }: { refreshIntervalMs?: number } = {}) {
   const { ready, authenticated, login, walletAddress, getAuthHeaders } = useClashxAuth();
   const sessionActive = ready && authenticated && Boolean(walletAddress);
 

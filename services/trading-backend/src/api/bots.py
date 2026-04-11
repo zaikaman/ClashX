@@ -12,6 +12,7 @@ from src.db.session import get_db
 from src.services.bot_builder_service import BotBuilderService
 from src.services.bot_performance_service import BotPerformanceService
 from src.services.bot_runtime_engine import BotRuntimeEngine
+from src.services.bot_runtime_snapshot_service import BotRuntimeSnapshotService
 from src.services.runtime_health_service import RuntimeHealthService
 from src.services.runtime_observability_service import RuntimeObservabilityService
 
@@ -19,6 +20,7 @@ router = APIRouter(prefix="/api/bots", tags=["bots"])
 bot_builder_service = BotBuilderService()
 bot_runtime_engine = BotRuntimeEngine()
 bot_performance_service = BotPerformanceService()
+bot_runtime_snapshot_service = BotRuntimeSnapshotService()
 runtime_health_service = RuntimeHealthService()
 runtime_observability_service = RuntimeObservabilityService()
 
@@ -343,6 +345,26 @@ def _build_fast_runtime_performance(
     )
 
 
+def _snapshot_overview_payload(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(snapshot, dict):
+        return None
+    payload = bot_runtime_snapshot_service.snapshot_to_overview(snapshot)
+    health = payload.get("health")
+    metrics = payload.get("metrics")
+    if not isinstance(health, dict) or not isinstance(metrics, dict) or not health or not metrics:
+        return None
+    return payload
+
+
+def _snapshot_performance_payload(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(snapshot, dict):
+        return None
+    payload = bot_runtime_snapshot_service.snapshot_to_performance(snapshot)
+    if not isinstance(payload, dict) or not payload:
+        return None
+    return payload
+
+
 @router.get("", response_model=list[BotFleetItemResponse])
 async def list_bots(
     response: Response,
@@ -362,14 +384,38 @@ async def list_bots(
         user_id=user.user_id,
     )
     runtimes = {runtime["bot_definition_id"]: runtime for runtime in runtimes_for_wallet}
+    snapshots_by_bot = (
+        bot_runtime_snapshot_service.list_snapshots_for_wallet(resolved_wallet)
+        if include_performance and runtimes_for_wallet
+        else {}
+    )
     performances: list[RuntimePerformanceResponse | None]
     if include_performance and runtimes_for_wallet and performance_mode == "fast":
         performances = [
-            _build_fast_runtime_performance(runtimes.get(row["id"]))
+            (
+                RuntimePerformanceResponse.model_validate(snapshot_payload)
+                if (snapshot_payload := _snapshot_performance_payload(snapshots_by_bot.get(row["id"])))
+                is not None
+                else _build_fast_runtime_performance(runtimes.get(row["id"]))
+            )
             for row in definitions
         ]
     elif include_performance and runtimes_for_wallet:
-        performance_by_runtime = await bot_performance_service.get_cached_runtimes_performance_map(runtimes_for_wallet)
+        performance_by_runtime: dict[str, dict[str, Any]] = {}
+        missing_runtimes: list[dict[str, Any]] = []
+        for runtime in runtimes_for_wallet:
+            snapshot_payload = _snapshot_performance_payload(
+                snapshots_by_bot.get(str(runtime.get("bot_definition_id") or "").strip())
+            )
+            runtime_id = str(runtime.get("id") or "").strip()
+            if snapshot_payload is not None and runtime_id:
+                performance_by_runtime[runtime_id] = snapshot_payload
+            else:
+                missing_runtimes.append(runtime)
+        if missing_runtimes:
+            performance_by_runtime.update(
+                await bot_performance_service.get_cached_runtimes_performance_map(missing_runtimes)
+            )
         performances = [
             RuntimePerformanceResponse.model_validate(payload)
             if (payload := performance_by_runtime.get(str((runtimes.get(row["id"]) or {}).get("id") or "").strip()))
@@ -433,11 +479,42 @@ def list_runtime_overviews(
 ) -> dict[str, RuntimeOverviewResponse]:
     response.headers["Cache-Control"] = "private, max-age=2, stale-while-revalidate=8"
     resolved_wallet = _resolve_wallet(user, wallet_address)
-    payload = runtime_observability_service.get_overviews_for_wallet(
+    definitions = bot_builder_service.list_bots(db, wallet_address=resolved_wallet)
+    runtimes_for_wallet = bot_runtime_engine.list_runtimes_for_wallet(
         db,
         wallet_address=resolved_wallet,
         user_id=user.user_id,
     )
+    runtime_by_bot = {
+        str(runtime.get("bot_definition_id") or "").strip(): runtime
+        for runtime in runtimes_for_wallet
+        if str(runtime.get("bot_definition_id") or "").strip()
+    }
+    snapshots_by_bot = bot_runtime_snapshot_service.list_snapshots_for_wallet(resolved_wallet)
+    payload: dict[str, dict[str, Any]] = {}
+    missing_live_overviews = False
+    for definition in definitions:
+        bot_id = str(definition.get("id") or "").strip()
+        if not bot_id:
+            continue
+        snapshot_payload = _snapshot_overview_payload(snapshots_by_bot.get(bot_id))
+        if snapshot_payload is not None:
+            payload[bot_id] = snapshot_payload
+            continue
+        if bot_id in runtime_by_bot:
+            missing_live_overviews = True
+            continue
+        payload[bot_id] = runtime_observability_service.draft_overview_payload()
+    if missing_live_overviews:
+        live_payload = runtime_observability_service.get_overviews_for_wallet(
+            db,
+            wallet_address=resolved_wallet,
+            user_id=user.user_id,
+        )
+        for definition in definitions:
+            bot_id = str(definition.get("id") or "").strip()
+            if bot_id and bot_id not in payload:
+                payload[bot_id] = live_payload.get(bot_id) or runtime_observability_service.draft_overview_payload()
     return {
         bot_id: RuntimeOverviewResponse.model_validate({**overview, "performance": None})
         for bot_id, overview in payload.items()
@@ -649,6 +726,10 @@ def get_runtime_health(
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> RuntimeHealthResponse:
     resolved_wallet = _resolve_wallet(user, wallet_address)
+    snapshot = bot_runtime_snapshot_service.get_snapshot_for_bot(bot_id=bot_id, wallet_address=resolved_wallet)
+    snapshot_payload = _snapshot_overview_payload(snapshot)
+    if snapshot_payload is not None:
+        return RuntimeHealthResponse.model_validate(snapshot_payload["health"])
     try:
         payload = runtime_health_service.get_health(
             db,
@@ -669,6 +750,10 @@ def get_runtime_metrics(
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> RuntimeMetricsResponse:
     resolved_wallet = _resolve_wallet(user, wallet_address)
+    snapshot = bot_runtime_snapshot_service.get_snapshot_for_bot(bot_id=bot_id, wallet_address=resolved_wallet)
+    snapshot_payload = _snapshot_overview_payload(snapshot)
+    if snapshot_payload is not None:
+        return RuntimeMetricsResponse.model_validate(snapshot_payload["metrics"])
     try:
         payload = runtime_observability_service.get_metrics(
             db,
@@ -693,26 +778,38 @@ async def get_runtime_overview(
 ) -> RuntimeOverviewResponse:
     response.headers["Cache-Control"] = "private, max-age=2, stale-while-revalidate=8"
     resolved_wallet = _resolve_wallet(user, wallet_address)
-    try:
-        payload = runtime_observability_service.get_overview(
-            db,
-            bot_id=bot_id,
-            wallet_address=resolved_wallet,
-            user_id=user.user_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    snapshot = bot_runtime_snapshot_service.get_snapshot_for_bot(bot_id=bot_id, wallet_address=resolved_wallet)
+    payload = _snapshot_overview_payload(snapshot)
+    if payload is None:
+        try:
+            payload = runtime_observability_service.get_overview(
+                db,
+                bot_id=bot_id,
+                wallet_address=resolved_wallet,
+                user_id=user.user_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
     performance = None
     if include_performance:
-        runtime = bot_runtime_engine.get_runtime(
-            db,
-            bot_id=bot_id,
-            wallet_address=resolved_wallet,
-            user_id=user.user_id,
-        )
-        if performance_mode == "fast":
+        snapshot_performance = _snapshot_performance_payload(snapshot)
+        if snapshot_performance is not None:
+            performance = RuntimePerformanceResponse.model_validate(snapshot_performance)
+        if performance is None and performance_mode == "fast":
+            runtime = bot_runtime_engine.get_runtime(
+                db,
+                bot_id=bot_id,
+                wallet_address=resolved_wallet,
+                user_id=user.user_id,
+            )
             performance = _build_fast_runtime_performance(runtime)
-        else:
+        elif performance is None:
+            runtime = bot_runtime_engine.get_runtime(
+                db,
+                bot_id=bot_id,
+                wallet_address=resolved_wallet,
+                user_id=user.user_id,
+            )
             sibling_runtimes = bot_runtime_engine.list_runtimes_for_wallet(
                 db,
                 wallet_address=resolved_wallet,

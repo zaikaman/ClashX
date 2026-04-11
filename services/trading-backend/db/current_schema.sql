@@ -1,6 +1,22 @@
 -- WARNING: This schema is for context only and is not meant to be run.
 -- Table order and constraints may not be valid for execution.
 
+CREATE TABLE public.ai_job_runs (
+  id uuid NOT NULL,
+  job_type character varying NOT NULL,
+  status character varying NOT NULL DEFAULT 'queued'::character varying,
+  wallet_address character varying,
+  conversation_id uuid,
+  request_payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  result_payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  error_detail text,
+  started_at timestamp with time zone,
+  completed_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT ai_job_runs_pkey PRIMARY KEY (id),
+  CONSTRAINT ai_job_runs_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES public.copilot_conversations(id)
+);
 CREATE TABLE public.audit_events (
   id uuid NOT NULL,
   user_id uuid,
@@ -166,6 +182,23 @@ CREATE TABLE public.bot_publishing_settings (
   CONSTRAINT bot_publishing_settings_bot_definition_id_fkey FOREIGN KEY (bot_definition_id) REFERENCES public.bot_definitions(id),
   CONSTRAINT bot_publishing_settings_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
+CREATE TABLE public.bot_runtime_snapshots (
+  runtime_id uuid NOT NULL,
+  bot_definition_id uuid NOT NULL,
+  user_id uuid,
+  wallet_address character varying NOT NULL,
+  status character varying NOT NULL DEFAULT 'draft'::character varying,
+  mode character varying NOT NULL DEFAULT 'live'::character varying,
+  health_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  metrics_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  performance_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  source_runtime_updated_at timestamp with time zone,
+  last_computed_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT bot_runtime_snapshots_pkey PRIMARY KEY (runtime_id),
+  CONSTRAINT bot_runtime_snapshots_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id),
+  CONSTRAINT bot_runtime_snapshots_bot_definition_id_fkey FOREIGN KEY (bot_definition_id) REFERENCES public.bot_definitions(id),
+  CONSTRAINT bot_runtime_snapshots_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
+);
 CREATE TABLE public.bot_runtimes (
   id uuid NOT NULL,
   bot_definition_id uuid NOT NULL,
@@ -250,51 +283,6 @@ CREATE TABLE public.bot_trade_sync_state (
   CONSTRAINT bot_trade_sync_state_pkey PRIMARY KEY (runtime_id),
   CONSTRAINT bot_trade_sync_state_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id)
 );
-CREATE TABLE public.copy_execution_events (
-  id uuid NOT NULL,
-  copy_relationship_id uuid NOT NULL,
-  source_order_ref character varying NOT NULL,
-  mirrored_order_ref character varying NOT NULL,
-  symbol character varying NOT NULL,
-  side character varying NOT NULL,
-  size_source double precision NOT NULL DEFAULT 0,
-  size_mirrored double precision NOT NULL DEFAULT 0,
-  status character varying NOT NULL DEFAULT 'queued'::character varying,
-  error_reason character varying,
-  created_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT copy_execution_events_pkey PRIMARY KEY (id),
-  CONSTRAINT copy_execution_events_copy_relationship_id_fkey FOREIGN KEY (copy_relationship_id) REFERENCES public.copy_relationships(id)
-);
-CREATE TABLE public.copy_relationships (
-  id uuid NOT NULL,
-  follower_user_id uuid NOT NULL,
-  source_user_id uuid NOT NULL,
-  scale_bps integer NOT NULL DEFAULT 10000,
-  status character varying NOT NULL DEFAULT 'active'::character varying,
-  risk_ack_version character varying NOT NULL DEFAULT 'v1'::character varying,
-  max_notional_usd double precision,
-  confirmed_at timestamp with time zone NOT NULL DEFAULT now(),
-  updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT copy_relationships_pkey PRIMARY KEY (id),
-  CONSTRAINT copy_relationships_follower_user_id_fkey FOREIGN KEY (follower_user_id) REFERENCES public.users(id),
-  CONSTRAINT copy_relationships_source_user_id_fkey FOREIGN KEY (source_user_id) REFERENCES public.users(id)
-);
-CREATE TABLE public.ai_job_runs (
-  id uuid NOT NULL,
-  job_type character varying NOT NULL,
-  status character varying NOT NULL DEFAULT 'queued'::character varying,
-  wallet_address character varying,
-  conversation_id uuid,
-  request_payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-  result_payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
-  error_detail text,
-  started_at timestamp with time zone,
-  completed_at timestamp with time zone,
-  created_at timestamp with time zone NOT NULL DEFAULT now(),
-  updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT ai_job_runs_pkey PRIMARY KEY (id),
-  CONSTRAINT ai_job_runs_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES public.copilot_conversations(id)
-);
 CREATE TABLE public.copilot_conversations (
   id uuid NOT NULL,
   user_id uuid NOT NULL,
@@ -323,6 +311,35 @@ CREATE TABLE public.copilot_messages (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT copilot_messages_pkey PRIMARY KEY (id),
   CONSTRAINT copilot_messages_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES public.copilot_conversations(id)
+);
+CREATE TABLE public.copy_execution_events (
+  id uuid NOT NULL,
+  copy_relationship_id uuid NOT NULL,
+  source_order_ref character varying NOT NULL,
+  mirrored_order_ref character varying NOT NULL,
+  symbol character varying NOT NULL,
+  side character varying NOT NULL,
+  size_source double precision NOT NULL DEFAULT 0,
+  size_mirrored double precision NOT NULL DEFAULT 0,
+  status character varying NOT NULL DEFAULT 'queued'::character varying,
+  error_reason character varying,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT copy_execution_events_pkey PRIMARY KEY (id),
+  CONSTRAINT copy_execution_events_copy_relationship_id_fkey FOREIGN KEY (copy_relationship_id) REFERENCES public.copy_relationships(id)
+);
+CREATE TABLE public.copy_relationships (
+  id uuid NOT NULL,
+  follower_user_id uuid NOT NULL,
+  source_user_id uuid NOT NULL,
+  scale_bps integer NOT NULL DEFAULT 10000,
+  status character varying NOT NULL DEFAULT 'active'::character varying,
+  risk_ack_version character varying NOT NULL DEFAULT 'v1'::character varying,
+  max_notional_usd double precision,
+  confirmed_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT copy_relationships_pkey PRIMARY KEY (id),
+  CONSTRAINT copy_relationships_follower_user_id_fkey FOREIGN KEY (follower_user_id) REFERENCES public.users(id),
+  CONSTRAINT copy_relationships_source_user_id_fkey FOREIGN KEY (source_user_id) REFERENCES public.users(id)
 );
 CREATE TABLE public.creator_marketplace_profiles (
   id uuid NOT NULL,

@@ -47,6 +47,9 @@ class BotPerformanceService:
     async def load_market_lookup(self) -> dict[str, dict[str, Any]]:
         return await self._load_market_lookup()
 
+    def empty_performance_payload(self) -> dict[str, Any]:
+        return self._empty_performance_payload()
+
     async def load_live_position_lookup_for_wallet(self, wallet_address: str) -> tuple[dict[str, dict[str, Any]], bool]:
         return await self._load_live_position_lookup({"wallet_address": wallet_address})
 

@@ -11,10 +11,13 @@ from src.services.supabase_rest import SupabaseRestClient
 
 
 class RuntimeObservabilityService:
-    def __init__(self) -> None:
-        self._supabase = SupabaseRestClient()
+    def __init__(self, supabase: SupabaseRestClient | None = None) -> None:
+        self._supabase = supabase or SupabaseRestClient()
         self._risk = BotRiskService()
         self._rules = RulesEngine()
+
+    def draft_overview_payload(self) -> dict[str, Any]:
+        return self._draft_overview_payload()
 
     def get_overview(self, db: Any, *, bot_id: str, wallet_address: str, user_id: str) -> dict[str, Any]:
         del db, user_id

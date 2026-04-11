@@ -305,7 +305,7 @@ export function BotsFleetPage() {
         const walletParam = encodeURIComponent(resolvedWallet ?? "");
 
         const listResponse = await fetch(
-          `${API_BASE_URL}/api/bots?wallet_address=${walletParam}&include_performance=false`,
+          `${API_BASE_URL}/api/bots?wallet_address=${walletParam}&include_performance=true&performance_mode=full`,
           {
             headers,
             signal: controller.signal,
@@ -324,22 +324,6 @@ export function BotsFleetPage() {
 
         setBots(listPayload as BotFleetItem[]);
         setError(null);
-        setLoading(false);
-
-        const fullResponse = await fetch(
-          `${API_BASE_URL}/api/bots?wallet_address=${walletParam}&include_performance=true&performance_mode=full`,
-          {
-            headers,
-            signal: controller.signal,
-          },
-        );
-        if (cancelled || controller.signal.aborted || !fullResponse.ok) {
-          return;
-        }
-        const fullPayload = (await fullResponse.json()) as BotFleetItem[];
-        if (!cancelled && !controller.signal.aborted) {
-          setBots(fullPayload);
-        }
       } catch (loadError) {
         if (!cancelled && !controller.signal.aborted) {
           setError(loadError instanceof Error ? loadError.message : "Could not load bots");
