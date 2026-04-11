@@ -65,7 +65,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto custom-scrollbar px-3 py-6 flex flex-col gap-8">
+      <nav className="flex-1 overflow-y-auto px-3 py-6 flex flex-col gap-8">
         {navSections.map((section) => (
           <div key={section.label} className="space-y-1">
             <h3 className="text-[11px] font-bold text-neutral-500 uppercase tracking-widest px-4 mb-3">

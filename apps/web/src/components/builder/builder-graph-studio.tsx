@@ -2514,7 +2514,7 @@ export function BuilderGraphStudio({
               </div>
             </div>
 
-            <div className="custom-scrollbar grid min-h-0 gap-6 overflow-y-auto px-6 py-6 lg:grid-cols-[1.15fr_0.85fr] lg:items-start">
+            <div className="grid min-h-0 gap-6 overflow-y-auto px-6 py-6 lg:grid-cols-[1.15fr_0.85fr] lg:items-start">
               <div className="flex flex-col gap-6">
                 <div>
                   <div className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">Pick a profile</div>
@@ -2644,7 +2644,7 @@ export function BuilderGraphStudio({
             <div className="flex h-[32rem] lg:h-full max-h-[32rem] flex-col rounded-[1.5rem] border border-[rgba(255,255,255,0.08)] bg-[rgba(255,255,255,0.03)] p-5">
                 <div className="mb-4 shrink-0 text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">Risk policy preview</div>
                 <div className="min-h-0 flex-1 overflow-hidden rounded-[1.15rem] border border-[rgba(255,255,255,0.06)] bg-[#090a0a]">
-                  <pre className="custom-scrollbar h-full w-full overflow-auto p-4 text-xs leading-6 text-neutral-300">
+                  <pre className="h-full w-full overflow-auto p-4 text-xs leading-6 text-neutral-300">
                     {JSON.stringify(buildRiskPolicyPayload(selectedMarketSymbols, runtimeControls), null, 2)}
                   </pre>
                 </div>
@@ -2705,7 +2705,7 @@ export function BuilderGraphStudio({
                   />
                 </div>
               </div>
-              <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+              <div className="flex-1 overflow-y-auto p-4">
                 {SIGNAL_CATEGORIES.some((c) => c.keys.some((k) => filteredConditions.includes(k as any))) && (
                   <div className="mb-8">
                     <div className="flex items-center gap-2 mb-4 pb-2 border-b border-[rgba(255,255,255,0.06)] text-neutral-300">
@@ -2803,7 +2803,7 @@ export function BuilderGraphStudio({
                 </div>
               </div>
 
-              <div ref={chatViewportRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-4 custom-scrollbar">
+              <div ref={chatViewportRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
                 {chatMessages.map((message) => (
                   <div
                     key={message.id}
@@ -3013,7 +3013,7 @@ export function BuilderGraphStudio({
         </div>
 
         {/* Right Sidebar - Settings */}
-        <div className="w-80 flex-shrink-0 border-l border-[rgba(255,255,255,0.06)] bg-secondary overflow-y-auto overflow-x-hidden custom-scrollbar flex flex-col">
+        <div className="w-80 flex-shrink-0 border-l border-[rgba(255,255,255,0.06)] bg-secondary overflow-y-auto overflow-x-hidden flex flex-col">
           <div className="border-b border-[rgba(255,255,255,0.06)]">
             <div className="p-4 bg-transparent">
               <h2 className="text-sm font-semibold text-neutral-50 mb-4">Quick Start Templates</h2>

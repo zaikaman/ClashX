@@ -455,7 +455,7 @@ export function DashboardPage() {
               No urgent runtime pressure right now. Nothing is paused with open trades, no stale heartbeats were found, and no recent action errors are standing out.
             </div>
           ) : (
-            <div className="grid gap-3 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar">
+            <div className="grid gap-3 max-h-[600px] overflow-y-auto pr-2">
               {attentionItems.map((item) => (
                 <article
                   key={item.key}
