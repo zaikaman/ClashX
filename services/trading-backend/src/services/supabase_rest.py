@@ -212,9 +212,16 @@ class SupabaseRestClient:
             value = filters[key]
             if isinstance(value, tuple):
                 operator, operand = value
-                if operator != "eq":
+                if operator == "eq":
+                    value = operand
+                elif operator == "in":
+                    if not isinstance(operand, Sequence) or isinstance(operand, (str, bytes)):
+                        return None
+                    if any(isinstance(item, (list, dict, set, tuple)) for item in operand):
+                        return None
+                    value = (operator, tuple(operand))
+                else:
                     return None
-                value = operand
             elif isinstance(value, (list, dict, set)):
                 return None
             normalized.append((str(key), value))

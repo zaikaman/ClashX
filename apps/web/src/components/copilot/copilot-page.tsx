@@ -1,7 +1,6 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   Bot,
@@ -80,6 +79,9 @@ type CopilotChatJobStatusResponse = {
   detail?: string;
 };
 
+type FetchState = "idle" | "loading";
+type ComposerState = "idle" | "creating" | "sending";
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const QUICK_PROMPTS = [
   "What are my active bots doing right now?",
@@ -112,6 +114,10 @@ function upsertConversation(
   nextConversation: CopilotConversationSummary,
 ) {
   return [nextConversation, ...conversations.filter((conversation) => conversation.id !== nextConversation.id)];
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError";
 }
 
 async function parseJson<T>(response: Response): Promise<T | { detail?: string }> {
@@ -153,22 +159,150 @@ export function CopilotPage() {
   const [activeConversation, setActiveConversation] = useState<CopilotConversationSummary | null>(null);
   const [messages, setMessages] = useState<CopilotMessage[]>([]);
   const [input, setInput] = useState("");
-  const [status, setStatus] = useState<"idle" | "loading" | "creating" | "sending">("idle");
+  const [composerState, setComposerState] = useState<ComposerState>("idle");
+  const [historyState, setHistoryState] = useState<FetchState>("idle");
+  const [conversationState, setConversationState] = useState<FetchState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [pendingChatJob, setPendingChatJob] = useState<{ jobId: string; optimisticMessageId: string } | null>(null);
   const [resolvedWallet, setResolvedWallet] = useState<string | null>(walletAddress ?? null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const historyRequestRef = useRef<AbortController | null>(null);
+  const conversationRequestRef = useRef<AbortController | null>(null);
+  const bootstrapScopeRef = useRef<string | null>(null);
+
+  const isCreating = composerState === "creating";
+  const isSending = composerState === "sending";
+  const isBusy = isCreating || isSending;
+  const isHistoryLoading = historyState === "loading";
+  const isConversationLoading = conversationState === "loading";
 
   useEffect(() => {
     messageEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, status]);
+  }, [messages, composerState]);
 
   useEffect(() => {
     if (walletAddress) {
       setResolvedWallet(walletAddress);
     }
   }, [walletAddress]);
+
+  useEffect(() => {
+    return () => {
+      historyRequestRef.current?.abort();
+      conversationRequestRef.current?.abort();
+    };
+  }, []);
+
+  function closeHistoryOnMobile() {
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      setHistoryOpen(false);
+    }
+  }
+
+  const loadConversations = useCallback(async () => {
+    if (!authenticated) {
+      return;
+    }
+
+    historyRequestRef.current?.abort();
+    const controller = new AbortController();
+    historyRequestRef.current = controller;
+    setHistoryState("loading");
+    setError(null);
+
+    try {
+      const headers = await getAuthHeaders();
+      const response = await fetch(`${API_BASE_URL}/api/copilot/conversations`, {
+        headers,
+        signal: controller.signal,
+      });
+      const payload = (await parseJson<CopilotConversationSummary[]>(response)) as
+        | CopilotConversationSummary[]
+        | { detail?: string };
+      if (!response.ok || !Array.isArray(payload)) {
+        throw new Error((payload as { detail?: string }).detail ?? "Failed to load conversations");
+      }
+      if (controller.signal.aborted) {
+        return;
+      }
+
+      setConversations(payload);
+      setActiveConversation((current) => {
+        if (!current) {
+          return null;
+        }
+        const matchingConversation = payload.find((conversation) => conversation.id === current.id);
+        return matchingConversation ? { ...current, ...matchingConversation } : null;
+      });
+
+      if (activeConversationId && !payload.some((conversation) => conversation.id === activeConversationId)) {
+        setActiveConversationId(null);
+        setActiveConversation(null);
+        setMessages([]);
+      }
+    } catch (requestError) {
+      if (!isAbortError(requestError)) {
+        setError(requestError instanceof Error ? requestError.message : "Failed to load Copilot");
+      }
+    } finally {
+      if (historyRequestRef.current === controller) {
+        historyRequestRef.current = null;
+        setHistoryState("idle");
+      }
+    }
+  }, [activeConversationId, authenticated, getAuthHeaders]);
+
+  useEffect(() => {
+    if (!authenticated) {
+      bootstrapScopeRef.current = null;
+      historyRequestRef.current?.abort();
+      conversationRequestRef.current?.abort();
+      setConversations([]);
+      setActiveConversationId(null);
+      setActiveConversation(null);
+      setMessages([]);
+      setHistoryState("idle");
+      setConversationState("idle");
+      return;
+    }
+
+    const scopeKey = walletAddress ?? "authenticated";
+    if (bootstrapScopeRef.current === scopeKey) {
+      return;
+    }
+    bootstrapScopeRef.current = scopeKey;
+
+    let timeoutId: number | null = null;
+    let idleId: number | null = null;
+    const browserWindow = typeof window !== "undefined"
+      ? (window as Window & {
+          requestIdleCallback?: (callback: IdleRequestCallback) => number;
+          cancelIdleCallback?: (handle: number) => void;
+        })
+      : null;
+
+    const startBootstrap = () => {
+      void loadConversations();
+    };
+
+    if (browserWindow?.requestIdleCallback) {
+      idleId = browserWindow.requestIdleCallback(() => startBootstrap());
+    } else if (typeof window !== "undefined") {
+      timeoutId = window.setTimeout(startBootstrap, 0);
+    } else {
+      startBootstrap();
+    }
+
+    return () => {
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+      if (idleId !== null && browserWindow?.cancelIdleCallback) {
+        browserWindow.cancelIdleCallback(idleId);
+      }
+    };
+  }, [authenticated, getAuthHeaders, loadConversations, walletAddress]);
 
   useEffect(() => {
     if (!authenticated || !pendingChatJob) {
@@ -214,14 +348,14 @@ export function CopilotPage() {
             return [...current, result.assistantMessage];
           });
           setPendingChatJob(null);
-          setStatus("idle");
+          setComposerState("idle");
           closeHistoryOnMobile();
           return;
         }
         if (payload.status === "failed") {
           setMessages((current) => current.filter((message) => message.id !== pendingChatJob.optimisticMessageId));
           setPendingChatJob(null);
-          setStatus("idle");
+          setComposerState("idle");
           setError(payload.errorDetail ?? "Copilot request failed");
           return;
         }
@@ -232,7 +366,7 @@ export function CopilotPage() {
         }
         setMessages((current) => current.filter((message) => message.id !== pendingChatJob.optimisticMessageId));
         setPendingChatJob(null);
-        setStatus("idle");
+        setComposerState("idle");
         setError(pollError instanceof Error ? pollError.message : "Copilot request failed");
       }
     };
@@ -247,109 +381,64 @@ export function CopilotPage() {
     };
   }, [authenticated, getAuthHeaders, pendingChatJob, walletAddress]);
 
-  function closeHistoryOnMobile() {
-    if (typeof window !== "undefined" && window.innerWidth < 1024) {
-      setHistoryOpen(false);
-    }
-  }
-
-  useEffect(() => {
-    if (!authenticated) {
-      setConversations([]);
-      setActiveConversationId(null);
-      setActiveConversation(null);
-      setMessages([]);
-      return;
-    }
-
-    let ignore = false;
-    async function loadConversations() {
-      setStatus("loading");
-      setError(null);
-      try {
-        const headers = await getAuthHeaders();
-        const response = await fetch(`${API_BASE_URL}/api/copilot/conversations`, { headers });
-        const payload = (await parseJson<CopilotConversationSummary[]>(response)) as
-          | CopilotConversationSummary[]
-          | { detail?: string };
-        if (!response.ok || !Array.isArray(payload)) {
-          throw new Error((payload as { detail?: string }).detail ?? "Failed to load conversations");
-        }
-        if (ignore) {
-          return;
-        }
-        setConversations(payload);
-        if (payload.length === 0) {
-          setActiveConversationId(null);
-          setActiveConversation(null);
-          setMessages([]);
-          setStatus("idle");
-          return;
-        }
-
-        const nextActiveId =
-          payload.find((conversation) => conversation.id === activeConversationId)?.id ?? payload[0].id;
-        const detailResponse = await fetch(`${API_BASE_URL}/api/copilot/conversations/${nextActiveId}`, { headers });
-        const detailPayload = (await parseJson<CopilotConversationDetail>(detailResponse)) as
-          | CopilotConversationDetail
-          | { detail?: string };
-        if (!detailResponse.ok || !("messages" in detailPayload)) {
-          throw new Error((detailPayload as { detail?: string }).detail ?? "Failed to load conversation");
-        }
-        if (ignore) {
-          return;
-        }
-        setActiveConversationId(detailPayload.id);
-        setActiveConversation(detailPayload);
-        setMessages(detailPayload.messages);
-      } catch (requestError) {
-        if (!ignore) {
-          setError(requestError instanceof Error ? requestError.message : "Failed to load Copilot");
-        }
-      } finally {
-        if (!ignore) {
-          setStatus("idle");
-        }
-      }
-    }
-
-    void loadConversations();
-    return () => {
-      ignore = true;
-    };
-  }, [activeConversationId, authenticated, getAuthHeaders]);
-
   async function openConversation(conversationId: string) {
-    if (!authenticated || status === "sending") {
+    if (!authenticated || isSending) {
       return;
     }
-    setStatus("loading");
+    const summary = conversations.find((conversation) => conversation.id === conversationId) ?? null;
+    if (conversationId === activeConversationId && messages.length > 0) {
+      closeHistoryOnMobile();
+      return;
+    }
+
+    conversationRequestRef.current?.abort();
+    const controller = new AbortController();
+    conversationRequestRef.current = controller;
+    setConversationState("loading");
     setError(null);
+    setActiveConversationId(conversationId);
+    setActiveConversation(summary);
+    setMessages([]);
     try {
       const headers = await getAuthHeaders();
-      const response = await fetch(`${API_BASE_URL}/api/copilot/conversations/${conversationId}`, { headers });
+      const response = await fetch(`${API_BASE_URL}/api/copilot/conversations/${conversationId}`, {
+        headers,
+        signal: controller.signal,
+      });
       const payload = (await parseJson<CopilotConversationDetail>(response)) as
         | CopilotConversationDetail
         | { detail?: string };
       if (!response.ok || !("messages" in payload)) {
         throw new Error((payload as { detail?: string }).detail ?? "Failed to load conversation");
       }
+      if (controller.signal.aborted) {
+        return;
+      }
       setActiveConversationId(payload.id);
       setActiveConversation(payload);
       setMessages(payload.messages);
+      setConversations((current) => upsertConversation(current, payload));
       closeHistoryOnMobile();
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Failed to load conversation");
+      if (!isAbortError(requestError)) {
+        setError(requestError instanceof Error ? requestError.message : "Failed to load conversation");
+      }
     } finally {
-      setStatus("idle");
+      if (conversationRequestRef.current === controller) {
+        conversationRequestRef.current = null;
+        setConversationState("idle");
+      }
     }
   }
 
   async function createConversation() {
-    if (!authenticated || status === "creating" || status === "sending") {
+    if (!authenticated || isBusy) {
       return;
     }
-    setStatus("creating");
+    conversationRequestRef.current?.abort();
+    conversationRequestRef.current = null;
+    setConversationState("idle");
+    setComposerState("creating");
     setError(null);
     try {
       const headers = await getAuthHeaders({ "Content-Type": "application/json" });
@@ -375,7 +464,7 @@ export function CopilotPage() {
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Failed to create conversation");
     } finally {
-      setStatus("idle");
+      setComposerState("idle");
     }
   }
 
@@ -395,16 +484,12 @@ export function CopilotPage() {
         throw new Error(payload.detail ?? "Failed to delete conversation");
       }
 
-      const remaining = conversations.filter((conversation) => conversation.id !== conversationId);
-      setConversations(remaining);
+      setConversations((current) => current.filter((conversation) => conversation.id !== conversationId));
       if (activeConversationId === conversationId) {
-        const nextConversation = remaining[0] ?? null;
-        setActiveConversationId(nextConversation?.id ?? null);
-        setActiveConversation(nextConversation);
+        conversationRequestRef.current?.abort();
+        setActiveConversationId(null);
+        setActiveConversation(null);
         setMessages([]);
-        if (nextConversation) {
-          await openConversation(nextConversation.id);
-        }
       }
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Failed to delete conversation");
@@ -413,7 +498,7 @@ export function CopilotPage() {
 
   async function sendMessage(seed?: string) {
     const content = (seed ?? input).trim();
-    if (!content || status === "sending") {
+    if (!content || isSending || isConversationLoading) {
       return;
     }
     if (!authenticated) {
@@ -430,7 +515,7 @@ export function CopilotPage() {
 
     setMessages((current) => [...current, optimisticMessage]);
     setInput("");
-    setStatus("sending");
+    setComposerState("sending");
     setError(null);
 
     try {
@@ -452,25 +537,19 @@ export function CopilotPage() {
         setActiveConversationId(payload.conversationId);
       }
       setPendingChatJob({ jobId: payload.id, optimisticMessageId: optimisticMessage.id });
+      void loadConversations();
     } catch (requestError) {
       setMessages((current) => current.filter((message) => message.id !== optimisticMessage.id));
-      setStatus("idle");
+      setComposerState("idle");
       setError(requestError instanceof Error ? requestError.message : "Copilot request failed");
     }
   }
 
   const showIntro = messages.length === 0;
   const activeTitle = activeConversation?.title ?? "New conversation";
-  const isBusy = status === "loading" || status === "creating" || status === "sending";
 
   const historyPanel = (
-    <motion.aside
-      initial={{ opacity: 0, x: -16 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: -16 }}
-      transition={{ duration: 0.18, ease: "easeOut" }}
-      className="flex h-full w-full max-w-[320px] flex-col overflow-hidden rounded-[2rem] border border-white/[0.06] bg-[linear-gradient(180deg,rgba(22,24,28,0.96),rgba(9,10,11,0.98))] shadow-[0_28px_90px_rgba(0,0,0,0.38)]"
-    >
+    <aside className="flex h-full w-full max-w-[320px] flex-col overflow-hidden rounded-[2rem] border border-white/[0.06] bg-[linear-gradient(180deg,rgba(22,24,28,0.96),rgba(9,10,11,0.98))] shadow-[0_28px_90px_rgba(0,0,0,0.38)]">
       <div className="flex items-center justify-between border-b border-white/[0.06] px-5 py-4">
         <div>
           <p className="text-[11px] uppercase tracking-[0.28em] text-neutral-500">History</p>
@@ -496,6 +575,20 @@ export function CopilotPage() {
           <Plus className="h-4 w-4" />
           New conversation
         </button>
+      </div>
+
+      <div className="flex items-center justify-between border-b border-white/[0.06] px-5 py-3 text-[10px] uppercase tracking-[0.22em] text-neutral-500">
+        <span>{isHistoryLoading ? "Syncing history" : "History ready"}</span>
+        {authenticated ? (
+          <button
+            type="button"
+            onClick={() => void loadConversations()}
+            disabled={isHistoryLoading}
+            className="text-neutral-400 transition hover:text-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Refresh
+          </button>
+        ) : null}
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 py-3">
@@ -547,6 +640,10 @@ export function CopilotPage() {
                 );
               })}
             </div>
+          ) : isHistoryLoading ? (
+            <div className="rounded-[1.5rem] border border-dashed border-white/[0.08] bg-white/[0.02] px-4 py-6 text-sm text-neutral-400">
+              Loading saved conversations...
+            </div>
           ) : (
             <div className="rounded-[1.5rem] border border-dashed border-white/[0.08] bg-white/[0.02] px-4 py-6 text-sm text-neutral-400">
               Your conversations will show up here after you send your first message.
@@ -558,7 +655,7 @@ export function CopilotPage() {
           </div>
         )}
       </div>
-    </motion.aside>
+    </aside>
   );
 
   return (
@@ -566,22 +663,16 @@ export function CopilotPage() {
       <div className="mx-auto flex h-[calc(100vh-64px)] max-w-7xl gap-4 px-4 py-4 md:px-6">
         <div className="hidden h-full lg:block">{historyOpen ? historyPanel : null}</div>
 
-        <AnimatePresence>
-          {historyOpen ? (
-            <motion.div
-              key="mobile-history"
-              className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm lg:hidden"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setHistoryOpen(false)}
-            >
-              <div className="h-full max-w-[340px] p-3" onClick={(event) => event.stopPropagation()}>
-                {historyPanel}
-              </div>
-            </motion.div>
-          ) : null}
-        </AnimatePresence>
+        {historyOpen ? (
+          <div
+            className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm lg:hidden"
+            onClick={() => setHistoryOpen(false)}
+          >
+            <div className="h-full max-w-[340px] p-3" onClick={(event) => event.stopPropagation()}>
+              {historyPanel}
+            </div>
+          </div>
+        ) : null}
 
         <section className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-[2rem] border border-white/[0.06] bg-[radial-gradient(circle_at_top_left,rgba(220,232,93,0.12),transparent_24%),linear-gradient(180deg,rgba(16,18,21,0.98),rgba(8,9,11,1))] shadow-[0_35px_110px_rgba(0,0,0,0.42)]">
           <header className="flex items-center justify-between gap-4 border-b border-white/[0.06] px-5 py-4 md:px-6">
@@ -603,7 +694,7 @@ export function CopilotPage() {
               >
                 <span className="flex items-center gap-2">
                   <History className="h-3.5 w-3.5" />
-                  History
+                  {isHistoryLoading ? "History..." : "History"}
                 </span>
               </button>
               <button
@@ -639,6 +730,12 @@ export function CopilotPage() {
           </header>
 
           <div className="relative flex-1 overflow-y-auto px-5 py-5 md:px-6">
+            {isConversationLoading ? (
+              <div className="absolute inset-x-5 top-5 z-10 rounded-2xl border border-white/[0.06] bg-black/40 px-4 py-3 text-xs uppercase tracking-[0.22em] text-neutral-400 backdrop-blur md:inset-x-6">
+                Loading conversation...
+              </div>
+            ) : null}
+
             {!authenticated ? (
               <div className="flex h-full flex-col items-center justify-center gap-6 text-center">
                 <div className="space-y-3">
@@ -664,11 +761,11 @@ export function CopilotPage() {
                 <div className="max-w-2xl space-y-4">
                   <p className="text-[11px] uppercase tracking-[0.34em] text-neutral-500">Conversation history</p>
                   <h2 className="text-3xl font-semibold tracking-tight text-neutral-100 md:text-5xl">
-                    Start a new conversation or reopen an older one
+                    Start a new conversation without waiting for history
                   </h2>
                   <p className="text-sm leading-relaxed text-neutral-400">
-                    Ask about your bots, trading account, or runtime activity. Copilot keeps the thread going even in
-                    long conversations by condensing older context in the background.
+                    Ask about your bots, trading account, or runtime activity right away. Saved conversations keep
+                    syncing in the background and can be reopened whenever you need them.
                   </p>
                 </div>
 
@@ -678,7 +775,7 @@ export function CopilotPage() {
                       key={prompt}
                       type="button"
                       onClick={() => void sendMessage(prompt)}
-                      disabled={isBusy}
+                      disabled={isBusy || isConversationLoading}
                       className="rounded-[1.6rem] border border-white/[0.05] bg-white/[0.025] px-5 py-5 text-left transition hover:border-[#dce85d]/30 hover:bg-[#dce85d]/[0.04] disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <p className="text-sm font-medium text-neutral-100">{prompt}</p>
@@ -745,7 +842,7 @@ export function CopilotPage() {
                               key={`${message.id}-${followUp}`}
                               type="button"
                               onClick={() => void sendMessage(followUp)}
-                              disabled={status === "sending"}
+                              disabled={isSending || isConversationLoading}
                               className="rounded-full border border-white/[0.08] bg-white/[0.03] px-4 py-2 text-xs font-medium text-neutral-300 transition hover:border-[#dce85d]/30 hover:text-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               {followUp}
@@ -757,7 +854,7 @@ export function CopilotPage() {
                   </article>
                 ))}
 
-                {status === "sending" ? (
+                {isSending ? (
                   <article className="flex items-start gap-4">
                     <div className="mt-1 flex h-9 w-9 items-center justify-center rounded-full border border-white/[0.08] bg-white/[0.03]">
                       <LoaderCircle className="h-4 w-4 animate-spin text-neutral-300" />
@@ -797,7 +894,7 @@ export function CopilotPage() {
                       void sendMessage();
                     }
                   }}
-                  disabled={!authenticated}
+                  disabled={!authenticated || isConversationLoading}
                   placeholder={authenticated ? "Ask about your account, bots, or recent activity..." : "Connect your wallet to start chatting..."}
                   rows={1}
                   className="max-h-[220px] min-h-[52px] w-full resize-none bg-transparent px-4 py-3 text-sm text-neutral-100 outline-none placeholder:text-neutral-500 disabled:cursor-not-allowed"
@@ -805,7 +902,7 @@ export function CopilotPage() {
                 <button
                   type="button"
                   onClick={() => void sendMessage()}
-                  disabled={!authenticated || status === "sending" || input.trim().length === 0}
+                  disabled={!authenticated || isSending || isConversationLoading || input.trim().length === 0}
                   className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#dce85d] text-black transition hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-40"
                   aria-label="Send message"
                 >
@@ -816,7 +913,13 @@ export function CopilotPage() {
 
             <div className="mt-3 flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.22em] text-neutral-600">
               <span>Uses your authorized ClashX data</span>
-              <span>{activeConversation ? `${activeConversation.messageCount} messages saved` : "No conversation selected"}</span>
+              <span>
+                {isHistoryLoading
+                  ? "Syncing saved conversations"
+                  : activeConversation
+                    ? `${activeConversation.messageCount} messages saved`
+                    : "No conversation selected"}
+              </span>
             </div>
           </div>
         </section>

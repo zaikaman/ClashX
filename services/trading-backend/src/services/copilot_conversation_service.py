@@ -16,6 +16,8 @@ MAX_CONVERSATION_LIST = 48
 DEFAULT_CONVERSATION_TITLE = "New conversation"
 MAX_PREVIEW_LENGTH = 180
 DEFAULT_WALLET_PREVIEW = "ClashX"
+CONVERSATION_LIST_CACHE_TTL_SECONDS = 5.0
+CONVERSATION_DETAIL_CACHE_TTL_SECONDS = 5.0
 
 
 def estimate_token_count(text: str) -> int:
@@ -52,6 +54,7 @@ class CopilotConversationService:
             filters={"wallet_address": ("in", wallets)},
             order="latest_message_at.desc",
             limit=MAX_CONVERSATION_LIST,
+            cache_ttl_seconds=CONVERSATION_LIST_CACHE_TTL_SECONDS,
         )
         return [self._serialize_conversation_summary(row) for row in rows]
 
@@ -307,7 +310,11 @@ class CopilotConversationService:
         if not wallets:
             raise ValueError("No linked wallet is available for Copilot.")
         filters["wallet_address"] = ("in", wallets)
-        conversation = self._supabase.maybe_one("copilot_conversations", filters=filters)
+        conversation = self._supabase.maybe_one(
+            "copilot_conversations",
+            filters=filters,
+            cache_ttl_seconds=CONVERSATION_DETAIL_CACHE_TTL_SECONDS,
+        )
         if conversation is None:
             raise ValueError("Conversation not found.")
         return conversation
@@ -330,6 +337,7 @@ class CopilotConversationService:
             columns="id,conversation_id,role,content,tool_calls_json,follow_ups_json,provider,token_estimate,created_at",
             filters={"conversation_id": conversation_id},
             order="created_at.asc",
+            cache_ttl_seconds=CONVERSATION_DETAIL_CACHE_TTL_SECONDS,
         )
 
     def _wallet_scope(self, user: AuthenticatedUser) -> list[str]:
