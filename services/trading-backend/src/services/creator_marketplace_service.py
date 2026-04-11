@@ -252,9 +252,9 @@ class CreatorMarketplaceService:
                     "creator_id": creator_id,
                     "strategy_type": row["strategy_type"],
                     "rank": int(row.get("rank") or 0),
-                    "captured_at": row.get("captured_at"),
-                    "row_json": row,
-                    "detail_json": detail_payload,
+                    "captured_at": self._json_ready_payload(row.get("captured_at")),
+                    "row_json": self._json_ready_payload(row),
+                    "detail_json": self._json_ready_payload(detail_payload),
                     "last_computed_at": now,
                 }
             )
@@ -283,8 +283,8 @@ class CreatorMarketplaceService:
                         or profile_payload.get("marketplace_reach_score")
                         or 0
                     ),
-                    "highlight_json": highlight_payload,
-                    "profile_json": profile_payload,
+                    "highlight_json": self._json_ready_payload(highlight_payload),
+                    "profile_json": self._json_ready_payload(profile_payload),
                     "last_computed_at": now,
                 }
             )
@@ -522,6 +522,18 @@ class CreatorMarketplaceService:
             creator_id = str(row.get("creator_id") or "").strip()
             if creator_id and creator_id not in active_ids:
                 self.supabase.delete(MARKETPLACE_CREATOR_SNAPSHOT_TABLE, filters={"creator_id": creator_id})
+
+    def _json_ready_payload(self, value: Any) -> Any:
+        if isinstance(value, datetime):
+            resolved = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+            return resolved.isoformat()
+        if isinstance(value, dict):
+            return {str(key): self._json_ready_payload(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._json_ready_payload(item) for item in value]
+        if isinstance(value, tuple):
+            return [self._json_ready_payload(item) for item in value]
+        return value
 
     def _build_creator_highlights(self, *, public_rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
         highlights: dict[str, dict[str, Any]] = {}

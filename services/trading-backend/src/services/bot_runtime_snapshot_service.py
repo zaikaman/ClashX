@@ -65,10 +65,16 @@ class BotRuntimeSnapshotService:
                 "wallet_address": resolved_wallet,
                 "status": str(runtime.get("status") or "").strip() or "draft",
                 "mode": str(runtime.get("mode") or "").strip() or "live",
-                "health_json": overview.get("health") if isinstance(overview.get("health"), dict) else {},
-                "metrics_json": overview.get("metrics") if isinstance(overview.get("metrics"), dict) else {},
-                "performance_json": performance if isinstance(performance, dict) else self._performance.empty_performance_payload(),
-                "source_runtime_updated_at": runtime.get("updated_at"),
+                "health_json": self._json_ready_payload(
+                    overview.get("health") if isinstance(overview.get("health"), dict) else {}
+                ),
+                "metrics_json": self._json_ready_payload(
+                    overview.get("metrics") if isinstance(overview.get("metrics"), dict) else {}
+                ),
+                "performance_json": self._json_ready_payload(
+                    performance if isinstance(performance, dict) else self._performance.empty_performance_payload()
+                ),
+                "source_runtime_updated_at": self._json_ready_payload(runtime.get("updated_at")),
                 "last_computed_at": now,
             }
             rows.append(row)
@@ -137,3 +143,15 @@ class BotRuntimeSnapshotService:
             runtime_id = str(row.get("runtime_id") or "").strip()
             if runtime_id and runtime_id not in active_ids:
                 self._supabase.delete("bot_runtime_snapshots", filters={"runtime_id": runtime_id})
+
+    def _json_ready_payload(self, value: Any) -> Any:
+        if isinstance(value, datetime):
+            resolved = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+            return resolved.isoformat()
+        if isinstance(value, dict):
+            return {str(key): self._json_ready_payload(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._json_ready_payload(item) for item in value]
+        if isinstance(value, tuple):
+            return [self._json_ready_payload(item) for item in value]
+        return value
