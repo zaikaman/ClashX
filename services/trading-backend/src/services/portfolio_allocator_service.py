@@ -46,25 +46,25 @@ class PortfolioAllocatorService:
         risk_policy: dict[str, Any] | None,
         activate_on_create: bool,
     ) -> dict[str, Any]:
-        basket = self.supabase.insert(
-            "portfolio_baskets",
-            PortfolioBasketRecord.create(
-                owner_user_id=owner_user_id,
-                wallet_address=wallet_address,
-                name=name,
-                description=description,
-                status="active" if activate_on_create else "draft",
-                rebalance_mode=rebalance_mode,
-                rebalance_interval_minutes=rebalance_interval_minutes,
-                drift_threshold_pct=drift_threshold_pct,
-                target_notional_usd=target_notional_usd,
-            ).to_row(),
-        )[0]
+        basket = PortfolioBasketRecord.create(
+            owner_user_id=owner_user_id,
+            wallet_address=wallet_address,
+            name=name,
+            description=description,
+            status="active" if activate_on_create else "draft",
+            rebalance_mode=rebalance_mode,
+            rebalance_interval_minutes=rebalance_interval_minutes,
+            drift_threshold_pct=drift_threshold_pct,
+            target_notional_usd=target_notional_usd,
+        ).to_row()
+        member_rows = self._build_member_rows(basket=basket, members=members, existing_members_by_runtime={})
+        if activate_on_create:
+            self.auth_service.require_active_authorization(None, wallet_address)
+        basket = self.supabase.insert("portfolio_baskets", basket)[0]
         self.supabase.insert(
             "portfolio_risk_policies",
             self._build_policy_record(portfolio_basket_id=basket["id"], risk_policy=risk_policy).to_row(),
         )
-        member_rows = self._build_member_rows(basket=basket, members=members, existing_members_by_runtime={})
         self.supabase.insert("portfolio_allocation_members", member_rows)
         self._record_rebalance_event(
             portfolio_basket_id=basket["id"],
@@ -427,6 +427,8 @@ class PortfolioAllocatorService:
             definition = definition_map.get(str(runtime["bot_definition_id"]))
             if definition is None or definition["visibility"] not in {"public", "unlisted"}:
                 raise ValueError("Portfolio members must reference public or unlisted bots")
+            if str(runtime.get("wallet_address") or "") == str(basket.get("wallet_address") or ""):
+                raise ValueError("You cannot add your own runtime to a portfolio basket")
             target_notional = round(float(basket["target_notional_usd"]) * (float(spec["target_weight_pct"]) / 100.0), 4)
             target_scale_bps = self.portfolio_risk_service.resolve_target_scale_bps(
                 target_notional_usd=target_notional,
