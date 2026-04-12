@@ -239,7 +239,7 @@ export default function CopyPage() {
   const [editingPortfolioId, setEditingPortfolioId] = useState<string | null>(null);
   const [savingPortfolio, setSavingPortfolio] = useState(false);
   const [busyPortfolioId, setBusyPortfolioId] = useState<string | null>(null);
-  const [busyPortfolioAction, setBusyPortfolioAction] = useState<"rebalance" | "kill" | "resume" | null>(null);
+  const [busyPortfolioAction, setBusyPortfolioAction] = useState<"rebalance" | "kill" | "resume" | "delete" | null>(null);
 
   const loadManagementData = useCallback(
     async (silent = false) => {
@@ -530,6 +530,41 @@ export default function CopyPage() {
     }
   }
 
+  async function deletePortfolio(portfolioId: string) {
+    if (!walletAddress) {
+      return;
+    }
+
+    setBusyPortfolioId(portfolioId);
+    setBusyPortfolioAction("delete");
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/portfolios/${portfolioId}?wallet_address=${encodeURIComponent(walletAddress)}`,
+        {
+          method: "DELETE",
+          headers: await getAuthHeaders(),
+        },
+      );
+      const payload = await parseJson<Record<string, never>>(response);
+      if (!response.ok) {
+        throw new Error("detail" in payload ? payload.detail ?? "Could not delete this basket." : "Could not delete this basket.");
+      }
+      setPortfolios((current) => current.filter((portfolio) => portfolio.id !== portfolioId));
+      if (editingPortfolioId === portfolioId) {
+        resetPortfolioEditor();
+      }
+      setLastSyncedAt(new Date().toISOString());
+      void loadManagementData(true);
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Could not delete this basket.");
+    } finally {
+      setBusyPortfolioId(null);
+      setBusyPortfolioAction(null);
+    }
+  }
+
   if (!ready) {
     return (
       <main className="shell grid gap-8 pb-10 md:pb-12">
@@ -656,6 +691,7 @@ export default function CopyPage() {
               }}
               onRebalance={() => void runPortfolioAction(portfolio.id, "rebalance")}
               onKillSwitch={(engaged) => void runPortfolioAction(portfolio.id, engaged ? "kill" : "resume")}
+              onDelete={() => void deletePortfolio(portfolio.id)}
             />
           ))
         )}

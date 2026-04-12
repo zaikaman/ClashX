@@ -227,6 +227,23 @@ class PortfolioAllocatorService:
         )
         return self.get_portfolio(portfolio_id=basket["id"], wallet_address=basket["wallet_address"])
 
+    async def delete_portfolio(self, *, portfolio_id: str, wallet_address: str | None) -> None:
+        basket = self._require_basket(portfolio_id=portfolio_id, wallet_address=wallet_address)
+        members = self.supabase.select("portfolio_allocation_members", filters={"portfolio_basket_id": basket["id"]})
+        relationships = self.supabase.select("bot_copy_relationships", filters={"portfolio_basket_id": basket["id"]})
+        await self._pause_member_relationships(members)
+        if relationships:
+            self.supabase.delete("bot_copy_relationships", filters={"id": ("in", [str(row["id"]) for row in relationships])})
+        self.supabase.delete("portfolio_rebalance_events", filters={"portfolio_basket_id": basket["id"]})
+        self.supabase.delete("portfolio_allocation_members", filters={"portfolio_basket_id": basket["id"]})
+        self.supabase.delete("portfolio_risk_policies", filters={"portfolio_basket_id": basket["id"]})
+        self.supabase.delete("portfolio_baskets", filters={"id": basket["id"]})
+        await broadcaster.publish(
+            channel=f"user:{basket['owner_user_id']}",
+            event="portfolio.deleted",
+            payload={"portfolio_id": basket["id"]},
+        )
+
     def refresh_portfolio_metrics(self, *, portfolio_id: str) -> dict[str, Any]:
         detail = self.get_portfolio(portfolio_id=portfolio_id)
         self.supabase.update(

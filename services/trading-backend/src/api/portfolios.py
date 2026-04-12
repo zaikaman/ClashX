@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any as Session
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 
 from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authenticated_user, resolve_app_user_id
@@ -251,3 +251,22 @@ async def set_portfolio_kill_switch(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return PortfolioResponse.model_validate(result)
+
+
+@router.delete("/{portfolio_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_portfolio(
+    portfolio_id: str,
+    wallet_address: str = Query(min_length=8),
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> Response:
+    del db
+    ensure_wallet_owned(user, wallet_address)
+    try:
+        await portfolio_allocator_service.delete_portfolio(
+            portfolio_id=portfolio_id,
+            wallet_address=wallet_address,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

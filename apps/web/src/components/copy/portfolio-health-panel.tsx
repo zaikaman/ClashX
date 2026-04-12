@@ -1,13 +1,16 @@
 "use client";
 
+import { useState } from "react";
+
 import type { PortfolioBasket } from "@/lib/copy-portfolios";
 
 type PortfolioHealthPanelProps = {
   portfolio: PortfolioBasket;
-  busyAction?: "rebalance" | "kill" | "resume" | null;
+  busyAction?: "rebalance" | "kill" | "resume" | "delete" | null;
   onEdit: () => void;
   onRebalance: () => void;
   onKillSwitch: (engaged: boolean) => void;
+  onDelete: () => void;
 };
 
 function toneClasses(health: string) {
@@ -29,7 +32,9 @@ export function PortfolioHealthPanel({
   onEdit,
   onRebalance,
   onKillSwitch,
+  onDelete,
 }: PortfolioHealthPanelProps) {
+  const [deleteArmed, setDeleteArmed] = useState(false);
   const killSwitchEngaged = portfolio.status === "killed";
 
   return (
@@ -76,36 +81,76 @@ export function PortfolioHealthPanel({
         </article>
       </div>
 
-      <div className="flex flex-col items-start gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-        <button
-          type="button"
-          onClick={onEdit}
-          className="inline-flex min-h-11 self-start items-center justify-center rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-neutral-50 hover:text-neutral-50"
-        >
-          Edit mix
-        </button>
-        <button
-          type="button"
-          onClick={onRebalance}
-          disabled={busyAction !== null}
-          className="inline-flex min-h-11 self-start items-center justify-center rounded-full bg-[#dce85d] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d] disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {busyAction === "rebalance" ? "Rebalancing..." : "Rebalance now"}
-        </button>
-        <button
-          type="button"
-          onClick={() => onKillSwitch(!killSwitchEngaged)}
-          disabled={busyAction !== null}
-          className="inline-flex min-h-11 self-start items-center justify-center rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#ff8a9b] hover:text-[#ff8a9b] disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {killSwitchEngaged
-            ? busyAction === "resume"
-              ? "Restarting..."
-              : "Release kill switch"
-            : busyAction === "kill"
-              ? "Cutting risk..."
-              : "Trigger kill switch"}
-        </button>
+      <div className="grid gap-3">
+        <div className="flex flex-col items-start gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+          <button
+            type="button"
+            onClick={onEdit}
+            disabled={busyAction !== null}
+            className="inline-flex min-h-11 self-start items-center justify-center rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-neutral-50 hover:text-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Edit mix
+          </button>
+          <button
+            type="button"
+            onClick={onRebalance}
+            disabled={busyAction !== null}
+            className="inline-flex min-h-11 self-start items-center justify-center rounded-full bg-[#dce85d] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busyAction === "rebalance" ? "Rebalancing..." : "Rebalance now"}
+          </button>
+          <button
+            type="button"
+            onClick={() => onKillSwitch(!killSwitchEngaged)}
+            disabled={busyAction !== null}
+            className="inline-flex min-h-11 self-start items-center justify-center rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#ff8a9b] hover:text-[#ff8a9b] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {killSwitchEngaged
+              ? busyAction === "resume"
+                ? "Restarting..."
+                : "Release kill switch"
+              : busyAction === "kill"
+                ? "Cutting risk..."
+                : "Trigger kill switch"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setDeleteArmed((current) => !current)}
+            disabled={busyAction !== null}
+            className="inline-flex min-h-11 self-start items-center justify-center rounded-full border border-[#ff8a9b]/30 px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#ffb3bf] transition hover:border-[#ff8a9b] hover:text-[#ffd0d7] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {deleteArmed ? "Hide delete" : "Delete basket"}
+          </button>
+        </div>
+
+        {deleteArmed ? (
+          <article className="grid gap-3 rounded-[1.5rem] border border-[#ff8a9b]/30 bg-[#ff8a9b]/10 p-4 lg:grid-cols-[1fr_auto] lg:items-center">
+            <div className="grid gap-1">
+              <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#ffc0c9]">Permanent delete</span>
+              <p className="text-sm leading-6 text-[#ffd3da]">
+                Remove this basket and stop any portfolio-managed follows attached to it.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={onDelete}
+                disabled={busyAction !== null}
+                className="inline-flex min-h-11 items-center justify-center rounded-full bg-[#ff8a9b] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#1f060a] transition hover:bg-[#ff9dad] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {busyAction === "delete" ? "Deleting..." : "Confirm delete"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeleteArmed(false)}
+                disabled={busyAction !== null}
+                className="inline-flex min-h-11 items-center justify-center rounded-full border border-[#ff8a9b]/30 px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#ffc0c9] transition hover:border-[#ff8a9b] hover:text-[#ffd0d7] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </article>
+        ) : null}
       </div>
 
       {portfolio.kill_switch_reason ? (
