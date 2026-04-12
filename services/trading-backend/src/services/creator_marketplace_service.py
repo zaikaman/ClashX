@@ -391,7 +391,7 @@ class CreatorMarketplaceService:
             "follower_count": follower_count,
             "featured_bot_count": 0,
             "marketplace_reach_score": marketplace_reach_score,
-            "bots": self._normalize_creator_bot_summaries(base_profile.get("bots")),
+            "bots": self._normalize_creator_marketplace_rows(creator_rows),
             "featured_bots": [],
         }
 
@@ -518,8 +518,99 @@ class CreatorMarketplaceService:
 
     def _normalize_creator_profile_payload(self, creator: dict[str, Any]) -> dict[str, Any]:
         normalized = dict(creator)
-        normalized["bots"] = self._normalize_creator_bot_summaries(normalized.get("bots"))
+        normalized["bots"] = self._normalize_creator_marketplace_rows(normalized.get("bots"))
+        normalized["featured_bots"] = self._normalize_creator_marketplace_rows(normalized.get("featured_bots"))
         return normalized
+
+    def _creator_profile_payload_is_complete(self, payload: dict[str, Any]) -> bool:
+        bots = payload.get("bots")
+        if not isinstance(bots, list):
+            return False
+        for bot in bots:
+            if not isinstance(bot, dict):
+                return False
+            required_fields = (
+                "runtime_id",
+                "bot_definition_id",
+                "bot_name",
+                "strategy_type",
+                "authoring_mode",
+                "rank",
+                "pnl_total",
+                "pnl_unrealized",
+                "win_streak",
+                "drawdown",
+                "captured_at",
+                "trust",
+                "drift",
+                "passport",
+                "creator",
+                "copy_stats",
+                "publishing",
+            )
+            if any(field not in bot for field in required_fields):
+                return False
+        return True
+
+    def _normalize_creator_marketplace_rows(self, bots: Any) -> list[dict[str, Any]]:
+        if not isinstance(bots, list):
+            return []
+
+        normalized: list[dict[str, Any]] = []
+        for bot in bots:
+            if not isinstance(bot, dict):
+                continue
+
+            trust = bot.get("trust") if isinstance(bot.get("trust"), dict) else {}
+            drift = bot.get("drift") if isinstance(bot.get("drift"), dict) else {}
+            passport = bot.get("passport") if isinstance(bot.get("passport"), dict) else {}
+            creator = bot.get("creator") if isinstance(bot.get("creator"), dict) else {}
+            copy_stats = bot.get("copy_stats") if isinstance(bot.get("copy_stats"), dict) else {}
+            publishing = bot.get("publishing") if isinstance(bot.get("publishing"), dict) else {}
+            normalized.append(
+                {
+                    "runtime_id": str(bot.get("runtime_id") or ""),
+                    "bot_definition_id": str(bot.get("bot_definition_id") or ""),
+                    "bot_name": str(bot.get("bot_name") or ""),
+                    "strategy_type": str(bot.get("strategy_type") or ""),
+                    "authoring_mode": str(bot.get("authoring_mode") or ""),
+                    "rank": int(bot["rank"]) if bot.get("rank") is not None else 0,
+                    "pnl_total": float(bot.get("pnl_total") or 0.0),
+                    "pnl_unrealized": float(bot.get("pnl_unrealized") or 0.0),
+                    "win_streak": int(bot.get("win_streak") or 0),
+                    "drawdown": float(bot.get("drawdown") or 0.0),
+                    "captured_at": bot.get("captured_at") or "",
+                    "trust": trust,
+                    "drift": drift,
+                    "passport": passport,
+                    "creator": creator,
+                    "copy_stats": {
+                        "mirror_count": int(copy_stats.get("mirror_count") or 0),
+                        "active_mirror_count": int(copy_stats.get("active_mirror_count") or 0),
+                        "clone_count": int(copy_stats.get("clone_count") or 0),
+                    },
+                    "publishing": {
+                        "visibility": str(publishing.get("visibility") or "public"),
+                        "access_mode": str(publishing.get("access_mode") or "public"),
+                        "publish_state": str(publishing.get("publish_state") or "published"),
+                        "hero_headline": str(publishing.get("hero_headline") or ""),
+                        "access_note": str(publishing.get("access_note") or ""),
+                        "featured_collection_title": publishing.get("featured_collection_title"),
+                        "featured_rank": int(publishing.get("featured_rank") or 0),
+                        "is_featured": bool(publishing.get("is_featured") or False),
+                        "invite_count": int(publishing.get("invite_count") or 0),
+                    },
+                }
+            )
+
+        return sorted(
+            normalized,
+            key=lambda item: (
+                item["rank"] if item["rank"] > 0 else 9999,
+                -int(((item.get("trust") or {}).get("trust_score") or 0)),
+                item["bot_name"],
+            ),
+        )
 
     def _normalize_creator_bot_summaries(self, bots: Any) -> list[dict[str, Any]]:
         if not isinstance(bots, list):
@@ -629,7 +720,8 @@ class CreatorMarketplaceService:
         )
         payload = (snapshot or {}).get("profile_json")
         if isinstance(payload, dict) and payload:
-            return payload
+            if self._creator_profile_payload_is_complete(payload):
+                return self._normalize_creator_profile_payload(payload)
         return await self._build_creator_profile_live(creator_id=creator_id)
 
     def get_publishing_settings(self, *, bot_id: str, wallet_address: str) -> dict[str, Any]:
