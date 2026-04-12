@@ -292,3 +292,104 @@ def test_generate_draft_accepts_explicit_routes_for_multi_branch_strategies() ->
     assert result["draft"]["routes"][1]["actions"][0]["type"] == "open_long"
     assert result["draft"]["conditions"][0]["type"] == "rsi_above"
     assert result["draft"]["actions"][0]["type"] == "open_short"
+
+
+def test_generate_draft_accepts_openai_function_call_output_items() -> None:
+    function_call_payload = {
+        "output": [
+            {
+                "type": "function_call",
+                "name": "apply_builder_draft",
+                "arguments": (
+                    "{"
+                    '"reply":"Built ETH RSI routes.",'
+                    '"name":"ETH RSI Draft",'
+                    '"description":"RSI threshold branches.",'
+                    '"marketSelection":"selected",'
+                    '"markets":["ETH"],'
+                    '"routes":['
+                    "{"
+                    '"conditions":[{"type":"rsi_above","symbol":"ETH","timeframe":"15m","period":14,"value":70}],'
+                    '"actions":[{"type":"open_short","symbol":"ETH","size_usd":150,"leverage":3}]'
+                    "},"
+                    "{"
+                    '"conditions":[{"type":"rsi_below","symbol":"ETH","timeframe":"15m","period":14,"value":30}],'
+                    '"actions":[{"type":"open_long","symbol":"ETH","size_usd":150,"leverage":3}]'
+                    "}"
+                    "]"
+                    "}"
+                ),
+            }
+        ]
+    }
+    service, _ = _service_with(
+        settings=_FakeSettings(
+            openai_api_key="open-key",
+            openai_base_url="https://example.openai.azure.com/openai/v1",
+            openai_model="gpt-5-nano",
+        ),
+        responses=[_FakeResponse(200, function_call_payload)],
+    )
+
+    result = asyncio.run(
+        service.generate_draft(
+            messages=[{"role": "user", "content": "Build the ETH RSI strategy."}],
+            available_markets=["BTC", "ETH"],
+            current_draft=None,
+        )
+    )
+
+    assert result["draft"]["markets"] == ["ETH"]
+    assert len(result["draft"]["routes"]) == 2
+    assert result["draft"]["actions"][0]["type"] == "open_short"
+
+
+def test_generate_draft_accepts_gemini_function_call_parts() -> None:
+    gemini_payload = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "name": "apply_builder_draft",
+                                "args": {
+                                    "reply": "Built BTC route draft.",
+                                    "name": "BTC Routed Draft",
+                                    "description": "Structured route draft.",
+                                    "marketSelection": "selected",
+                                    "markets": ["BTC"],
+                                    "routes": [
+                                        {
+                                            "conditions": [{"type": "rsi_below", "symbol": "BTC", "timeframe": "15m", "period": 14, "value": 30}],
+                                            "actions": [{"type": "open_long", "symbol": "BTC", "size_usd": 150, "leverage": 3}],
+                                        }
+                                    ],
+                                },
+                            }
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    service, _ = _service_with(
+        settings=_FakeSettings(
+            gemini_api_key="gem-key",
+            gemini_base_url="https://v98store.com/v1beta",
+            gemini_model="gemini-3-flash-preview",
+        ),
+        responses=[_FakeResponse(200, gemini_payload)],
+    )
+
+    result = asyncio.run(
+        service.generate_draft(
+            messages=[{"role": "user", "content": "Build the BTC RSI strategy."}],
+            available_markets=["BTC", "ETH"],
+            current_draft=None,
+        )
+    )
+
+    assert result["draft"]["markets"] == ["BTC"]
+    assert len(result["draft"]["routes"]) == 1
+    assert result["draft"]["conditions"][0]["type"] == "rsi_below"

@@ -13,12 +13,15 @@ class _FakeJobService:
     running_jobs: list[str] = field(default_factory=list)
     completed_jobs: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     failed_jobs: list[tuple[str, str]] = field(default_factory=list)
+    fail_complete: bool = False
 
     def mark_running(self, *, job_id: str) -> dict[str, Any] | None:
         self.running_jobs.append(job_id)
         return {"id": job_id, "status": "running"}
 
     def mark_completed(self, *, job_id: str, result_payload: dict[str, Any]) -> dict[str, Any] | None:
+        if self.fail_complete:
+            raise RuntimeError("Could not persist completed AI job.")
         self.completed_jobs.append((job_id, result_payload))
         return {"id": job_id, "status": "completed"}
 
@@ -139,3 +142,21 @@ def test_copilot_job_runner_marks_failed() -> None:
     assert jobs.running_jobs == ["job-2"]
     assert jobs.completed_jobs == []
     assert jobs.failed_jobs == [("job-2", "OpenAI request timed out.")]
+
+
+def test_builder_ai_job_runner_marks_failed_when_completion_persistence_breaks() -> None:
+    jobs = _FakeJobService(fail_complete=True)
+    runner = AiJobRunnerService(job_service=jobs, builder_ai_service=_FakeBuilderAiService())
+
+    asyncio.run(
+        runner._run_builder_ai_chat_job(
+            job_id="job-3",
+            messages=[{"role": "user", "content": "Build BTC"}],
+            available_markets=["BTC"],
+            current_draft=None,
+        )
+    )
+
+    assert jobs.running_jobs == ["job-3"]
+    assert jobs.completed_jobs == []
+    assert jobs.failed_jobs == [("job-3", "Could not persist completed AI job.")]

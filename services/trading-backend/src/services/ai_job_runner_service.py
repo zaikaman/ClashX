@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Sequence
 from typing import Any
 
@@ -8,6 +9,8 @@ from src.api.auth import AuthenticatedUser
 from src.services.ai_job_service import AiJobService
 from src.services.builder_ai_service import BuilderAiService
 from src.services.copilot_conversation_service import CopilotConversationService
+
+logger = logging.getLogger(__name__)
 
 
 class AiJobRunnerService:
@@ -82,9 +85,14 @@ class AiJobRunnerService:
                 current_draft=current_draft,
             )
         except Exception as exc:
+            logger.exception("Builder AI job %s failed", job_id)
             self._job_service.mark_failed(job_id=job_id, error_detail=str(exc) or "Builder AI job failed.")
             return
-        self._job_service.mark_completed(job_id=job_id, result_payload=result)
+        try:
+            self._job_service.mark_completed(job_id=job_id, result_payload=result)
+        except Exception as exc:
+            logger.exception("Builder AI job %s could not be marked completed", job_id)
+            self._job_service.mark_failed(job_id=job_id, error_detail=str(exc) or "Builder AI job failed.")
 
     async def _run_copilot_chat_job(
         self,
@@ -104,6 +112,11 @@ class AiJobRunnerService:
                 wallet_address=wallet_address,
             )
         except Exception as exc:
+            logger.exception("Copilot job %s failed", job_id)
             self._job_service.mark_failed(job_id=job_id, error_detail=str(exc) or "Copilot job failed.")
             return
-        self._job_service.mark_completed(job_id=job_id, result_payload=result)
+        try:
+            self._job_service.mark_completed(job_id=job_id, result_payload=result)
+        except Exception as exc:
+            logger.exception("Copilot job %s could not be marked completed", job_id)
+            self._job_service.mark_failed(job_id=job_id, error_detail=str(exc) or "Copilot job failed.")

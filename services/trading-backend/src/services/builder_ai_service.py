@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -63,6 +64,8 @@ ACTION_OPTIONS = [
     "cancel_all_orders",
 ]
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class _ProviderAttempt:
@@ -101,6 +104,7 @@ class BuilderAiService:
                 parsed = self._normalize_tool_payload(self._extract_json(raw_text))
                 return self._sanitize_draft(parsed, available_markets)
             except RuntimeError as exc:
+                logger.warning("Builder AI provider attempt failed: %s", exc)
                 errors.append(f"{attempt.name}: {exc}")
         raise RuntimeError("; ".join(errors))
 
@@ -287,10 +291,33 @@ class BuilderAiService:
             for item in output:
                 if not isinstance(item, dict):
                     continue
+                if item.get("type") == "function_call" and item.get("name") and item.get("arguments") is not None:
+                    return json.dumps(
+                        {
+                            "function": {
+                                "name": item.get("name"),
+                                "arguments": item.get("arguments"),
+                            }
+                        }
+                    )
                 content = item.get("content")
                 if not isinstance(content, list):
                     continue
                 for part in content:
+                    if (
+                        isinstance(part, dict)
+                        and part.get("type") == "function_call"
+                        and part.get("name")
+                        and part.get("arguments") is not None
+                    ):
+                        return json.dumps(
+                            {
+                                "function": {
+                                    "name": part.get("name"),
+                                    "arguments": part.get("arguments"),
+                                }
+                            }
+                        )
                     if isinstance(part, dict) and isinstance(part.get("text"), str):
                         chunks.append(part["text"])
             if chunks:
@@ -314,6 +341,17 @@ class BuilderAiService:
             if not isinstance(parts, list):
                 continue
             for part in parts:
+                if isinstance(part, dict) and isinstance(part.get("functionCall"), dict):
+                    function_call = part["functionCall"]
+                    if function_call.get("name"):
+                        return json.dumps(
+                            {
+                                "function": {
+                                    "name": function_call.get("name"),
+                                    "arguments": function_call.get("args", {}),
+                                }
+                            }
+                        )
                 if isinstance(part, dict) and isinstance(part.get("text"), str):
                     chunks.append(part["text"])
         return "\n".join(chunks).strip()
