@@ -53,11 +53,50 @@ declare global {
   }
 }
 
-function getProvider(): SolanaProvider | null {
+function listProviders(): SolanaProvider[] {
   if (typeof window === "undefined") {
+    return [];
+  }
+
+  const injectedProviders = [
+    window.phantom?.solana,
+    window.backpack?.solana,
+    window.solflare,
+    window.solana,
+  ].filter((provider): provider is SolanaProvider => Boolean(provider));
+
+  const seen = new Set<SolanaProvider>();
+  return injectedProviders.filter((provider) => {
+    if (seen.has(provider)) {
+      return false;
+    }
+    seen.add(provider);
+    return true;
+  });
+}
+
+function getProvider(preferredAddress?: string | null): SolanaProvider | null {
+  const providers = listProviders();
+  if (providers.length === 0) {
     return null;
   }
-  return window.phantom?.solana ?? window.backpack?.solana ?? window.solflare ?? window.solana ?? null;
+
+  const normalizedPreferredAddress = preferredAddress?.trim();
+  if (normalizedPreferredAddress) {
+    const matchingProvider = providers.find(
+      (provider) => provider.publicKey?.toString() === normalizedPreferredAddress,
+    );
+    if (matchingProvider) {
+      return matchingProvider;
+    }
+  }
+
+  const connectedProviders = providers.filter((provider) => Boolean(provider.publicKey?.toString()));
+  if (connectedProviders.length === 1) {
+    return connectedProviders[0];
+  }
+
+  return providers[0] ?? null;
 }
 
 function getProviderLabel(provider: SolanaProvider | null): string {
@@ -120,7 +159,7 @@ export function AgentAuthorizationPanel({
 
   useEffect(() => {
     const refreshProviderState = () => {
-      const provider = getProvider();
+      const provider = getProvider(authenticatedWallet);
       setProviderLabel(getProviderLabel(provider));
       setConnectedWallet(provider?.publicKey?.toString() ?? null);
     };
@@ -143,7 +182,7 @@ export function AgentAuthorizationPanel({
       window.removeEventListener("online", refreshProviderState);
       document.removeEventListener("visibilitychange", startPolling);
     };
-  }, []);
+  }, [authenticatedWallet]);
 
   useEffect(() => {
     if (!authenticated || !walletAddress) {
@@ -164,7 +203,7 @@ export function AgentAuthorizationPanel({
 
   const runtimeReady = authorization?.status === "active";
   const signingWalletMatches = !authenticatedWallet || !connectedWallet || authenticatedWallet === connectedWallet;
-  const needsBrowserSigner = authenticated && !runtimeReady && !getProvider();
+  const needsBrowserSigner = authenticated && !runtimeReady && !getProvider(authenticatedWallet);
 
   async function connectWallet() {
     if (!authenticated) {
@@ -173,7 +212,7 @@ export function AgentAuthorizationPanel({
       setStatus("error");
       return;
     }
-    const provider = getProvider();
+    const provider = getProvider(authenticatedWallet);
     if (!provider) {
       setError("Install a Solana wallet like Phantom or Solflare to authorize delegated bot execution.");
       setStatus("error");
@@ -222,7 +261,7 @@ export function AgentAuthorizationPanel({
       setStatus("error");
       return;
     }
-    const provider = getProvider();
+    const provider = getProvider(authenticatedWallet);
     if (!provider) {
       setError("Install a Solana wallet like Phantom or Solflare to authorize delegated bot execution.");
       setStatus("error");
