@@ -16,6 +16,11 @@ if (existsSync(workspaceEnvPath)) {
 
 const nextBin = path.resolve(appDir, "node_modules/next/dist/bin/next");
 const [, , ...nextArgs] = process.argv;
+const [command] = nextArgs;
+
+if (command === "dev" && !process.env.NEXT_DEV_POLL_INTERVAL) {
+  process.env.NEXT_DEV_POLL_INTERVAL = "300";
+}
 
 const child = spawn(process.execPath, [nextBin, ...nextArgs], {
   cwd: appDir,

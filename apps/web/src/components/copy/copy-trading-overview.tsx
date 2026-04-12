@@ -343,40 +343,53 @@ function FollowCard({
   onStopFollow: (relationshipId: string) => void;
 }) {
   const scaleChanged = scaleDraft !== follow.scale_bps;
+  const statusTone =
+    follow.status === "active"
+      ? "border-[#74b97f]/20 bg-[#74b97f]/10 text-[#74b97f]"
+      : "border-[rgba(255,255,255,0.08)] bg-[#121416] text-neutral-400";
 
   return (
-    <article className="grid gap-5 rounded-[1.65rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-5">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="grid gap-2">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">{follow.source_bot_name}</span>
-            <span className={`rounded-full px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.16em] ${follow.status === "active" ? "bg-[#74b97f]/10 text-[#74b97f]" : "bg-[#16181a] text-neutral-400"}`}>
+    <article className="grid gap-5 rounded-[1.8rem] border border-[rgba(255,255,255,0.06)] bg-[linear-gradient(180deg,#101214,#0b0d0e)] p-5 md:p-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="grid gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-mono text-[clamp(1.4rem,2vw,2rem)] font-bold uppercase tracking-tight text-neutral-50">
+              {follow.source_bot_name}
+            </span>
+            <span className={`rounded-full border px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.16em] ${statusTone}`}>
               {follow.status}
             </span>
             {follow.source_rank ? (
-              <span className="rounded-full border border-[rgba(255,255,255,0.08)] bg-[#16181a] px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-300">
+              <span className="rounded-full border border-[rgba(255,255,255,0.08)] bg-[#121416] px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-300">
                 Rank #{follow.source_rank}
               </span>
             ) : null}
           </div>
-          <p className="text-sm leading-7 text-neutral-400">
+          <p className="text-sm leading-6 text-neutral-400">
             {follow.creator_display_name || "Unknown creator"} · Trust {follow.source_trust_score} · Drawdown {follow.source_drawdown_pct.toFixed(1)}% · Last sync{" "}
             {follow.last_execution_at ? new Date(follow.last_execution_at).toLocaleString() : "Waiting for first trade"}
           </p>
         </div>
 
-        <div className="grid gap-1 text-sm text-neutral-400 lg:text-right">
-          <span>{formatUsd(follow.copied_open_notional_usd)} open copied exposure</span>
-          <span className={toneForPnl(follow.copied_unrealized_pnl_usd)}>{formatSignedUsd(follow.copied_unrealized_pnl_usd)}</span>
+        <div className="grid min-w-[12rem] gap-1 rounded-[1.35rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] px-4 py-3 text-right">
+          <span className="text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Open copied exposure</span>
+          <span className="text-lg text-neutral-300">{formatUsd(follow.copied_open_notional_usd)}</span>
+          <span className={`font-mono text-2xl font-bold tracking-tight ${toneForPnl(follow.copied_unrealized_pnl_usd)}`}>
+            {formatSignedUsd(follow.copied_unrealized_pnl_usd)}
+          </span>
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[0.8fr_1.2fr]">
-        <div className="grid gap-3 rounded-[1.35rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4">
-          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Copy size</span>
-          <div className="flex items-end justify-between gap-3">
-            <span className="font-mono text-3xl font-bold uppercase tracking-tight text-neutral-50">{formatScale(scaleDraft)}</span>
-            <span className="text-xs text-neutral-500">{follow.copied_position_count} open copied positions</span>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(20rem,0.9fr)]">
+        <section className="grid gap-4 rounded-[1.6rem] border border-[rgba(255,255,255,0.06)] bg-[#17191b] p-4 md:p-5">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div className="grid gap-1">
+              <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Copy size</span>
+              <span className="font-mono text-4xl font-bold uppercase tracking-tight text-neutral-50">{formatScale(scaleDraft)}</span>
+            </div>
+            <span className="rounded-full border border-[rgba(255,255,255,0.08)] bg-[#101214] px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">
+              {follow.copied_position_count} open positions
+            </span>
           </div>
           <input
             type="range"
@@ -387,24 +400,25 @@ function FollowCard({
             onChange={(event) => onScaleChange(follow.id, Number(event.target.value))}
             className="accent-[#dce85d]"
           />
-          <div className="flex flex-wrap items-center justify-between gap-3 text-[0.58rem] uppercase tracking-[0.16em] text-neutral-500">
+          <div className="flex items-center justify-between text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">
             <span>Min 5%</span>
             <span>Max 300%</span>
           </div>
-        </div>
-
-        <div className="grid gap-3">
           <div className="grid gap-3 sm:grid-cols-3">
-            <DataStack label="Trader health" value={follow.source_health || "Unknown"} />
-            <DataStack label="Sync status" value={follow.source_drift_status || "Unknown"} />
-            <DataStack label="Latest symbol" value={follow.last_execution_symbol || "None yet"} />
+            <MetricStack label="Trader health" value={follow.source_health || "Unknown"} />
+            <MetricStack label="Sync status" value={follow.source_drift_status || "Unknown"} />
+            <MetricStack label="Latest symbol" value={follow.last_execution_symbol || "None yet"} />
           </div>
-          <div className="flex flex-wrap gap-2">
+        </section>
+
+        <section className="grid gap-3 rounded-[1.6rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] p-4 md:p-5">
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Actions</span>
+          <div className="grid gap-2">
             <button
               type="button"
               onClick={() => onSaveScale(follow.id, scaleDraft)}
               disabled={saving || !scaleChanged}
-              className="rounded-full bg-[#dce85d] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-12 items-center justify-center rounded-[1rem] bg-[#8c9440] px-4 text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-[#090a0a] transition hover:bg-[#a3ad4b] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {saving && scaleChanged ? "Saving..." : scaleChanged ? "Save size" : "Size saved"}
             </button>
@@ -413,7 +427,7 @@ function FollowCard({
                 type="button"
                 onClick={() => onStopFollow(follow.id)}
                 disabled={saving}
-                className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#ff8a9b] hover:text-[#ff8a9b] disabled:opacity-50"
+                className="inline-flex h-12 items-center justify-center rounded-[1rem] border border-[rgba(255,255,255,0.1)] bg-[#0f1113] px-4 text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-neutral-300 transition hover:border-[#ff8a9b] hover:text-[#ff8a9b] disabled:opacity-50"
               >
                 {saving ? "Pausing..." : "Pause copying"}
               </button>
@@ -422,21 +436,30 @@ function FollowCard({
                 type="button"
                 onClick={() => onResumeFollow(follow.id, scaleDraft)}
                 disabled={saving}
-                className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#74b97f] hover:text-[#74b97f] disabled:opacity-50"
+                className="inline-flex h-12 items-center justify-center rounded-[1rem] border border-[rgba(255,255,255,0.1)] bg-[#0f1113] px-4 text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-neutral-300 transition hover:border-[#74b97f] hover:text-[#74b97f] disabled:opacity-50"
               >
                 {saving ? "Resuming..." : "Resume copying"}
               </button>
             )}
             <Link
               href={`/marketplace/${follow.source_runtime_id}`}
-              className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-neutral-50 hover:text-neutral-50"
+              className="inline-flex h-12 items-center justify-center rounded-[1rem] border border-[rgba(255,255,255,0.1)] bg-[#0f1113] px-4 text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-neutral-300 transition hover:border-neutral-50 hover:text-neutral-50"
             >
               View profile
             </Link>
           </div>
-        </div>
+        </section>
       </div>
     </article>
+  );
+}
+
+function MetricStack({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid gap-1 rounded-[1.1rem] border border-[rgba(255,255,255,0.05)] bg-[#101214] px-3 py-3">
+      <span className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">{label}</span>
+      <span className="text-sm font-medium text-neutral-100">{value}</span>
+    </div>
   );
 }
 
