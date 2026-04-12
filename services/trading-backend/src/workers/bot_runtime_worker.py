@@ -412,6 +412,13 @@ class BotRuntimeWorker:
             return self._maybe_refresh_runtime_heartbeat(runtime, now=now)
 
         actions = evaluation.get("actions") or []
+        actions = self._prune_triggered_actions(
+            actions=actions,
+            runtime_policy=runtime_policy,
+            runtime_state=cycle_runtime_state,
+        )
+        if not actions:
+            return self._maybe_refresh_runtime_heartbeat(runtime, now=now)
         logger.debug(
             "Runtime %s triggered for bot %s on wallet %s with %d action(s)",
             runtime["id"],
@@ -1631,13 +1638,52 @@ class BotRuntimeWorker:
         runtime_policy: dict[str, Any],
         runtime_state: dict[str, Any],
     ) -> bool:
+        max_open_positions = max(1, int(runtime_policy.get("max_open_positions") or 1))
+        reserved_symbols = self._reserved_runtime_symbols(runtime_state=runtime_state)
+        if len(reserved_symbols) < max_open_positions:
+            return False
+
         declared_actions = self._rules.declared_actions(rules_json=rules_json)
         if not declared_actions:
             return False
-        if any(not self._is_entry_action(action) for action in declared_actions):
-            return False
 
+        has_entry_actions = False
+        for action in declared_actions:
+            if self._is_entry_action(action):
+                has_entry_actions = True
+                continue
+            if self._action_targets_reserved_symbol(action=action, reserved_symbols=reserved_symbols):
+                return False
+        return has_entry_actions
+
+    def _prune_triggered_actions(
+        self,
+        *,
+        actions: list[dict[str, Any]],
+        runtime_policy: dict[str, Any],
+        runtime_state: dict[str, Any],
+    ) -> list[dict[str, Any]]:
         max_open_positions = max(1, int(runtime_policy.get("max_open_positions") or 1))
+        reserved_symbols = self._reserved_runtime_symbols(runtime_state=runtime_state)
+        filtered_actions: list[dict[str, Any]] = []
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            symbol = self._normalize_symbol(action.get("symbol"))
+            if self._is_entry_action(action):
+                if not symbol or symbol in reserved_symbols or len(reserved_symbols) >= max_open_positions:
+                    continue
+                reserved_symbols.add(symbol)
+                filtered_actions.append(action)
+                continue
+            if self._is_position_management_action(action):
+                if not symbol or symbol not in reserved_symbols:
+                    continue
+            filtered_actions.append(action)
+        return filtered_actions
+
+    @staticmethod
+    def _reserved_runtime_symbols(*, runtime_state: dict[str, Any]) -> set[str]:
         managed_positions = runtime_state.get("managed_positions")
         if not isinstance(managed_positions, dict):
             managed_positions = {}
@@ -1651,7 +1697,22 @@ class BotRuntimeWorker:
             if isinstance(item, dict) and abs(float(item.get("amount") or 0.0)) > 0
         }
         reserved_symbols.update(str(symbol).strip().upper() for symbol in pending_entries if str(symbol).strip())
-        return len(reserved_symbols) >= max_open_positions
+        return reserved_symbols
+
+    @staticmethod
+    def _is_position_management_action(action: dict[str, Any]) -> bool:
+        action_type = str(action.get("type") or "")
+        if action_type in {"set_tpsl", "close_position"}:
+            return True
+        return action_type in ENTRY_ACTION_TYPES and BotRuntimeWorker._to_bool(action.get("reduce_only"), False)
+
+    def _action_targets_reserved_symbol(self, *, action: dict[str, Any], reserved_symbols: set[str]) -> bool:
+        if not self._is_position_management_action(action):
+            return False
+        symbol = self._normalize_symbol(action.get("symbol"))
+        if not symbol or symbol == "__BOT_MARKET_UNIVERSE__":
+            return True
+        return symbol in reserved_symbols
 
     @staticmethod
     def _is_entry_action(action: dict[str, Any]) -> bool:

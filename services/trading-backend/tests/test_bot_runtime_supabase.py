@@ -1030,6 +1030,87 @@ def test_runtime_worker_skips_market_evaluation_for_entry_only_bot_at_position_c
     assert fake_supabase.tables["bot_execution_events"] == []
 
 
+def test_runtime_worker_skips_market_evaluation_for_unrelated_entry_plus_tpsl_routes_at_position_capacity() -> None:
+    tables = _seed_tables()
+    tables["bot_definitions"][0]["rules_json"] = {
+        "conditions": [{"type": "price_below", "symbol": "ETH", "value": 100000}],
+        "actions": [
+            {"type": "open_long", "symbol": "ETH", "size_usd": 200, "leverage": 3},
+            {"type": "set_tpsl", "symbol": "ETH", "take_profit_pct": 2, "stop_loss_pct": 1},
+        ],
+    }
+    tables["bot_runtimes"][0]["risk_policy_json"]["max_open_positions"] = 1
+    tables["bot_runtimes"][0]["risk_policy_json"]["_runtime_state"] = {
+        "managed_positions": {
+            "BTC": {
+                "symbol": "BTC",
+                "amount": 0.005,
+                "side": "bid",
+                "entry_client_order_id": "entry-1",
+                "entry_price": 101000,
+                "opened_at": "2026-03-16T00:05:00+00:00",
+                "updated_at": "2026-03-16T00:05:00+00:00",
+            }
+        }
+    }
+
+    fake_supabase = FakeSupabaseRestClient(tables)
+    fake_pacifica = FakePacificaClient(
+        positions=[
+            {
+                "symbol": "BTC-PERP",
+                "amount": 0.005,
+                "side": "bid",
+                "entry_price": 101000,
+                "mark_price": 105000,
+                "created_at": "2026-03-16T00:05:00+00:00",
+                "updated_at": "2026-03-16T00:06:00+00:00",
+            }
+        ]
+    )
+    fake_indicator_context = FakeIndicatorContextService()
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+    worker._supabase = fake_supabase
+    worker._engine._supabase = fake_supabase
+    worker._auth = FakeAuthService()
+    worker._pacifica = fake_pacifica
+    worker._indicator_context = fake_indicator_context
+    worker._calculate_runtime_performance = _fake_runtime_performance  # type: ignore[method-assign]
+
+    asyncio.run(worker._process_runtime(None, fake_supabase.tables["bot_runtimes"][0]))
+
+    assert fake_pacifica.market_requests == 0
+    assert fake_indicator_context.load_requests == 0
+    assert fake_pacifica.orders == []
+    assert fake_supabase.tables["bot_execution_events"] == []
+
+
+def test_runtime_worker_prunes_triggered_actions_for_unmanaged_symbols_when_capacity_is_full() -> None:
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+
+    actions = worker._prune_triggered_actions(
+        actions=[
+            {"type": "open_short", "symbol": "XMR", "size_usd": 75, "leverage": 8},
+            {"type": "set_tpsl", "symbol": "XMR", "take_profit_pct": 1.5, "stop_loss_pct": 0.7},
+            {"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.5, "stop_loss_pct": 0.7},
+        ],
+        runtime_policy={"max_open_positions": 1},
+        runtime_state={
+            "managed_positions": {
+                "BTC": {
+                    "symbol": "BTC",
+                    "amount": 0.005,
+                    "side": "bid",
+                }
+            }
+        },
+    )
+
+    assert actions == [
+        {"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.5, "stop_loss_pct": 0.7},
+    ]
+
+
 def test_runtime_worker_deduplicates_identical_skip_events_within_recent_window() -> None:
     fake_supabase = FakeSupabaseRestClient(_seed_tables())
     worker = BotRuntimeWorker(poll_interval_seconds=0.01)
