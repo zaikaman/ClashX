@@ -29,6 +29,7 @@ import {
   BLANK_BUILDER_TEMPLATE_ID,
   BOT_MARKET_UNIVERSE_SYMBOL,
   buildGraphFromAiDraft,
+  buildRoutesFromGraph,
   BUILDER_STARTER_TEMPLATES,
   buildBlankGraph,
   buildDefaultGraph,
@@ -1750,7 +1751,8 @@ export function BuilderGraphStudio({
     });
   }
 
-  function buildCurrentAiDraftContext(): BuilderAiDraft {
+  function buildCurrentAiDraftContext(): BuilderAiDraft & { graph: PortableBuilderGraph } {
+    const editableGraph = buildEditableGraph(nodes, edges);
     return {
       name: name.trim(),
       description: description.trim(),
@@ -1758,6 +1760,8 @@ export function BuilderGraphStudio({
       markets: selectedMarketSymbols,
       conditions: route.conditions.map((condition) => ({ ...condition })),
       actions: route.actions.map((action) => ({ ...action })),
+      routes: buildRoutesFromGraph(nodes, edges),
+      graph: editableGraph,
     };
   }
 

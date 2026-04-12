@@ -221,3 +221,74 @@ def test_generate_draft_ignores_extra_json_after_first_object() -> None:
 
     assert result["draft"]["name"] == "BTC Breakout"
     assert result["draft"]["markets"] == ["BTC"]
+
+
+def test_system_prompt_describes_route_semantics_for_branching_strategies() -> None:
+    service, _ = _service_with(
+        settings=_FakeSettings(),
+        responses=[],
+    )
+
+    prompt = service._build_system_prompt(
+        available_markets=["BTC", "ETH", "SOL"],
+        current_draft={"name": "Existing bot"},
+    )
+
+    assert "use routes" in prompt
+    assert "If the user says long when X and short when Y, return two routes." in prompt
+    assert '"routes":' in prompt
+
+
+def test_generate_draft_accepts_explicit_routes_for_multi_branch_strategies() -> None:
+    routed_payload = {
+        "output_text": (
+            "{"
+            '"reply":"Built a two-route RSI mean reversion draft.",'
+            '"name":"ETH RSI Mean Reversion",'
+            '"description":"Trades overbought and oversold RSI extremes with separate branches.",'
+            '"marketSelection":"selected",'
+            '"markets":["ETH"],'
+            '"routes":['
+            "{"
+            '"name":"short-overbought",'
+            '"conditions":[{"type":"rsi_above","symbol":"ETH","timeframe":"15m","period":14,"value":70}],'
+            '"actions":['
+            '{"type":"open_short","symbol":"ETH","size_usd":150,"leverage":3},'
+            '{"type":"set_tpsl","symbol":"ETH","take_profit_pct":2,"stop_loss_pct":1}'
+            "]"
+            "},"
+            "{"
+            '"name":"long-oversold",'
+            '"conditions":[{"type":"rsi_below","symbol":"ETH","timeframe":"15m","period":14,"value":30}],'
+            '"actions":['
+            '{"type":"open_long","symbol":"ETH","size_usd":150,"leverage":3},'
+            '{"type":"set_tpsl","symbol":"ETH","take_profit_pct":2,"stop_loss_pct":1}'
+            "]"
+            "}"
+            "]"
+            "}"
+        ),
+    }
+    service, _ = _service_with(
+        settings=_FakeSettings(
+            openai_api_key="open-key",
+            openai_base_url="https://example.openai.azure.com/openai/v1",
+            openai_model="gpt-5-nano",
+        ),
+        responses=[_FakeResponse(200, routed_payload)],
+    )
+
+    result = asyncio.run(
+        service.generate_draft(
+            messages=[{"role": "user", "content": "Short ETH when RSI is above 70 and long when it is below 30."}],
+            available_markets=["BTC", "ETH"],
+            current_draft=None,
+        )
+    )
+
+    assert result["draft"]["markets"] == ["ETH"]
+    assert len(result["draft"]["routes"]) == 2
+    assert result["draft"]["routes"][0]["actions"][0]["type"] == "open_short"
+    assert result["draft"]["routes"][1]["actions"][0]["type"] == "open_long"
+    assert result["draft"]["conditions"][0]["type"] == "rsi_above"
+    assert result["draft"]["actions"][0]["type"] == "open_short"

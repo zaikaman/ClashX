@@ -237,9 +237,16 @@ class BuilderAiService:
                 "Use marketSelection = \"all\" only if the user explicitly wants the bot to trade many markets.",
                 "Prefer 1-4 conditions and 1-3 actions unless the user asks for more complexity.",
                 "Use uppercase market symbols like BTC, ETH, SOL.",
+                "A route is an ordered path of conditions followed by actions.",
+                "If the strategy has alternative triggers, opposite-side entries, or multiple if/then branches, use routes.",
+                "Do not combine opposite-side entries into one linear condition/action list unless the user explicitly wants both actions to happen after the same trigger path.",
+                "If the user says long when X and short when Y, return two routes.",
+                "When editing an existing draft, preserve unchanged routes, markets, and risk intent unless the user asks to replace them.",
+                "If the current draft includes routes or graph data, use that structure as the source of truth for the existing logic.",
+                "Always include top-level conditions and actions. If you return routes, make the top-level conditions/actions match the primary route.",
                 f"Current draft context: {current_draft_summary}",
                 "Return exactly this shape:",
-                '{"reply":"short natural language summary","name":"string","description":"string","marketSelection":"selected|all","markets":["BTC"],"conditions":[{"type":"ema_crosses_above","symbol":"BTC","timeframe":"15m","fast_period":9,"slow_period":21}],"actions":[{"type":"open_long","symbol":"BTC","size_usd":150,"leverage":3}]}',
+                '{"reply":"short natural language summary","name":"string","description":"string","marketSelection":"selected|all","markets":["BTC"],"conditions":[{"type":"ema_crosses_above","symbol":"BTC","timeframe":"15m","fast_period":9,"slow_period":21}],"actions":[{"type":"open_long","symbol":"BTC","size_usd":150,"leverage":3}],"routes":[{"name":"optional-route-name","conditions":[{"type":"rsi_above","symbol":"BTC","timeframe":"15m","period":14,"value":70}],"actions":[{"type":"open_short","symbol":"BTC","size_usd":150,"leverage":3},{"type":"set_tpsl","symbol":"BTC","take_profit_pct":2,"stop_loss_pct":1}]},{"name":"optional-second-route","conditions":[{"type":"rsi_below","symbol":"BTC","timeframe":"15m","period":14,"value":30}],"actions":[{"type":"open_long","symbol":"BTC","size_usd":150,"leverage":3},{"type":"set_tpsl","symbol":"BTC","take_profit_pct":2,"stop_loss_pct":1}]}]}',
             ]
         )
 
@@ -342,6 +349,64 @@ class BuilderAiService:
                     markets.append(market)
         return markets
 
+    def _sanitize_condition_list(self, value: Any) -> list[dict[str, Any]]:
+        conditions: list[dict[str, Any]] = []
+        if not isinstance(value, list):
+            return conditions
+
+        for item in value:
+            if not isinstance(item, dict) or item.get("type") not in CONDITION_OPTIONS:
+                continue
+            conditions.append(
+                {
+                    **item,
+                    "symbol": item.get("symbol", "").strip().upper()
+                    if isinstance(item.get("symbol"), str)
+                    else None,
+                }
+            )
+        return conditions
+
+    def _sanitize_action_list(self, value: Any) -> list[dict[str, Any]]:
+        actions: list[dict[str, Any]] = []
+        if not isinstance(value, list):
+            return actions
+
+        for item in value:
+            if not isinstance(item, dict) or item.get("type") not in ACTION_OPTIONS:
+                continue
+            actions.append(
+                {
+                    **item,
+                    "symbol": item.get("symbol", "").strip().upper()
+                    if isinstance(item.get("symbol"), str)
+                    else None,
+                }
+            )
+        return actions
+
+    def _sanitize_routes(self, value: Any) -> list[dict[str, Any]]:
+        routes: list[dict[str, Any]] = []
+        if not isinstance(value, list):
+            return routes
+
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            conditions = self._sanitize_condition_list(item.get("conditions"))
+            actions = self._sanitize_action_list(item.get("actions"))
+            if not conditions or not actions:
+                continue
+
+            route: dict[str, Any] = {
+                "conditions": conditions,
+                "actions": actions,
+            }
+            if isinstance(item.get("name"), str) and item["name"].strip():
+                route["name"] = item["name"].strip()
+            routes.append(route)
+        return routes
+
     def _sanitize_draft(self, payload: dict[str, Any], available_markets: list[str]) -> dict[str, Any]:
         allowed_markets = {market.strip().upper() for market in available_markets if market.strip()}
         requested_markets = self._normalize_markets(payload.get("markets"))
@@ -349,33 +414,15 @@ class BuilderAiService:
             market for market in requested_markets if not allowed_markets or market in allowed_markets
         ]
 
-        raw_conditions = payload.get("conditions")
-        conditions: list[dict[str, Any]] = []
-        if isinstance(raw_conditions, list):
-            for item in raw_conditions:
-                if isinstance(item, dict) and item.get("type") in CONDITION_OPTIONS:
-                    conditions.append(
-                        {
-                            **item,
-                            "symbol": item.get("symbol", "").strip().upper()
-                            if isinstance(item.get("symbol"), str)
-                            else None,
-                        }
-                    )
+        routes = self._sanitize_routes(payload.get("routes"))
+        conditions = self._sanitize_condition_list(payload.get("conditions"))
+        actions = self._sanitize_action_list(payload.get("actions"))
 
-        raw_actions = payload.get("actions")
-        actions: list[dict[str, Any]] = []
-        if isinstance(raw_actions, list):
-            for item in raw_actions:
-                if isinstance(item, dict) and item.get("type") in ACTION_OPTIONS:
-                    actions.append(
-                        {
-                            **item,
-                            "symbol": item.get("symbol", "").strip().upper()
-                            if isinstance(item.get("symbol"), str)
-                            else None,
-                        }
-                    )
+        if routes:
+            if not conditions:
+                conditions = list(routes[0]["conditions"])
+            if not actions:
+                actions = list(routes[0]["actions"])
 
         if not conditions:
             raise RuntimeError("AI draft must include at least one valid condition")
@@ -391,5 +438,6 @@ class BuilderAiService:
                 "markets": markets,
                 "conditions": conditions,
                 "actions": actions,
+                "routes": routes,
             },
         }

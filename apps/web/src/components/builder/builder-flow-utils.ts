@@ -79,6 +79,12 @@ export type BuilderGraphData = {
   edges: BuilderFlowEdge[];
 };
 
+export type BuilderAiRoute = {
+  name?: string;
+  conditions: Array<Partial<VisualCondition> & { type: string }>;
+  actions: Array<Partial<VisualAction> & { type: string }>;
+};
+
 export type BuilderAiDraft = {
   name: string;
   description: string;
@@ -86,6 +92,7 @@ export type BuilderAiDraft = {
   markets: string[];
   conditions: Array<Partial<VisualCondition> & { type: string }>;
   actions: Array<Partial<VisualAction> & { type: string }>;
+  routes?: BuilderAiRoute[];
 };
 
 export type BuilderStarterTemplate = {
@@ -708,6 +715,74 @@ export function buildPrimaryRoute(nodes: BuilderFlowNode[], edges: BuilderFlowEd
   return { nodeIds: pathNodeIds, edgeIds: pathEdgeIds, conditions, actions };
 }
 
+export function buildRoutesFromGraph(nodes: BuilderFlowNode[], edges: BuilderFlowEdge[]): BuilderAiRoute[] {
+  const nodeLookup = new Map(nodes.map((node) => [node.id, node]));
+  const outgoingLookup = new Map<string, BuilderFlowEdge[]>();
+  const routes: BuilderAiRoute[] = [];
+  const seenRouteKeys = new Set<string>();
+
+  edges.forEach((edge) => {
+    const current = outgoingLookup.get(edge.source) ?? [];
+    current.push(edge);
+    outgoingLookup.set(edge.source, current);
+  });
+
+  outgoingLookup.forEach((edgeList, sourceId) => {
+    const sortedEdges = [...edgeList].sort((left, right) => {
+      const leftTarget = nodeLookup.get(left.target)?.position ?? { x: Number.MAX_SAFE_INTEGER, y: Number.MAX_SAFE_INTEGER };
+      const rightTarget = nodeLookup.get(right.target)?.position ?? { x: Number.MAX_SAFE_INTEGER, y: Number.MAX_SAFE_INTEGER };
+      return leftTarget.x - rightTarget.x || leftTarget.y - rightTarget.y || left.id.localeCompare(right.id);
+    });
+    outgoingLookup.set(sourceId, sortedEdges);
+  });
+
+  function visit(
+    nodeId: string,
+    conditions: VisualCondition[],
+    actions: VisualAction[],
+    trail: Set<string>,
+  ) {
+    if (trail.has(nodeId)) {
+      return;
+    }
+
+    const nextTrail = new Set(trail);
+    nextTrail.add(nodeId);
+    const outgoing = outgoingLookup.get(nodeId) ?? [];
+
+    if (outgoing.length === 0) {
+      if (conditions.length === 0 || actions.length === 0) {
+        return;
+      }
+      const route: BuilderAiRoute = {
+        conditions: conditions.map((condition) => ({ ...condition })),
+        actions: actions.map((action) => ({ ...action })),
+      };
+      const routeKey = JSON.stringify(route);
+      if (!seenRouteKeys.has(routeKey)) {
+        seenRouteKeys.add(routeKey);
+        routes.push(route);
+      }
+      return;
+    }
+
+    outgoing.forEach((edge) => {
+      const nextNode = nodeLookup.get(edge.target);
+      if (!nextNode || nextNode.data.kind === "entry") {
+        return;
+      }
+      if (nextNode.data.kind === "condition") {
+        visit(edge.target, [...conditions, { ...nextNode.data.condition }], actions, nextTrail);
+        return;
+      }
+      visit(edge.target, conditions, [...actions, { ...nextNode.data.action }], nextTrail);
+    });
+  }
+
+  visit(ENTRY_NODE_ID, [], [], new Set<string>());
+  return routes;
+}
+
 function buildMomentumBreakoutGraph(): BuilderGraphData {
   const trendCross = createCondition("ema_crosses_above");
   trendCross.symbol = BOT_MARKET_UNIVERSE_SYMBOL;
@@ -1050,8 +1125,64 @@ export function buildBlankGraph(): BuilderGraphData {
 }
 
 export function buildGraphFromAiDraft(draft: BuilderAiDraft): BuilderGraphData {
-  const nodes: BuilderFlowNode[] = [createEntryNode()];
+  const entryNode = createEntryNode();
+  const nodes: BuilderFlowNode[] = [entryNode];
   const edges: BuilderFlowEdge[] = [];
+  const routeInputs = Array.isArray(draft.routes)
+    ? draft.routes.filter((route) => route.conditions.length > 0 && route.actions.length > 0)
+    : [];
+
+  if (routeInputs.length > 0) {
+    const routeGapY = 216;
+    const routeCenterY = 220;
+    const routeStartY = routeCenterY - ((routeInputs.length - 1) * routeGapY) / 2;
+    entryNode.position = snapPosition({ x: entryNode.position.x, y: routeCenterY });
+
+    routeInputs.forEach((route, routeIndex) => {
+      const routeY = snapPosition({ x: 0, y: routeStartY + (routeIndex * routeGapY) }).y;
+      let previousId = ENTRY_NODE_ID;
+      const conditionBaseX = 320;
+      const actionBaseX = conditionBaseX + route.conditions.length * 300;
+
+      route.conditions.forEach((conditionInput, index) => {
+        const fallbackType = CONDITION_OPTIONS.includes(conditionInput.type as (typeof CONDITION_OPTIONS)[number])
+          ? (conditionInput.type as (typeof CONDITION_OPTIONS)[number])
+          : "price_above";
+        const baseCondition = createCondition(fallbackType);
+        const condition: VisualCondition = {
+          ...baseCondition,
+          ...conditionInput,
+          id: baseCondition.id,
+          type: fallbackType,
+          symbol: conditionInput.symbol?.trim() || baseCondition.symbol,
+        };
+        const node = createConditionNode(condition, { x: conditionBaseX + (index * 300), y: routeY });
+        nodes.push(node);
+        edges.push(createCanvasEdge(previousId, node.id));
+        previousId = node.id;
+      });
+
+      route.actions.forEach((actionInput, index) => {
+        const fallbackType = ACTION_OPTIONS.includes(actionInput.type as (typeof ACTION_OPTIONS)[number])
+          ? (actionInput.type as (typeof ACTION_OPTIONS)[number])
+          : "open_long";
+        const baseAction = createAction(fallbackType);
+        const action: VisualAction = {
+          ...baseAction,
+          ...actionInput,
+          id: baseAction.id,
+          type: fallbackType,
+          symbol: actionInput.symbol?.trim() || baseAction.symbol,
+        };
+        const node = createActionNode(action, { x: actionBaseX + (index * 300), y: routeY });
+        nodes.push(node);
+        edges.push(createCanvasEdge(previousId, node.id));
+        previousId = node.id;
+      });
+    });
+
+    return { nodes, edges };
+  }
 
   let previousId = ENTRY_NODE_ID;
   const conditionBaseX = 300;
