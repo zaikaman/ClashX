@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { AgentAuthorizationPanel } from "@/components/pacifica/agent-authorization-panel";
 import {
   fetchPacificaReadiness,
   type PacificaReadinessPayload,
@@ -54,9 +55,17 @@ export function PacificaOnboardingChecklist({
   const [readiness, setReadiness] = useState<PacificaReadinessPayload | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
+  const [agentAuthorizationOpen, setAgentAuthorizationOpen] = useState(false);
   const resolvedReadiness = authenticated && resolvedWalletAddress ? readiness : null;
   const resolvedStatus = authenticated && resolvedWalletAddress ? status : "idle";
   const resolvedError = authenticated && resolvedWalletAddress ? error : null;
+
+  const loadReadiness = useCallback(async () => {
+    if (!authenticated || !resolvedWalletAddress) {
+      return null;
+    }
+    return fetchPacificaReadiness(resolvedWalletAddress, getAuthHeaders);
+  }, [authenticated, getAuthHeaders, resolvedWalletAddress]);
 
   useEffect(() => {
     if (!authenticated || !resolvedWalletAddress) {
@@ -97,6 +106,7 @@ export function PacificaOnboardingChecklist({
   const fundingStep = resolvedReadiness?.steps.find((step) => step.id === "funding");
   const appAccessStep = resolvedReadiness?.steps.find((step) => step.id === "app_access");
   const agentStep = resolvedReadiness?.steps.find((step) => step.id === "agent_authorization");
+  const visibleSteps = resolvedReadiness?.steps.filter((step) => step.id !== "app_access") ?? [];
   const blocker = useMemo(() => {
     if (!authenticated) {
       return "Sign in with your trading wallet before you deploy.";
@@ -123,6 +133,22 @@ export function PacificaOnboardingChecklist({
     });
   }, [agentStep?.verified, appAccessStep?.verified, blocker, fundingStep?.verified, onStatusChange]);
 
+  const refreshReadiness = useCallback(async () => {
+    if (!authenticated || !resolvedWalletAddress) {
+      return;
+    }
+    setStatus("loading");
+    setError(null);
+    try {
+      const payload = await loadReadiness();
+      setReadiness(payload);
+      setStatus("idle");
+    } catch (loadError) {
+      setStatus("error");
+      setError(loadError instanceof Error ? loadError.message : "Unable to load Pacifica readiness.");
+    }
+  }, [authenticated, loadReadiness, resolvedWalletAddress]);
+
   if (!open) {
     return null;
   }
@@ -139,7 +165,7 @@ export function PacificaOnboardingChecklist({
               Pacifica setup before the bot goes live.
             </h2>
             <p className="max-w-2xl text-sm leading-5 text-neutral-400">
-              All three checks are verified automatically before deploy is allowed.
+              Both checks are verified automatically before deploy is allowed.
             </p>
           </div>
           <button type="button" onClick={onClose} className="label transition hover:text-neutral-50">
@@ -193,13 +219,13 @@ export function PacificaOnboardingChecklist({
             </article>
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-3">
-            {resolvedReadiness?.steps.map((step) => (
+          <div className="grid gap-4 lg:grid-cols-2">
+            {visibleSteps.map((step) => (
               <article key={step.id} className="grid gap-3 rounded-[1.2rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="grid gap-1.5">
                     <span className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">
-                      {step.id === "funding" ? "Step 1" : step.id === "app_access" ? "Step 2" : "Step 3"}
+                      {step.id === "funding" ? "Step 1" : "Step 2"}
                     </span>
                     <h3 className="font-mono text-base font-bold uppercase tracking-tight text-neutral-50">{step.title}</h3>
                   </div>
@@ -235,41 +261,24 @@ export function PacificaOnboardingChecklist({
                   </div>
                 ) : null}
 
-                {step.id === "app_access" ? (
-                  <div className="grid gap-2 rounded-[1rem] border border-[rgba(255,255,255,0.06)] bg-[#090a0a] p-3 text-xs leading-5 text-neutral-400">
-                    <div>This check passes only when Pacifica&apos;s account API responds for this wallet.</div>
-                    <div className="flex flex-wrap gap-2 pt-1">
-                      <a
-                        href="https://test-app.pacifica.fi/"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center rounded-full border border-[rgba(255,255,255,0.12)] px-3 py-1.5 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d]"
-                      >
-                        Open test app
-                      </a>
-                      <a
-                        href="https://docs.pacifica.fi/hackathon/pacifica-hackathon"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center rounded-full border border-[rgba(255,255,255,0.12)] px-3 py-1.5 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#74b97f] hover:text-[#74b97f]"
-                      >
-                        Source note
-                      </a>
-                    </div>
-                  </div>
-                ) : null}
-
                 {step.id === "agent_authorization" ? (
                   <div className="grid gap-2 rounded-[1rem] border border-[rgba(255,255,255,0.06)] bg-[#090a0a] p-3 text-xs leading-5 text-neutral-400">
                     <div>Status: <span className="text-neutral-200">{resolvedReadiness?.metrics.authorization_status ?? "inactive"}</span></div>
                     <div className="break-all">Agent: <span className="text-neutral-200">{resolvedReadiness?.metrics.agent_wallet_address ?? "not bound yet"}</span></div>
                     <div className="flex flex-wrap gap-2 pt-1">
-                      <Link
-                        href="/builder"
-                        className="inline-flex items-center rounded-full bg-[#dce85d] px-3 py-1.5 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d]"
-                      >
-                        Open Builder Studio
-                      </Link>
+                      {!agentStep?.verified ? (
+                        <button
+                          type="button"
+                          onClick={() => setAgentAuthorizationOpen((current) => !current)}
+                          className="inline-flex items-center rounded-full bg-[#dce85d] px-3 py-1.5 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d]"
+                        >
+                          {agentAuthorizationOpen ? "Hide authorization" : "Authorize ClashX Agent"}
+                        </button>
+                      ) : (
+                        <span className="inline-flex items-center rounded-full bg-[rgba(116,185,127,0.16)] px-3 py-1.5 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#74b97f]">
+                          Agent authorized
+                        </span>
+                      )}
                       {mode === "agent" ? (
                         <Link
                           href="/builder"
@@ -279,6 +288,16 @@ export function PacificaOnboardingChecklist({
                         </Link>
                       ) : null}
                     </div>
+                    {agentAuthorizationOpen && !agentStep?.verified ? (
+                      <AgentAuthorizationPanel
+                        compact
+                        walletAddressOverride={resolvedWalletAddress}
+                        onAuthorized={() => {
+                          setAgentAuthorizationOpen(false);
+                          void refreshReadiness();
+                        }}
+                      />
+                    ) : null}
                   </div>
                 ) : null}
               </article>

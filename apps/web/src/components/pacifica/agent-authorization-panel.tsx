@@ -76,7 +76,15 @@ function getProviderLabel(provider: SolanaProvider | null): string {
   return "Injected Solana signer detected";
 }
 
-export function AgentAuthorizationPanel() {
+export function AgentAuthorizationPanel({
+  compact = false,
+  walletAddressOverride,
+  onAuthorized,
+}: {
+  compact?: boolean;
+  walletAddressOverride?: string | null;
+  onAuthorized?: () => void;
+}) {
   const { authenticated, login, walletAddress: authenticatedWallet, getAuthHeaders } = useClashxAuth();
   const [walletAddress, setWalletAddress] = useState("");
   const [displayName, setDisplayName] = useState("Capital Pilot");
@@ -85,6 +93,7 @@ export function AgentAuthorizationPanel() {
   const [error, setError] = useState<string | null>(null);
   const [connectedWallet, setConnectedWallet] = useState<string | null>(null);
   const [providerLabel, setProviderLabel] = useState("Checking browser signer");
+  const resolvedWalletAddress = walletAddressOverride?.trim() || authenticatedWallet || "";
 
   const refreshAuthorization = useCallback(async () => {
     if (!authenticated || !walletAddress) {
@@ -104,10 +113,10 @@ export function AgentAuthorizationPanel() {
   }, [authenticated, getAuthHeaders, walletAddress]);
 
   useEffect(() => {
-    if (authenticatedWallet) {
-      setWalletAddress(authenticatedWallet);
+    if (resolvedWalletAddress) {
+      setWalletAddress(resolvedWalletAddress);
     }
-  }, [authenticatedWallet]);
+  }, [resolvedWalletAddress]);
 
   useEffect(() => {
     const refreshProviderState = () => {
@@ -270,6 +279,7 @@ export function AgentAuthorizationPanel() {
       }
       setAuthorization(activatePayload as AuthorizationResponse);
       setStatus("idle");
+      onAuthorized?.();
     } catch (authorizeError) {
       setStatus("error");
       setError(authorizeError instanceof Error ? authorizeError.message : "Authorization failed");
@@ -279,6 +289,90 @@ export function AgentAuthorizationPanel() {
         // Ignore refresh errors; the primary authorization error is already surfaced.
       }
     }
+  }
+
+  if (compact) {
+    return (
+      <div className="grid gap-3 rounded-[1rem] border border-[rgba(255,255,255,0.06)] bg-[#111315] p-3">
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="rounded-[0.9rem] border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5">
+            <div className="label text-[0.58rem] text-neutral-500">provider</div>
+            <div className="mt-1 font-mono text-[0.82rem] font-bold uppercase tracking-tight text-neutral-100">
+              {providerLabel}
+            </div>
+          </div>
+          <div className="rounded-[0.9rem] border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5">
+            <div className="label text-[0.58rem] text-neutral-500">runtime status</div>
+            <div className={`mt-1 font-mono text-[0.82rem] font-bold uppercase tracking-tight ${runtimeReady ? "text-[#74b97f]" : "text-neutral-100"}`}>
+              {runtimeReady ? "active" : authorization?.status ?? "not armed"}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="grid gap-1 text-[0.72rem] text-neutral-400">
+            Runtime wallet
+            <input
+              value={walletAddress}
+              onChange={(event) => setWalletAddress(event.target.value)}
+              readOnly={Boolean(resolvedWalletAddress)}
+              className="rounded-[0.9rem] border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3 py-2.5 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]"
+            />
+          </label>
+          <label className="grid gap-1 text-[0.72rem] text-neutral-400">
+            Bot alias
+            <input
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+              className="rounded-[0.9rem] border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-3 py-2.5 text-sm text-neutral-50 outline-none transition focus:border-[#dce85d]"
+            />
+          </label>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={connectWallet}
+            disabled={status === "connecting"}
+            className="inline-flex items-center justify-center rounded-full border border-[rgba(255,255,255,0.12)] px-3 py-1.5 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-neutral-50 hover:text-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {status === "connecting" ? "Connecting..." : connectedWallet ? "Wallet connected" : "Connect wallet"}
+          </button>
+          <button
+            type="button"
+            onClick={authorizeWallet}
+            disabled={status === "loading" || status === "signing" || status === "activating" || !walletAddress || !authenticated || !connectedWallet || !signingWalletMatches}
+            className="inline-flex items-center justify-center rounded-full bg-[#dce85d] px-3 py-1.5 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {status === "loading" || status === "signing" || status === "activating"
+              ? "Authorizing..."
+              : runtimeReady
+                ? "Re-authorize"
+                : "Authorize runtime"}
+          </button>
+        </div>
+
+        <div className="grid gap-1 rounded-[0.9rem] border border-[rgba(255,255,255,0.06)] bg-[#090a0a] px-3 py-2.5 text-[0.72rem] leading-5 text-neutral-400">
+          <div>Status: <span className="text-neutral-200">{authorization?.status ?? "not started"}</span></div>
+          <div>Builder code: <span className="text-neutral-200">{authorization?.builder_code ?? "not configured"}</span></div>
+          <div>Agent bind: <span className="text-neutral-200">{authorization?.agent_bound_at ? "complete" : "pending"}</span></div>
+          <div className="break-all">Agent wallet: <span className="text-neutral-200">{authorization?.agent_wallet_address ?? "not staged yet"}</span></div>
+        </div>
+
+        {error ? <p className="text-[0.72rem] text-[#dce85d]">{error}</p> : null}
+        {connectedWallet ? <p className="text-[0.72rem] text-neutral-500">Connected: {connectedWallet}</p> : null}
+        {!signingWalletMatches && authenticatedWallet ? (
+          <p className="text-[0.72rem] text-[#dce85d]">
+            Your browser signer must match the Privy-linked wallet.
+          </p>
+        ) : null}
+        {needsBrowserSigner && authenticatedWallet ? (
+          <p className="text-[0.72rem] text-neutral-400">
+            Privy signed you in, but authorization still needs a browser Solana wallet extension for local message signing.
+          </p>
+        ) : null}
+      </div>
+    );
   }
 
   return (
