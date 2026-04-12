@@ -55,3 +55,17 @@ def test_request_wraps_transport_error_as_retryable_supabase_error() -> None:
     assert exc_info.value.status_code == 503
     assert exc_info.value.is_retryable is True
     assert "before a response was received" in str(exc_info.value)
+
+
+def test_build_filters_quotes_string_values_for_in_operator() -> None:
+    client = SupabaseRestClient.__new__(SupabaseRestClient)
+
+    params = client._build_filters(  # noqa: SLF001
+        {
+            "lease_key": ("in", ["bot-runtime:abc-123", 'portfolio:"quoted"']),
+        }
+    )
+
+    assert params == {
+        "lease_key": 'in.("bot-runtime:abc-123","portfolio:\\"quoted\\"")',
+    }

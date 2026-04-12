@@ -150,7 +150,7 @@ def _build_service(supabase: _FakeSupabaseRestClient, *, owner_id: str = "worker
     service = WorkerCoordinationService.__new__(WorkerCoordinationService)
     service._supabase = supabase
     service._owner_id = owner_id
-    service._next_lease_cleanup_at = 0.0
+    WorkerCoordinationService._global_next_lease_cleanup_at = 0.0
     return service
 
 

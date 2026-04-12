@@ -13,6 +13,7 @@ from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
 logger = logging.getLogger(__name__)
 ACTION_CLAIM_TTL_SECONDS = 90
 LEASE_CLEANUP_INTERVAL_SECONDS = 15 * 60
+LEASE_CLEANUP_RETRY_BACKOFF_SECONDS = 60 * 60
 LEASE_CLEANUP_RETENTION_SECONDS = 24 * 60 * 60
 LEASE_CLEANUP_BATCH_SIZE = 5000
 RETRYABLE_TERMINAL_ACTION_EVENTS = {"action.failed"}
@@ -20,11 +21,12 @@ NON_RETRYABLE_TERMINAL_ACTION_EVENTS = {"action.executed"}
 
 
 class WorkerCoordinationService:
+    _global_next_lease_cleanup_at = 0.0
+
     def __init__(self, supabase: SupabaseRestClient | None = None) -> None:
         self._settings = get_settings()
         self._supabase = supabase or SupabaseRestClient()
         self._owner_id = self._settings.worker_instance_id
-        self._next_lease_cleanup_at = 0.0
 
     def try_claim_lease(self, lease_key: str, *, ttl_seconds: int) -> bool:
         now = datetime.now(tz=UTC)
@@ -141,9 +143,10 @@ class WorkerCoordinationService:
             raise
 
     def _cleanup_expired_leases_if_due(self, now: datetime) -> None:
-        if monotonic() < self._next_lease_cleanup_at:
+        current_monotonic = monotonic()
+        if current_monotonic < type(self)._global_next_lease_cleanup_at:
             return
-        self._next_lease_cleanup_at = monotonic() + LEASE_CLEANUP_INTERVAL_SECONDS
+        type(self)._global_next_lease_cleanup_at = current_monotonic + LEASE_CLEANUP_INTERVAL_SECONDS
         cutoff = (now - timedelta(seconds=LEASE_CLEANUP_RETENTION_SECONDS)).isoformat()
         try:
             stale_leases = self._supabase.select(
@@ -155,6 +158,7 @@ class WorkerCoordinationService:
             )
         except SupabaseRestError as exc:
             if exc.is_retryable:
+                type(self)._global_next_lease_cleanup_at = monotonic() + LEASE_CLEANUP_RETRY_BACKOFF_SECONDS
                 logger.warning("Skipping worker lease cleanup lookup because Supabase is temporarily unavailable: %s", exc)
                 return
             logger.exception("Worker lease cleanup lookup failed")
@@ -174,6 +178,7 @@ class WorkerCoordinationService:
             )
         except SupabaseRestError as exc:
             if exc.is_retryable:
+                type(self)._global_next_lease_cleanup_at = monotonic() + LEASE_CLEANUP_RETRY_BACKOFF_SECONDS
                 logger.warning("Skipping worker lease cleanup delete because Supabase is temporarily unavailable: %s", exc)
                 return
             logger.exception("Worker lease cleanup delete failed")

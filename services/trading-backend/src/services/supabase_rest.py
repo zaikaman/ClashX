@@ -171,7 +171,7 @@ class SupabaseRestClient:
     def _format_filter(self, operator: str, operand: Any) -> str:
         if operator == "in":
             assert isinstance(operand, Sequence)
-            joined = ",".join(self._quote(item) for item in operand)
+            joined = ",".join(self._quote_in_list(item) for item in operand)
             return f"in.({joined})"
         if operator == "is":
             return f"is.{str(operand).lower()}"
@@ -183,6 +183,12 @@ class SupabaseRestClient:
         if value is None:
             return "null"
         return str(value)
+
+    def _quote_in_list(self, value: Any) -> str:
+        if isinstance(value, str):
+            escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+            return f'"{escaped}"'
+        return self._quote(value)
 
     def _build_read_cache_key(
         self,
