@@ -4,7 +4,6 @@ import Link from "next/link";
 
 import type {
   CopyTradingActivity,
-  CopyTradingAlert,
   CopyTradingDashboard,
   CopyTradingDiscoverRow,
   CopyTradingFollow,
@@ -67,10 +66,10 @@ export function CopyTradingOverview({
           <div className="grid gap-2">
             <span className="text-[0.64rem] font-semibold uppercase tracking-[0.2em] text-[#dce85d]">Copy trading</span>
             <h1 className="font-mono text-[clamp(2.2rem,5vw,4rem)] font-extrabold uppercase leading-[0.92] tracking-[-0.05em] text-neutral-50">
-              Run your copy book like a live desk
+              See your copy trading at a glance
             </h1>
             <p className="max-w-3xl text-sm leading-7 text-neutral-400 md:text-base">
-              Track copied exposure, current PnL, leader health, and execution issues without digging through baskets or draft management.
+              Keep an eye on copied exposure, live PnL, trader health, and execution issues without digging through extra tools.
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
@@ -79,7 +78,7 @@ export function CopyTradingOverview({
               onClick={onRefresh}
               className="rounded-full border border-[rgba(255,255,255,0.12)] px-5 py-3 text-[0.64rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d]"
             >
-              {refreshing ? "Refreshing..." : "Refresh desk"}
+              {refreshing ? "Refreshing..." : "Refresh"}
             </button>
             <Link
               href="/marketplace"
@@ -91,19 +90,19 @@ export function CopyTradingOverview({
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-          <MetricCard label="Active follows" value={`${dashboard.summary.active_follows}`} detail="Leaders mirroring live now" />
-          <MetricCard label="Open copied trades" value={`${dashboard.summary.open_positions}`} detail="Live copied positions" />
-          <MetricCard label="Copied notional" value={formatUsd(dashboard.summary.copied_open_notional_usd)} detail="Open copy exposure" />
+          <MetricCard label="Active follows" value={`${dashboard.summary.active_follows}`} detail="Traders currently being copied" />
+          <MetricCard label="Open copied trades" value={`${dashboard.summary.open_positions}`} detail="Positions copied from traders" />
+          <MetricCard label="Copied notional" value={formatUsd(dashboard.summary.copied_open_notional_usd)} detail="Current copied exposure" />
           <MetricCard
             label="Copied unrealized"
             value={formatSignedUsd(dashboard.summary.copied_unrealized_pnl_usd)}
-            detail="Current live PnL"
+            detail="Live PnL across open copied trades"
             tone={toneForPnl(dashboard.summary.copied_unrealized_pnl_usd)}
           />
           <MetricCard
             label="Realized 24h"
             value={formatSignedUsd(dashboard.summary.copied_realized_pnl_usd_24h)}
-            detail="Estimated from mirrored closes"
+            detail="Realized PnL over the last 24 hours"
             tone={toneForPnl(dashboard.summary.copied_realized_pnl_usd_24h)}
           />
           <MetricCard
@@ -119,7 +118,7 @@ export function CopyTradingOverview({
         <section className="grid gap-4 rounded-[1.75rem] border border-[#dce85d]/30 bg-[#dce85d]/10 p-5 md:p-6">
           <div className="grid gap-1">
             <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#eef4b0]">Setup required</span>
-            <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Copy execution is blocked</h2>
+            <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Copy trading needs attention</h2>
           </div>
           <div className="grid gap-2 text-sm leading-6 text-[#f5f1c7]">
             {dashboard.readiness.blockers.map((blocker) => (
@@ -158,7 +157,7 @@ export function CopyTradingOverview({
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="grid gap-1">
             <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-400">Active follows</span>
-            <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Leaders you are copying</h2>
+            <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Traders you are copying</h2>
           </div>
           <Link
             href="/marketplace"
@@ -169,7 +168,7 @@ export function CopyTradingOverview({
         </div>
         {dashboard.follows.length === 0 ? (
           <article className="rounded-[1.5rem] border border-dashed border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-5 py-6 text-sm leading-7 text-neutral-400">
-            No live follows yet. Pick a trader from the discovery shelf or the marketplace to start building this book.
+            You are not copying anyone yet. Pick a trader below or head to the marketplace to get started.
           </article>
         ) : (
           <div className="grid gap-4">
@@ -225,11 +224,11 @@ function MyCopyPortfolio({ follows }: { follows: CopyTradingFollow[] }) {
     <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5 md:p-6">
       <div className="grid gap-1">
         <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#74b97f]">My copy portfolio</span>
-        <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Allocation by leader</h2>
+        <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Allocation by trader</h2>
       </div>
       {activeFollows.length === 0 ? (
         <p className="rounded-[1.5rem] border border-dashed border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-5 text-sm leading-6 text-neutral-400">
-          Once you follow traders, their allocation, live exposure, and health will stack up here.
+          Once you start copying traders, this is where your allocation, exposure, and account health will show up.
         </p>
       ) : (
         <div className="grid gap-3">
@@ -243,11 +242,11 @@ function MyCopyPortfolio({ follows }: { follows: CopyTradingFollow[] }) {
                     <div className="grid gap-1">
                       <span className="font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">{follow.source_bot_name}</span>
                       <span className="text-sm text-neutral-400">
-                        {follow.creator_display_name || "Unknown creator"} · Trust {follow.source_trust_score} · DD {follow.source_drawdown_pct.toFixed(1)}%
+                        {follow.creator_display_name || "Unknown creator"} · Trust {follow.source_trust_score} · Drawdown {follow.source_drawdown_pct.toFixed(1)}%
                       </span>
                     </div>
                     <span className="rounded-full border border-[rgba(255,255,255,0.08)] bg-[#16181a] px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-300">
-                      {share.toFixed(0)}% of live copy exposure
+                      {share.toFixed(0)}% of copied exposure
                     </span>
                   </div>
                   <div className="grid gap-2">
@@ -255,7 +254,7 @@ function MyCopyPortfolio({ follows }: { follows: CopyTradingFollow[] }) {
                       <div className="h-full rounded-full bg-[linear-gradient(90deg,#dce85d,#74b97f)]" style={{ width: `${Math.max(share, 4)}%` }} />
                     </div>
                     <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-500">
-                      <span>{formatUsd(follow.copied_open_notional_usd)} live</span>
+                      <span>{formatUsd(follow.copied_open_notional_usd)} open</span>
                       <span className={toneForPnl(follow.copied_unrealized_pnl_usd)}>{formatSignedUsd(follow.copied_unrealized_pnl_usd)}</span>
                     </div>
                   </div>
@@ -281,11 +280,11 @@ function OpenCopyPositions({
     <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5 md:p-6">
       <div className="grid gap-1">
         <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-400">Open copy positions</span>
-        <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Live exposure right now</h2>
+        <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Open positions right now</h2>
       </div>
       {positions.length === 0 ? (
         <p className="rounded-[1.5rem] border border-dashed border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-5 text-sm leading-6 text-neutral-400">
-          No copied positions are open at the moment.
+          No copied positions are open right now.
         </p>
       ) : (
         <div className="grid gap-3">
@@ -301,7 +300,7 @@ function OpenCopyPositions({
                   <span className="text-xs uppercase tracking-[0.16em] text-neutral-500">{position.side}</span>
                 </div>
                 <div className="grid gap-1 text-sm text-neutral-400">
-                  <span>{follow?.source_bot_name || "Copied runtime"}</span>
+                  <span>{follow?.source_bot_name || "Copied strategy"}</span>
                   <span className="text-xs text-neutral-500">{follow?.creator_display_name || "Unknown creator"}</span>
                 </div>
                 <DataStack label="Quantity" value={position.quantity.toFixed(4)} />
@@ -361,23 +360,23 @@ function FollowCard({
             ) : null}
           </div>
           <p className="text-sm leading-7 text-neutral-400">
-            {follow.creator_display_name || "Unknown creator"} · Trust {follow.source_trust_score} · DD {follow.source_drawdown_pct.toFixed(1)}% · Last mirror{" "}
-            {follow.last_execution_at ? new Date(follow.last_execution_at).toLocaleString() : "pending"}
+            {follow.creator_display_name || "Unknown creator"} · Trust {follow.source_trust_score} · Drawdown {follow.source_drawdown_pct.toFixed(1)}% · Last sync{" "}
+            {follow.last_execution_at ? new Date(follow.last_execution_at).toLocaleString() : "Waiting for first trade"}
           </p>
         </div>
 
         <div className="grid gap-1 text-sm text-neutral-400 lg:text-right">
-          <span>{formatUsd(follow.copied_open_notional_usd)} copied open notional</span>
+          <span>{formatUsd(follow.copied_open_notional_usd)} open copied exposure</span>
           <span className={toneForPnl(follow.copied_unrealized_pnl_usd)}>{formatSignedUsd(follow.copied_unrealized_pnl_usd)}</span>
         </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[0.8fr_1.2fr]">
         <div className="grid gap-3 rounded-[1.35rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4">
-          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Sizing</span>
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-400">Copy size</span>
           <div className="flex items-end justify-between gap-3">
             <span className="font-mono text-3xl font-bold uppercase tracking-tight text-neutral-50">{formatScale(scaleDraft)}</span>
-            <span className="text-xs text-neutral-500">{follow.copied_position_count} copied positions</span>
+            <span className="text-xs text-neutral-500">{follow.copied_position_count} open copied positions</span>
           </div>
           <input
             type="range"
@@ -396,9 +395,9 @@ function FollowCard({
 
         <div className="grid gap-3">
           <div className="grid gap-3 sm:grid-cols-3">
-            <DataStack label="Leader health" value={follow.source_health || "Unknown"} />
-            <DataStack label="Drift" value={follow.source_drift_status || "Unknown"} />
-            <DataStack label="Last symbol" value={follow.last_execution_symbol || "None yet"} />
+            <DataStack label="Trader health" value={follow.source_health || "Unknown"} />
+            <DataStack label="Sync status" value={follow.source_drift_status || "Unknown"} />
+            <DataStack label="Latest symbol" value={follow.last_execution_symbol || "None yet"} />
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -407,7 +406,7 @@ function FollowCard({
               disabled={saving || !scaleChanged}
               className="rounded-full bg-[#dce85d] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {saving && scaleChanged ? "Saving..." : scaleChanged ? "Save scale" : "Scale saved"}
+              {saving && scaleChanged ? "Saving..." : scaleChanged ? "Save size" : "Size saved"}
             </button>
             {follow.status === "active" ? (
               <button
@@ -416,7 +415,7 @@ function FollowCard({
                 disabled={saving}
                 className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#ff8a9b] hover:text-[#ff8a9b] disabled:opacity-50"
               >
-                {saving ? "Stopping..." : "Pause follow"}
+                {saving ? "Pausing..." : "Pause copying"}
               </button>
             ) : (
               <button
@@ -425,14 +424,14 @@ function FollowCard({
                 disabled={saving}
                 className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#74b97f] hover:text-[#74b97f] disabled:opacity-50"
               >
-                {saving ? "Resuming..." : "Resume follow"}
+                {saving ? "Resuming..." : "Resume copying"}
               </button>
             )}
             <Link
               href={`/marketplace/${follow.source_runtime_id}`}
               className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-neutral-50 hover:text-neutral-50"
             >
-              Open profile
+              View profile
             </Link>
           </div>
         </div>
@@ -446,18 +445,18 @@ function RecentCopyActivity({ activity }: { activity: CopyTradingActivity[] }) {
     <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5 md:p-6">
       <div className="grid gap-1">
         <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-400">Recent copy activity</span>
-        <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Mirrored execution tape</h2>
+        <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Recent execution activity</h2>
       </div>
       {activity.length === 0 ? (
         <p className="rounded-[1.5rem] border border-dashed border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-5 text-sm leading-6 text-neutral-400">
-          No mirrored actions yet.
+          No copy activity yet.
         </p>
       ) : (
         <div className="grid gap-3">
           {activity.map((item) => (
             <article key={item.id ?? `${item.symbol}-${item.created_at}`} className="grid gap-2 rounded-[1.35rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-4 md:grid-cols-[0.9fr_0.9fr_0.8fr_1.1fr] md:items-center">
               <div className="grid gap-1">
-                <span className="font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">{item.symbol || "Action"}</span>
+                <span className="font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">{item.symbol || "Activity"}</span>
                 <span className="text-xs uppercase tracking-[0.16em] text-neutral-500">{(item.action_type || "copy_event").replaceAll("_", " ")}</span>
               </div>
               <div className="text-sm text-neutral-400">
@@ -483,13 +482,13 @@ function DiscoverTraders({ rows }: { rows: CopyTradingDiscoverRow[] }) {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="grid gap-1">
           <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]">Discover traders</span>
-          <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Compact leaderboard</h2>
+          <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Traders worth watching</h2>
         </div>
         <Link
           href="/marketplace"
           className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#dce85d] hover:text-[#dce85d]"
         >
-          Full marketplace
+          Open marketplace
         </Link>
       </div>
       <div className="grid gap-3">

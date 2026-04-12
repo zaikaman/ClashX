@@ -395,10 +395,10 @@ export function CopyTradingPage() {
           <div className="grid gap-2">
             <span className="text-[0.64rem] font-semibold uppercase tracking-[0.2em] text-[#dce85d]">Copy trading</span>
             <h1 className="font-mono text-[clamp(2.2rem,5vw,4rem)] font-extrabold uppercase leading-[0.92] tracking-[-0.05em] text-neutral-50">
-              Follow live traders with real desk visibility
+              Follow top traders with a clear view of every move
             </h1>
             <p className="max-w-3xl text-sm leading-7 text-neutral-400 md:text-base">
-              See copied positions, current PnL, and execution issues in one place after you connect the wallet you want to trade from.
+              Connect your trading wallet to see open positions, live PnL, and execution status in one place.
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
@@ -407,7 +407,7 @@ export function CopyTradingPage() {
               onClick={login}
               className="rounded-full bg-[#dce85d] px-5 py-3 text-[0.64rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d]"
             >
-              Sign in to copy
+              Sign in to start copying
             </button>
             <Link
               href="/marketplace"
@@ -439,7 +439,7 @@ export function CopyTradingPage() {
             onClick={() => void loadDashboard()}
             className="rounded-full bg-[#dce85d] px-5 py-3 text-[0.64rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d]"
           >
-            Retry load
+            Try again
           </button>
           <Link
             href="/marketplace"

@@ -72,7 +72,7 @@ export const appNavGroups: AppNavGroup[] = [
       {
         href: "/copy",
         label: "Copy trading",
-        description: "Track copied exposure, trader health, and live follow risk.",
+        description: "Follow traders, track copied positions, and watch live risk.",
       },
     ],
   },
@@ -85,7 +85,7 @@ export const appWorkflow = [
   { href: "/bots", label: "Deploy and monitor" },
   { href: "/dashboard", label: "Watch the fleet" },
   { href: "/analytics", label: "Read the analytics" },
-  { href: "/copy", label: "Follow or clone a winner" },
+  { href: "/copy", label: "Follow top traders" },
 ];
 
 function isRouteMatch(pathname: string, href: string) {
@@ -262,13 +262,13 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
   if (normalizedPathname === "/copy") {
     return {
       eyebrow: "Copy trading",
-      title: "Run a live copy desk with real exposure visibility",
-      description: "Track copied positions, current PnL, leader health, and execution issues from one trader-facing command center.",
+      title: "Stay on top of every copied trade",
+      description: "Track copied positions, live PnL, trader health, and execution issues from one focused copy trading view.",
       guidanceTitle: "Use this desk",
       guidance: [
-        "Start with copied notional, live PnL, and open positions so you know the real book state immediately.",
-        "Use the leader cards to resize, pause, or resume follows without leaving the desk.",
-        "Open the advanced tab only when you actually need multi-trader basket controls.",
+        "Start with copied exposure, live PnL, and open positions so you can see your book right away.",
+        "Use the trader cards to adjust size, pause copying, or resume without leaving the page.",
+        "Open the advanced tab only when you need basket-level controls across multiple traders.",
       ],
       actions: [
         { href: "/marketplace", label: "Browse marketplace", tone: "primary" },
