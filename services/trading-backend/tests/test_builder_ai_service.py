@@ -234,8 +234,10 @@ def test_system_prompt_describes_route_semantics_for_branching_strategies() -> N
         current_draft={"name": "Existing bot"},
     )
 
-    assert "use routes" in prompt
-    assert "If the user says long when X and short when Y, return two routes." in prompt
+    assert "A route is an ordered path of conditions followed by actions." in prompt
+    assert "Each distinct intent should become its own route" in prompt
+    assert "Do not omit any explicit trigger, direction, market, TP, SL, timeframe, or threshold" in prompt
+    assert "the number of routes matches the number of distinct trigger/action paths implied by the request" in prompt
     assert '"routes":' in prompt
 
 
