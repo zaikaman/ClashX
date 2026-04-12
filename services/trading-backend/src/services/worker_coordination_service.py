@@ -177,11 +177,31 @@ class WorkerCoordinationService:
                 },
             )
         except SupabaseRestError as exc:
+            if exc.status_code == 400:
+                self._delete_stale_leases_individually(stale_keys=stale_keys, cutoff=cutoff)
+                return
             if exc.is_retryable:
                 type(self)._global_next_lease_cleanup_at = monotonic() + LEASE_CLEANUP_RETRY_BACKOFF_SECONDS
                 logger.warning("Skipping worker lease cleanup delete because Supabase is temporarily unavailable: %s", exc)
                 return
             logger.exception("Worker lease cleanup delete failed")
+
+    def _delete_stale_leases_individually(self, *, stale_keys: list[str], cutoff: str) -> None:
+        for lease_key in stale_keys:
+            try:
+                self._supabase.delete(
+                    "worker_leases",
+                    filters={
+                        "lease_key": lease_key,
+                        "expires_at": ("lt", cutoff),
+                    },
+                )
+            except SupabaseRestError as exc:
+                if exc.is_retryable:
+                    type(self)._global_next_lease_cleanup_at = monotonic() + LEASE_CLEANUP_RETRY_BACKOFF_SECONDS
+                    logger.warning("Skipping worker lease cleanup delete because Supabase is temporarily unavailable: %s", exc)
+                    return
+                logger.exception("Worker lease cleanup fallback delete failed for %s", lease_key)
 
     def try_claim_action(self, *, runtime_id: str, idempotency_key: str) -> bool:
         claim_payload = {

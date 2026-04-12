@@ -146,6 +146,18 @@ class _FakeSupabaseRestClient:
         queues[operation].setdefault(table, []).append(error)
 
 
+class _RejectBulkLeaseDeleteSupabaseRestClient(_FakeSupabaseRestClient):
+    def delete(self, table: str, *, filters: dict[str, Any]) -> None:
+        lease_key_filter = filters.get("lease_key")
+        if (
+            table == "worker_leases"
+            and isinstance(lease_key_filter, tuple)
+            and lease_key_filter[0] == "in"
+        ):
+            raise SupabaseRestError("bad delete filter", status_code=400)
+        super().delete(table, filters=filters)
+
+
 def _build_service(supabase: _FakeSupabaseRestClient, *, owner_id: str = "worker-2") -> WorkerCoordinationService:
     service = WorkerCoordinationService.__new__(WorkerCoordinationService)
     service._supabase = supabase
@@ -294,6 +306,35 @@ def test_try_claim_lease_ignores_cleanup_lookup_failure() -> None:
 
     assert service.try_claim_lease("lease-fresh", ttl_seconds=30) is True
     assert supabase.tables["worker_leases"][0]["lease_key"] == "lease-fresh"
+
+
+def test_try_claim_lease_falls_back_when_bulk_cleanup_delete_is_rejected() -> None:
+    supabase = _RejectBulkLeaseDeleteSupabaseRestClient()
+    now = datetime.now(tz=UTC)
+    stale_expiry = (now - timedelta(days=3)).isoformat()
+    recent_expiry = (now - timedelta(hours=2)).isoformat()
+    supabase.tables["worker_leases"] = [
+        {
+            "lease_key": "lease-stale",
+            "owner_id": "worker-old",
+            "expires_at": stale_expiry,
+            "updated_at": stale_expiry,
+        },
+        {
+            "lease_key": "lease-recent",
+            "owner_id": "worker-old",
+            "expires_at": recent_expiry,
+            "updated_at": recent_expiry,
+        },
+    ]
+    service = _build_service(supabase)
+
+    assert service.try_claim_lease("lease-fresh", ttl_seconds=30) is True
+
+    remaining_keys = {row["lease_key"] for row in supabase.tables["worker_leases"]}
+    assert "lease-stale" not in remaining_keys
+    assert "lease-recent" in remaining_keys
+    assert "lease-fresh" in remaining_keys
 
 
 def test_release_lease_ignores_transient_supabase_error() -> None:
