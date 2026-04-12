@@ -35,15 +35,17 @@ class PacificaRateLimiter:
 
     async def _acquire_token(self, bucket: str, limit: int) -> None:
         while True:
-            window_start = int(time.time())
+            now = time.time()
+            window_start = int(now)
+            ttl_seconds = self._lease_ttl_seconds(now=now)
             start_slot = await self._next_slot(limit)
             for offset in range(limit):
                 slot = (start_slot + offset) % limit
-                lease_key = f"rate-budget:{bucket}:{window_start}:{slot}"
+                lease_key = self._lease_key(bucket=bucket, slot=slot)
                 claimed = await asyncio.to_thread(
                     self._coordination.try_claim_lease,
                     lease_key,
-                    ttl_seconds=2,
+                    ttl_seconds=ttl_seconds,
                 )
                 if claimed:
                     return
@@ -54,6 +56,15 @@ class PacificaRateLimiter:
             slot = self._cursor % limit
             self._cursor += 1
             return slot
+
+    @staticmethod
+    def _lease_key(*, bucket: str, slot: int) -> str:
+        return f"rate-budget:{bucket}:{slot}"
+
+    @staticmethod
+    def _lease_ttl_seconds(*, now: float) -> float:
+        window_end = int(now) + 1
+        return max(0.05, (window_end - now) + 0.05)
 
 
 @lru_cache(maxsize=1)
