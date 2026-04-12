@@ -4,6 +4,8 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
+
 from src.services.builder_ai_service import BuilderAiService
 
 
@@ -36,6 +38,15 @@ class _FakeHttpClient:
         if not self._responses:
             raise AssertionError("No fake responses remaining")
         return self._responses.pop(0)
+
+
+class _TimeoutHttpClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def post(self, url: str, *, headers: dict[str, str], json: dict[str, Any]) -> _FakeResponse:
+        self.calls.append({"url": url, "headers": headers, "json": json})
+        raise httpx.ReadTimeout("timed out")
 
 
 def _service_with(
@@ -395,3 +406,26 @@ def test_generate_draft_accepts_gemini_function_call_parts() -> None:
     assert result["draft"]["markets"] == ["BTC"]
     assert len(result["draft"]["routes"]) == 1
     assert result["draft"]["conditions"][0]["type"] == "rsi_below"
+
+
+def test_generate_draft_converts_openai_timeouts_to_runtime_errors() -> None:
+    service = BuilderAiService()
+    service.settings = _FakeSettings(
+        openai_api_key="open-key",
+        openai_base_url="https://example.openai.test/v1",
+        openai_model="gpt-5-mini",
+    )
+    service._http = _TimeoutHttpClient()
+
+    try:
+        asyncio.run(
+            service.generate_draft(
+                messages=[{"role": "user", "content": "Build a BTC momentum bot"}],
+                available_markets=["BTC"],
+                current_draft=None,
+            )
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "OpenAI: OpenAI request timed out."
+    else:
+        raise AssertionError("Expected RuntimeError")

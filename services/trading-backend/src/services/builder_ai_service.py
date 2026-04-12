@@ -77,7 +77,7 @@ class _ProviderAttempt:
 class BuilderAiService:
     def __init__(self) -> None:
         self.settings = get_settings()
-        self._http = httpx.AsyncClient(timeout=45.0)
+        self._http = httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0))
 
     async def generate_draft(
         self,
@@ -153,31 +153,36 @@ class BuilderAiService:
         messages: list[dict[str, str]],
         system_prompt: str,
     ) -> Any:
-        response = await self._http.post(
-            self._build_gemini_url(self.settings.gemini_base_url, self.settings.gemini_model),
-            headers={
-                "Authorization": f"Bearer {self.settings.gemini_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "systemInstruction": {
-                    "parts": [
-                        {
-                            "text": system_prompt,
-                        }
-                    ]
+        try:
+            response = await self._http.post(
+                self._build_gemini_url(self.settings.gemini_base_url, self.settings.gemini_model),
+                headers={
+                    "Authorization": f"Bearer {self.settings.gemini_api_key}",
+                    "Content-Type": "application/json",
                 },
-                "contents": self._build_gemini_contents(messages),
-                "generationConfig": {
-                    "temperature": 1,
-                    "topP": 1,
-                    "thinkingConfig": {
-                        "includeThoughts": True,
-                        "thinkingBudget": 26240,
+                json={
+                    "systemInstruction": {
+                        "parts": [
+                            {
+                                "text": system_prompt,
+                            }
+                        ]
+                    },
+                    "contents": self._build_gemini_contents(messages),
+                    "generationConfig": {
+                        "temperature": 1,
+                        "topP": 1,
+                        "thinkingConfig": {
+                            "includeThoughts": True,
+                            "thinkingBudget": 26240,
+                        },
                     },
                 },
-            },
-        )
+            )
+        except httpx.TimeoutException as exc:
+            raise RuntimeError("Gemini request timed out.") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"Gemini request failed: {exc}") from exc
         return self._parse_response_payload(response)
 
     async def _request_openai(
@@ -185,23 +190,28 @@ class BuilderAiService:
         messages: list[dict[str, str]],
         system_prompt: str,
     ) -> Any:
-        response = await self._http.post(
-            self._build_responses_url(self.settings.openai_base_url),
-            headers={
-                "Authorization": f"Bearer {self.settings.openai_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": self.settings.openai_model,
-                "input": [
-                    {
-                        "role": "system",
-                        "content": system_prompt,
-                    },
-                    *messages,
-                ],
-            },
-        )
+        try:
+            response = await self._http.post(
+                self._build_responses_url(self.settings.openai_base_url),
+                headers={
+                    "Authorization": f"Bearer {self.settings.openai_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.settings.openai_model,
+                    "input": [
+                        {
+                            "role": "system",
+                            "content": system_prompt,
+                        },
+                        *messages,
+                    ],
+                },
+            )
+        except httpx.TimeoutException as exc:
+            raise RuntimeError("OpenAI request timed out.") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"OpenAI request failed: {exc}") from exc
         return self._parse_response_payload(response)
 
     def _build_responses_url(self, base_url: str) -> str:
