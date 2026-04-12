@@ -121,6 +121,12 @@ type BuilderBotDefinition = {
   market_scope: string;
   rules_json: Record<string, unknown>;
 };
+type BuilderRuntimeOverview = {
+  health: {
+    runtime_id: string | null;
+    status: string;
+  };
+};
 type SavedBuilderBot = {
   id: string;
   name: string;
@@ -1157,6 +1163,7 @@ export function BuilderGraphStudio({
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [loadingBotId, setLoadingBotId] = useState<string | null>(null);
   const [loadedBotId, setLoadedBotId] = useState<string | null>(null);
+  const [loadedBotIsDeployed, setLoadedBotIsDeployed] = useState(false);
   const [savedBots, setSavedBots] = useState<SavedBuilderBot[]>([]);
   const [savedBotsLoading, setSavedBotsLoading] = useState(false);
   const [savedBotsOpen, setSavedBotsOpen] = useState(false);
@@ -1260,16 +1267,32 @@ export function BuilderGraphStudio({
 
     setLoadingBotId(botId);
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/bots/${botId}?wallet_address=${encodeURIComponent(walletAddress)}`,
-        { cache: "no-store", headers: await getAuthHeaders() },
-      );
+      const headers = await getAuthHeaders();
+      const [response, runtimeOverviewResponse] = await Promise.all([
+        fetch(
+          `${API_BASE_URL}/api/bots/${botId}?wallet_address=${encodeURIComponent(walletAddress)}`,
+          { cache: "no-store", headers },
+        ),
+        fetch(
+          `${API_BASE_URL}/api/bots/${botId}/runtime-overview?wallet_address=${encodeURIComponent(walletAddress)}`,
+          { cache: "no-store", headers },
+        ),
+      ]);
       const payload = (await response.json()) as BuilderBotDefinition | { detail?: string };
+      const runtimeOverviewPayload = (await runtimeOverviewResponse.json()) as BuilderRuntimeOverview | { detail?: string };
       if (!response.ok) {
         throw new Error("detail" in payload ? payload.detail ?? "Could not load bot draft" : "Could not load bot draft");
       }
+      if (!runtimeOverviewResponse.ok) {
+        throw new Error(
+          "detail" in runtimeOverviewPayload
+            ? runtimeOverviewPayload.detail ?? "Could not load bot runtime state"
+            : "Could not load bot runtime state",
+        );
+      }
 
       const bot = payload as BuilderBotDefinition;
+      const runtimeOverview = runtimeOverviewPayload as BuilderRuntimeOverview;
       const persistedGraph = isPortableBuilderGraph(bot.rules_json.graph) ? bot.rules_json.graph : null;
       const editorGraph = isPortableBuilderGraph(bot.rules_json.editor_graph) ? bot.rules_json.editor_graph : null;
       const activeMarketSymbols = Array.from(
@@ -1309,6 +1332,7 @@ export function BuilderGraphStudio({
       setSelectedMarketSymbols(selectedSymbols);
       setCreatedBotId(bot.id);
       setLoadedBotId(bot.id);
+      setLoadedBotIsDeployed(Boolean(runtimeOverview.health.runtime_id) && runtimeOverview.health.status !== "draft");
       setRuntimeStatus(null);
       setError(null);
       setBlockSearch("");
@@ -1722,6 +1746,7 @@ export function BuilderGraphStudio({
     );
     setCreatedBotId(null);
     setLoadedBotId(null);
+    setLoadedBotIsDeployed(false);
     setRuntimeStatus(null);
     setError(null);
 
@@ -1742,6 +1767,7 @@ export function BuilderGraphStudio({
     setSelectedMarketSymbols(["BTC", "ETH", "SOL"]);
     setCreatedBotId(null);
     setLoadedBotId(null);
+    setLoadedBotIsDeployed(false);
     setRuntimeStatus(null);
     setError(null);
     setBlockSearch("");
@@ -1780,6 +1806,7 @@ export function BuilderGraphStudio({
     setSelectedMarketSymbols(nextSelectedMarkets.length > 0 ? nextSelectedMarkets : ["BTC"]);
     setCreatedBotId(null);
     setLoadedBotId(null);
+    setLoadedBotIsDeployed(false);
     setRuntimeStatus(null);
     setBuilderMode("ai");
     setError(null);
@@ -2126,6 +2153,7 @@ export function BuilderGraphStudio({
     setBuilderMode(payload.draft.builder_mode ?? "visual");
     setCreatedBotId(null);
     setLoadedBotId(null);
+    setLoadedBotIsDeployed(false);
     setRuntimeStatus(null);
     setError(null);
     setBlockSearch("");
@@ -2178,6 +2206,7 @@ export function BuilderGraphStudio({
 
   function openDeployModal() {
     if (!authenticated) return void login();
+    if (loadedBotIsDeployed) return;
     const blocker = getBuilderBlocker("deploy");
     if (blocker) {
       if (blocker === onboardingStatus.blocker) {
@@ -2240,6 +2269,7 @@ export function BuilderGraphStudio({
       });
       const payload = (await response.json()) as { status?: string; detail?: string };
       if (!response.ok) throw new Error(payload.detail ?? "Deploy failed");
+      setLoadedBotIsDeployed(true);
       setRuntimeStatus(payload.status ?? "active");
       setRuntimeControlsOpen(false);
       onNotice?.({
@@ -2257,6 +2287,13 @@ export function BuilderGraphStudio({
       setStatus("idle");
     }
   }
+
+  const deployActionDisabled = status === "deploying" || loadedBotIsDeployed;
+  const deployActionLabel = status === "deploying"
+    ? "Deploying..."
+    : loadedBotIsDeployed
+      ? "Deployed"
+      : "Deploy Bot";
 
   return (
     <div className="relative flex-1 flex flex-col bg-app overflow-hidden">
@@ -2369,16 +2406,18 @@ export function BuilderGraphStudio({
             </div>
             <button
               onClick={openDeployModal}
-              disabled={status === "deploying"}
+              disabled={deployActionDisabled}
               className={clsx(
                 "flex items-center gap-2 h-9 px-4 rounded-md text-sm font-semibold transition-all whitespace-nowrap",
-                status === "deploying"
+                deployActionDisabled
                   ? "bg-neutral-800 text-neutral-500"
                   : "bg-[#dce85d] text-[#090a0a] hover:bg-[#e8f06d]"
               )}
+              aria-disabled={deployActionDisabled}
+              title={loadedBotIsDeployed ? "This bot is already deployed. Manage runtime changes from the bot page." : undefined}
             >
               <Play className="w-4 h-4" />
-              {status === "deploying" ? "Deploying..." : "Deploy Bot"}
+              {deployActionLabel}
             </button>
             <button
               type="button"
