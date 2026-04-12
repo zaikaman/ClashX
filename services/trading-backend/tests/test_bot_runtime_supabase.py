@@ -666,6 +666,31 @@ def test_runtime_worker_keeps_volatile_runtime_state_in_memory() -> None:
     assert fake_supabase.tables["bot_runtimes"][0]["risk_policy_json"]["_runtime_state"] == {}
 
 
+def test_runtime_worker_refreshes_updated_at_as_idle_heartbeat() -> None:
+    fake_supabase = CountingFakeSupabaseRestClient(_seed_tables())
+    fake_supabase.tables["bot_runtimes"][0]["updated_at"] = "2026-03-16T00:00:00+00:00"
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+    worker._supabase = fake_supabase
+
+    runtime = asyncio.run(
+        worker._process_runtime(
+            None,
+            deepcopy(fake_supabase.tables["bot_runtimes"][0]),
+            bot=deepcopy(fake_supabase.tables["bot_definitions"][0]),
+            bot_loaded=True,
+            wallet_due=False,
+            evaluation_due=False,
+        )
+    )
+
+    assert len(fake_supabase.update_calls) == 1
+    table, values, filters = fake_supabase.update_calls[0]
+    assert table == "bot_runtimes"
+    assert filters == {"id": "runtime-1"}
+    assert values["updated_at"] != "2026-03-16T00:00:00+00:00"
+    assert runtime["updated_at"] == fake_supabase.tables["bot_runtimes"][0]["updated_at"]
+
+
 def test_runtime_worker_reuses_local_runtime_lease_before_refresh() -> None:
     worker = BotRuntimeWorker(poll_interval_seconds=0.01)
     lease_calls: list[tuple[str, int]] = []

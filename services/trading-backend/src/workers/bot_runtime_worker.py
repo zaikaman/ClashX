@@ -259,7 +259,7 @@ class BotRuntimeWorker:
         runtime_policy = self._risk.normalize_policy(runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {})
         runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
         if not wallet_due and not evaluation_due:
-            return runtime
+            return self._maybe_refresh_runtime_heartbeat(runtime, now=now)
 
         resolved_price_lookup = dict(price_lookup or {})
         positions: list[dict[str, Any]] = []
@@ -352,7 +352,7 @@ class BotRuntimeWorker:
             return runtime
 
         if not evaluation_due:
-            return runtime
+            return self._maybe_refresh_runtime_heartbeat(runtime, now=now)
 
         credentials = self._auth.get_trading_credentials(None, runtime["wallet_address"])
         if credentials is None:
@@ -388,7 +388,7 @@ class BotRuntimeWorker:
                 "Runtime %s skipped rule evaluation because entry capacity is full and no exit actions are declared",
                 runtime["id"],
             )
-            return runtime
+            return self._maybe_refresh_runtime_heartbeat(runtime, now=now)
 
         resolved_market_lookup = market_lookup or self._build_market_lookup(await self._load_markets())
         resolved_candle_lookup = candle_lookup or await self._indicator_context.load_candle_lookup(rules_json)
@@ -409,7 +409,7 @@ class BotRuntimeWorker:
             },
         )
         if not evaluation.get("triggered"):
-            return runtime
+            return self._maybe_refresh_runtime_heartbeat(runtime, now=now)
 
         actions = evaluation.get("actions") or []
         logger.debug(
@@ -436,9 +436,7 @@ class BotRuntimeWorker:
         )
         if batch_result is not None:
             runtime_touched = batch_result
-            if not runtime_touched:
-                return runtime
-            return runtime
+            return self._maybe_refresh_runtime_heartbeat(runtime, now=now)
         for action_index, raw_action in enumerate(actions):
             action = self._apply_runtime_sizing_policy(
                 action=raw_action,
@@ -591,9 +589,7 @@ class BotRuntimeWorker:
                     action.get("symbol"),
                     exc,
                 )
-        if not runtime_touched:
-            return runtime
-        return runtime
+        return self._maybe_refresh_runtime_heartbeat(runtime, now=now)
 
     async def _maybe_execute_batch_actions(
         self,
@@ -1305,6 +1301,20 @@ class BotRuntimeWorker:
         serialized_updates = {key: value.isoformat() if isinstance(value, datetime) else value for key, value in updates.items()}
         updated = self._supabase.update("bot_runtimes", serialized_updates, filters={"id": runtime["id"]})[0]
         return self._merge_cached_runtime_state(updated)
+
+    def _maybe_refresh_runtime_heartbeat(
+        self,
+        runtime: dict[str, Any],
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        if str(runtime.get("status") or "") != "active":
+            return runtime
+        resolved_now = now or datetime.now(tz=UTC)
+        last_updated = self._parse_runtime_state_timestamp(str(runtime.get("updated_at") or ""))
+        if last_updated is not None and (resolved_now - last_updated).total_seconds() < RUNTIME_HEARTBEAT_INTERVAL_SECONDS:
+            return runtime
+        return self._update_runtime(runtime, {"updated_at": resolved_now})
 
     def _merge_cached_runtime_state(self, runtime: dict[str, Any]) -> dict[str, Any]:
         next_runtime = dict(runtime)
