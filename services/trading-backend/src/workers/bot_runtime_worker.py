@@ -37,6 +37,7 @@ SKIP_EVENT_CACHE_TTL_SECONDS = SKIP_EVENT_DEDUP_SECONDS
 IDLE_RUNTIME_DISCOVERY_SECONDS = 5.0
 RUNTIME_SET_REFRESH_SECONDS = 15.0
 MIN_WORKER_SLEEP_SECONDS = 1.0
+RUNTIME_COORDINATION_LEASE_SECONDS = 300
 VOLATILE_RUNTIME_STATE_KEYS = frozenset(
     {
         "wallet_synced_at",
@@ -150,7 +151,7 @@ class BotRuntimeWorker:
                     lease_key = f"bot-runtime:{runtime['id']}"
                     if not self._claim_local_runtime_lease(
                         lease_key,
-                        ttl_seconds=max(15, int(self.poll_interval_seconds * 3)),
+                        ttl_seconds=RUNTIME_COORDINATION_LEASE_SECONDS,
                     ):
                         continue
                     updated_runtime = await self._process_runtime(
@@ -1375,7 +1376,7 @@ class BotRuntimeWorker:
         if not claimed:
             self._held_leases.pop(lease_key, None)
             return False
-        self._held_leases[lease_key] = monotonic() + max(1.0, ttl_seconds * 0.6)
+        self._held_leases[lease_key] = monotonic() + max(1.0, ttl_seconds * 0.85)
         return True
 
     def _lease_refresh_not_due(self, lease_key: str) -> bool:

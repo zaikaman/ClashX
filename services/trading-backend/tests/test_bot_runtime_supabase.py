@@ -666,6 +666,28 @@ def test_runtime_worker_keeps_volatile_runtime_state_in_memory() -> None:
     assert fake_supabase.tables["bot_runtimes"][0]["risk_policy_json"]["_runtime_state"] == {}
 
 
+def test_runtime_worker_reuses_local_runtime_lease_before_refresh() -> None:
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+    lease_calls: list[tuple[str, int]] = []
+
+    class _FakeCoordination:
+        def try_claim_lease(self, lease_key: str, *, ttl_seconds: int) -> bool:
+            lease_calls.append((lease_key, ttl_seconds))
+            return True
+
+        def release_lease(self, lease_key: str) -> None:
+            del lease_key
+
+    worker._coordination = _FakeCoordination()  # type: ignore[assignment]
+
+    first = worker._claim_local_runtime_lease("bot-runtime:runtime-1", ttl_seconds=300)
+    second = worker._claim_local_runtime_lease("bot-runtime:runtime-1", ttl_seconds=300)
+
+    assert first is True
+    assert second is True
+    assert lease_calls == [("bot-runtime:runtime-1", 300)]
+
+
 def test_list_runtime_events_returns_empty_list_when_runtime_is_missing() -> None:
     tables = _seed_tables()
     tables["bot_runtimes"] = []
