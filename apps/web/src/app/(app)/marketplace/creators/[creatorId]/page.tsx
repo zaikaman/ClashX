@@ -96,7 +96,7 @@ export default function MarketplaceCreatorPage({ params: paramsPromise }: { para
       </section>
 
       {profile ? (
-        <CreatorReputationCard creator={profile} showBots />
+        <CreatorReputationCard creator={profile} showBots showCreatorLink={false} />
       ) : (
         <article className="rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-5 py-6 text-sm text-neutral-400">
           Loading creator strategies...

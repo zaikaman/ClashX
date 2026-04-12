@@ -10,9 +10,10 @@ import type {
 type CreatorProps = {
   creator: CreatorSummary | CreatorProfile | MarketplaceCreatorProfile | CreatorHighlight;
   showBots?: boolean;
+  showCreatorLink?: boolean;
 };
 
-export function CreatorReputationCard({ creator, showBots = false }: CreatorProps) {
+export function CreatorReputationCard({ creator, showBots = false, showCreatorLink = true }: CreatorProps) {
   const bots = "bots" in creator ? creator.bots : [];
   const followerCount = "follower_count" in creator ? creator.follower_count : 0;
   const reachScore = "marketplace_reach_score" in creator ? creator.marketplace_reach_score : creator.reputation_score;
@@ -28,12 +29,14 @@ export function CreatorReputationCard({ creator, showBots = false }: CreatorProp
             <p className="mt-2 max-w-2xl text-sm leading-7 text-neutral-400">{headline}</p>
           </div>
         </div>
-        <Link
-          href={`/marketplace/creators/${creator.creator_id}`}
-          className="rounded-full border border-white/10 px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#74b97f] hover:text-[#74b97f]"
-        >
-          Open creator
-        </Link>
+        {showCreatorLink ? (
+          <Link
+            href={`/marketplace/creators/${creator.creator_id}`}
+            className="rounded-full border border-white/10 px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#74b97f] hover:text-[#74b97f]"
+          >
+            Open creator
+          </Link>
+        ) : null}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
