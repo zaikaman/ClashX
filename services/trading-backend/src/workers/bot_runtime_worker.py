@@ -7,6 +7,7 @@ import inspect
 import json
 import logging
 import uuid
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from time import monotonic
@@ -36,6 +37,16 @@ SKIP_EVENT_CACHE_TTL_SECONDS = SKIP_EVENT_DEDUP_SECONDS
 IDLE_RUNTIME_DISCOVERY_SECONDS = 5.0
 RUNTIME_SET_REFRESH_SECONDS = 15.0
 MIN_WORKER_SLEEP_SECONDS = 1.0
+VOLATILE_RUNTIME_STATE_KEYS = frozenset(
+    {
+        "wallet_synced_at",
+        "performance_synced_at",
+        "last_rule_evaluated_at",
+        "evaluation_slots",
+        "observed_open_orders",
+        "observed_positions",
+    }
+)
 ENTRY_ACTION_TYPES = {
     "open_long",
     "open_short",
@@ -63,6 +74,7 @@ class BotRuntimeWorker:
         self._metrics = get_performance_metrics_store()
         self._held_leases: dict[str, float] = {}
         self._recent_skip_events: dict[str, float] = {}
+        self._runtime_state_cache: dict[str, dict[str, Any]] = {}
         self.last_iteration_at: str | None = None
         self.last_error: str | None = None
 
@@ -89,6 +101,7 @@ class BotRuntimeWorker:
             next_sleep_seconds = IDLE_RUNTIME_DISCOVERY_SECONDS
             try:
                 runtimes = await asyncio.to_thread(lambda: list(self._engine.get_active_runtimes(None)))
+                runtimes = [self._merge_cached_runtime_state(runtime) for runtime in runtimes]
                 bot_lookup = await self._load_runtime_bot_lookup(runtimes)
                 runtime_specs: list[dict[str, Any]] = []
                 shared_candle_requests: list[dict[str, Any]] = []
@@ -151,6 +164,8 @@ class BotRuntimeWorker:
                         wallet_due=bool(runtime_spec.get("wallet_due")),
                         evaluation_due=bool(runtime_spec.get("evaluation_due")),
                     )
+                    if not isinstance(updated_runtime, dict):
+                        updated_runtime = runtime
                     updated_bot = runtime_spec.get("bot")
                     updated_rules_json = (
                         updated_bot["rules_json"]
@@ -513,7 +528,6 @@ class BotRuntimeWorker:
                     success=True,
                 )
                 runtime_policy["_runtime_state"] = {**persisted_runtime_state, **cycle_runtime_state}
-                runtime = self._persist_runtime_policy(runtime, runtime_policy)
                 position_lookup = await self._refresh_position_lookup(
                     credentials["account_address"],
                     price_lookup=resolved_price_lookup,
@@ -661,7 +675,8 @@ class BotRuntimeWorker:
                 runtime_policy = self._risk.mark_execution(policy=runtime_policy, success=False)
                 runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
                 runtime_policy["_runtime_state"] = {**runtime_state, **cycle_runtime_state}
-                runtime = self._persist_runtime_policy(runtime, runtime_policy)
+            runtime = self._persist_runtime_policy(runtime, runtime_policy)
+            for item in batch_items:
                 event = self._engine.append_execution_event(
                     None,
                     runtime=runtime,
@@ -702,7 +717,6 @@ class BotRuntimeWorker:
                 success=True,
             )
             runtime_policy["_runtime_state"] = {**persisted_runtime_state, **cycle_runtime_state}
-            runtime = self._persist_runtime_policy(runtime, runtime_policy)
             event = self._engine.append_execution_event(
                 None,
                 runtime=runtime,
@@ -732,7 +746,7 @@ class BotRuntimeWorker:
             open_order_lookup=open_order_lookup,
         )
         runtime_policy["_runtime_state"] = {**persisted_runtime_state, **cycle_runtime_state}
-        self._persist_runtime_policy(runtime, runtime_policy)
+        runtime = self._persist_runtime_policy(runtime, runtime_policy)
         return True
 
     async def _execute_action(
@@ -1288,7 +1302,49 @@ class BotRuntimeWorker:
 
     def _update_runtime(self, runtime: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
         serialized_updates = {key: value.isoformat() if isinstance(value, datetime) else value for key, value in updates.items()}
-        return self._supabase.update("bot_runtimes", serialized_updates, filters={"id": runtime["id"]})[0]
+        updated = self._supabase.update("bot_runtimes", serialized_updates, filters={"id": runtime["id"]})[0]
+        return self._merge_cached_runtime_state(updated)
+
+    def _merge_cached_runtime_state(self, runtime: dict[str, Any]) -> dict[str, Any]:
+        next_runtime = dict(runtime)
+        runtime_id = str(next_runtime.get("id") or "").strip()
+        if not runtime_id:
+            return next_runtime
+        cached_state = self._runtime_state_cache.get(runtime_id)
+        if not isinstance(cached_state, dict) or not cached_state:
+            return next_runtime
+        runtime_policy = self._risk.normalize_policy(
+            next_runtime.get("risk_policy_json") if isinstance(next_runtime.get("risk_policy_json"), dict) else {}
+        )
+        persisted_state = self._extract_runtime_state(runtime_policy)
+        runtime_policy["_runtime_state"] = {**persisted_state, **deepcopy(cached_state)}
+        next_runtime["risk_policy_json"] = runtime_policy
+        return next_runtime
+
+    @staticmethod
+    def _with_runtime_policy(runtime: dict[str, Any], runtime_policy: dict[str, Any]) -> dict[str, Any]:
+        next_runtime = dict(runtime)
+        next_runtime["risk_policy_json"] = deepcopy(runtime_policy)
+        return next_runtime
+
+    def _storage_ready_runtime_policy(self, runtime_policy: dict[str, Any]) -> dict[str, Any]:
+        normalized_policy = self._risk.normalize_policy(runtime_policy)
+        runtime_state = self._extract_runtime_state(normalized_policy)
+        stored_state = {
+            key: deepcopy(value)
+            for key, value in runtime_state.items()
+            if key not in VOLATILE_RUNTIME_STATE_KEYS
+        }
+        next_policy = {key: deepcopy(value) for key, value in normalized_policy.items() if key != "_runtime_state"}
+        next_policy["_runtime_state"] = stored_state
+        return next_policy
+
+    @staticmethod
+    def _extract_runtime_state(runtime_policy: dict[str, Any]) -> dict[str, Any]:
+        runtime_state = runtime_policy.get("_runtime_state")
+        if not isinstance(runtime_state, dict):
+            return {}
+        return deepcopy(runtime_state)
 
     async def _load_runtime_bot_lookup(self, runtimes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         definition_ids = sorted(
@@ -1458,20 +1514,22 @@ class BotRuntimeWorker:
         now: datetime | None = None,
     ) -> dict[str, Any]:
         resolved_now = now or datetime.now(tz=UTC)
-        runtime_updated_at = self._parse_runtime_state_timestamp(str(runtime.get("updated_at") or ""))
-        heartbeat_due = runtime_updated_at is None or (
-            resolved_now - runtime_updated_at
-        ).total_seconds() >= RUNTIME_HEARTBEAT_INTERVAL_SECONDS
+        runtime_id = str(runtime.get("id") or "").strip()
+        if runtime_id:
+            self._runtime_state_cache[runtime_id] = self._extract_runtime_state(runtime_policy)
 
-        if runtime.get("risk_policy_json") == runtime_policy and not heartbeat_due:
-            next_runtime = dict(runtime)
-            next_runtime["risk_policy_json"] = runtime_policy
-            return next_runtime
-
-        return self._update_runtime(
-            runtime,
-            {"risk_policy_json": runtime_policy, "updated_at": resolved_now},
+        stored_policy = self._storage_ready_runtime_policy(runtime_policy)
+        current_policy = self._storage_ready_runtime_policy(
+            runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {}
         )
+        if current_policy == stored_policy:
+            return self._with_runtime_policy(runtime, runtime_policy)
+
+        updated_runtime = self._update_runtime(
+            runtime,
+            {"risk_policy_json": stored_policy, "updated_at": resolved_now},
+        )
+        return self._with_runtime_policy(updated_runtime, runtime_policy)
 
     async def _should_record_skip_event_async(
         self,

@@ -185,6 +185,7 @@ class CountingFakeSupabaseRestClient(FakeSupabaseRestClient):
         super().__init__(tables)
         self.select_calls: list[tuple[str, dict[str, Any] | None, str]] = []
         self.maybe_one_calls: list[tuple[str, dict[str, Any] | None, str]] = []
+        self.update_calls: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
 
     def select(
         self,
@@ -223,6 +224,17 @@ class CountingFakeSupabaseRestClient(FakeSupabaseRestClient):
             order=order,
             cache_ttl_seconds=cache_ttl_seconds,
         )
+
+    def update(
+        self,
+        table: str,
+        values: dict[str, Any],
+        *,
+        filters: dict[str, Any],
+        returning: str = "representation",
+    ) -> list[dict[str, Any]]:
+        self.update_calls.append((table, deepcopy(values), deepcopy(filters)))
+        return super().update(table, values, filters=filters, returning=returning)
 
 
 class FakeAuthService:
@@ -627,6 +639,31 @@ def test_skip_event_lookup_uses_local_cache_after_first_match() -> None:
     assert first is False
     assert second is False
     assert len(fake_supabase.select_calls) == 1
+
+
+def test_runtime_worker_keeps_volatile_runtime_state_in_memory() -> None:
+    fake_supabase = CountingFakeSupabaseRestClient(_seed_tables())
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+    worker._supabase = fake_supabase
+
+    runtime = deepcopy(fake_supabase.tables["bot_runtimes"][0])
+    runtime_policy = deepcopy(runtime["risk_policy_json"])
+    runtime_policy["_runtime_state"] = {
+        "wallet_synced_at": "2026-03-16T00:15:00+00:00",
+        "performance_synced_at": "2026-03-16T00:15:00+00:00",
+        "last_rule_evaluated_at": "2026-03-16T00:15:00+00:00",
+        "evaluation_slots": {"fast": 42},
+        "observed_open_orders": 2,
+        "observed_positions": 1,
+    }
+
+    updated_runtime = worker._persist_runtime_policy(runtime, runtime_policy)
+    reloaded_runtime = worker._merge_cached_runtime_state(fake_supabase.tables["bot_runtimes"][0])
+
+    assert fake_supabase.update_calls == []
+    assert updated_runtime["risk_policy_json"]["_runtime_state"]["wallet_synced_at"] == "2026-03-16T00:15:00+00:00"
+    assert reloaded_runtime["risk_policy_json"]["_runtime_state"]["evaluation_slots"] == {"fast": 42}
+    assert fake_supabase.tables["bot_runtimes"][0]["risk_policy_json"]["_runtime_state"] == {}
 
 
 def test_list_runtime_events_returns_empty_list_when_runtime_is_missing() -> None:

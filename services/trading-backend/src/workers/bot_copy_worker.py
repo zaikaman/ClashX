@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class BotCopyWorker:
-    def __init__(self, poll_interval_seconds: float = 6.0) -> None:
+    def __init__(self, poll_interval_seconds: float = 30.0) -> None:
         self.poll_interval_seconds = poll_interval_seconds
         self._task: asyncio.Task | None = None
         self._running = False
@@ -88,7 +88,7 @@ class BotCopyWorker:
             "bot_runtimes",
             columns="id,status",
             filters={"id": relationship["source_runtime_id"]},
-            cache_ttl_seconds=5,
+            cache_ttl_seconds=30,
         )
         if runtime is None or runtime["status"] != "active":
             return

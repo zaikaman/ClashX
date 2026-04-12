@@ -250,11 +250,14 @@ class PortfolioAllocatorService:
 
     def refresh_portfolio_metrics(self, *, portfolio_id: str) -> dict[str, Any]:
         detail = self.get_portfolio(portfolio_id=portfolio_id)
-        self.supabase.update(
-            "portfolio_baskets",
-            {"current_notional_usd": detail["health"]["current_total_notional_usd"], "updated_at": datetime.now(tz=UTC).isoformat()},
-            filters={"id": portfolio_id},
-        )
+        target_notional = float(detail["health"]["current_total_notional_usd"] or 0.0)
+        current_notional = float(detail.get("current_notional_usd") or 0.0)
+        if abs(current_notional - target_notional) >= 0.01:
+            self.supabase.update(
+                "portfolio_baskets",
+                {"current_notional_usd": target_notional, "updated_at": datetime.now(tz=UTC).isoformat()},
+                filters={"id": portfolio_id},
+            )
         return detail
 
     def _build_portfolio_payload(self, basket: dict[str, Any]) -> dict[str, Any]:
