@@ -441,11 +441,13 @@ async def get_runtime_profile(
 
 @router.get("/dashboard", response_model=BotCopyDashboardResponse)
 async def get_bot_copy_dashboard(
+    response: Response,
     wallet_address: str = Query(min_length=8),
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> BotCopyDashboardResponse:
     del db
+    response.headers["Cache-Control"] = "private, max-age=2, stale-while-revalidate=8"
     ensure_wallet_owned(user, wallet_address)
     payload = await dashboard_service.get_dashboard(wallet_address=wallet_address)
     return BotCopyDashboardResponse.model_validate(payload)

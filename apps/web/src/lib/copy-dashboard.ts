@@ -1,5 +1,8 @@
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
+const COPY_DASHBOARD_CACHE_TTL_MS = 60_000;
+const COPY_DASHBOARD_CACHE_PREFIX = "clashx.copy-dashboard:";
+
 export type CopyTradingSummary = {
   active_follows: number;
   open_positions: number;
@@ -115,3 +118,100 @@ export type CopyTradingDashboard = {
   discover: CopyTradingDiscoverRow[];
   baskets_summary: CopyTradingBasketSummary[];
 };
+
+type CopyTradingDashboardCacheEntry = {
+  cachedAt: number;
+  dashboard: CopyTradingDashboard;
+};
+
+const copyDashboardCache = new Map<string, CopyTradingDashboardCacheEntry>();
+
+function normalizeWalletAddress(walletAddress: string) {
+  return walletAddress.trim().toLowerCase();
+}
+
+function cacheKey(walletAddress: string) {
+  return `${COPY_DASHBOARD_CACHE_PREFIX}${normalizeWalletAddress(walletAddress)}`;
+}
+
+function isFreshCacheEntry(entry: CopyTradingDashboardCacheEntry | null) {
+  return Boolean(entry && Date.now() - entry.cachedAt < COPY_DASHBOARD_CACHE_TTL_MS);
+}
+
+function isDashboardCacheEntry(value: unknown): value is CopyTradingDashboardCacheEntry {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<CopyTradingDashboardCacheEntry>;
+  return typeof candidate.cachedAt === "number" && typeof candidate.dashboard === "object" && candidate.dashboard !== null;
+}
+
+export function readCachedCopyTradingDashboard(walletAddress: string) {
+  const normalizedWalletAddress = normalizeWalletAddress(walletAddress);
+  if (!normalizedWalletAddress) {
+    return null;
+  }
+
+  const memoryEntry = copyDashboardCache.get(normalizedWalletAddress) ?? null;
+  if (isFreshCacheEntry(memoryEntry)) {
+    return memoryEntry?.dashboard ?? null;
+  }
+
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const rawValue = window.sessionStorage.getItem(cacheKey(normalizedWalletAddress));
+    if (!rawValue) {
+      return null;
+    }
+
+    const parsed = JSON.parse(rawValue) as unknown;
+    if (!isDashboardCacheEntry(parsed)) {
+      window.sessionStorage.removeItem(cacheKey(normalizedWalletAddress));
+      copyDashboardCache.delete(normalizedWalletAddress);
+      return null;
+    }
+
+    if (!isFreshCacheEntry(parsed)) {
+      window.sessionStorage.removeItem(cacheKey(normalizedWalletAddress));
+      copyDashboardCache.delete(normalizedWalletAddress);
+      return null;
+    }
+
+    copyDashboardCache.set(normalizedWalletAddress, parsed);
+    return parsed.dashboard;
+  } catch {
+    copyDashboardCache.delete(normalizedWalletAddress);
+    return null;
+  }
+}
+
+export function writeCachedCopyTradingDashboard(
+  walletAddress: string,
+  dashboard: CopyTradingDashboard,
+) {
+  const normalizedWalletAddress = normalizeWalletAddress(walletAddress);
+  if (!normalizedWalletAddress) {
+    return;
+  }
+
+  const nextEntry: CopyTradingDashboardCacheEntry = {
+    cachedAt: Date.now(),
+    dashboard,
+  };
+
+  copyDashboardCache.set(normalizedWalletAddress, nextEntry);
+
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(cacheKey(normalizedWalletAddress), JSON.stringify(nextEntry));
+  } catch {
+    // Ignore session storage quota and privacy mode failures.
+  }
+}

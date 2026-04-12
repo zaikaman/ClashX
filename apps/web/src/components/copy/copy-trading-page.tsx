@@ -14,6 +14,8 @@ import {
 import {
   API_BASE_URL,
   type CopyTradingDashboard,
+  readCachedCopyTradingDashboard,
+  writeCachedCopyTradingDashboard,
 } from "@/lib/copy-dashboard";
 import { useClashxAuth } from "@/lib/clashx-auth";
 import {
@@ -111,7 +113,20 @@ export function CopyTradingPage() {
         return;
       }
 
+      const cachedDashboard = readCachedCopyTradingDashboard(walletAddress);
+
       if (silent) {
+        setRefreshing(true);
+      } else if (cachedDashboard) {
+        setDashboard(cachedDashboard);
+        setScaleDrafts((current) => {
+          const next: Record<string, number> = {};
+          for (const follow of cachedDashboard.follows) {
+            next[follow.id] = current[follow.id] ?? follow.scale_bps;
+          }
+          return next;
+        });
+        setLoading(false);
         setRefreshing(true);
       } else {
         setLoading(true);
@@ -121,7 +136,6 @@ export function CopyTradingPage() {
         const response = await fetch(
           `${API_BASE_URL}/api/bot-copy/dashboard?wallet_address=${encodeURIComponent(walletAddress)}`,
           {
-            cache: "no-store",
             headers: await getAuthHeaders(),
           },
         );
@@ -131,6 +145,7 @@ export function CopyTradingPage() {
         }
         const nextDashboard = payload as CopyTradingDashboard;
         setDashboard(nextDashboard);
+        writeCachedCopyTradingDashboard(walletAddress, nextDashboard);
         setScaleDrafts((current) => {
           const next: Record<string, number> = {};
           for (const follow of nextDashboard.follows) {
@@ -197,6 +212,17 @@ export function CopyTradingPage() {
   }, [activeTab, advancedLoaded, loadAdvanced]);
 
   useEffect(() => {
+    const cachedDashboard = walletAddress ? readCachedCopyTradingDashboard(walletAddress) : null;
+
+    setDashboard(cachedDashboard);
+    setScaleDrafts(
+      cachedDashboard
+        ? Object.fromEntries(cachedDashboard.follows.map((follow) => [follow.id, follow.scale_bps]))
+        : {},
+    );
+    setLoading(Boolean(walletAddress) && cachedDashboard === null);
+    setRefreshing(false);
+    setError(null);
     setAdvancedLoaded(false);
     setPortfolios([]);
     setEditingPortfolioId(null);
