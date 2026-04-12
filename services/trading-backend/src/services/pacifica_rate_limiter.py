@@ -2,18 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from functools import lru_cache
 
 from src.core.settings import get_settings
-from src.services.worker_coordination_service import WorkerCoordinationService
-
 
 class PacificaRateLimiter:
-    def __init__(self, coordination: WorkerCoordinationService | None = None) -> None:
+    def __init__(self) -> None:
         self._settings = get_settings()
-        self._coordination = coordination or WorkerCoordinationService()
-        self._cursor = 0
-        self._cursor_lock = asyncio.Lock()
+        self._bucket_events: dict[str, deque[float]] = {}
+        self._bucket_locks: dict[str, asyncio.Lock] = {}
 
     async def acquire(self, *, bucket: str, units: int = 1) -> None:
         for _ in range(max(1, units)):
@@ -34,37 +32,22 @@ class PacificaRateLimiter:
         await self._acquire_token(bucket, limit)
 
     async def _acquire_token(self, bucket: str, limit: int) -> None:
+        if limit <= 0:
+            return
+        lock = self._bucket_locks.setdefault(bucket, asyncio.Lock())
+        events = self._bucket_events.setdefault(bucket, deque())
         while True:
-            now = time.time()
-            window_start = int(now)
-            ttl_seconds = self._lease_ttl_seconds(now=now)
-            start_slot = await self._next_slot(limit)
-            for offset in range(limit):
-                slot = (start_slot + offset) % limit
-                lease_key = self._lease_key(bucket=bucket, slot=slot)
-                claimed = await asyncio.to_thread(
-                    self._coordination.try_claim_lease,
-                    lease_key,
-                    ttl_seconds=ttl_seconds,
-                )
-                if claimed:
+            sleep_seconds = 0.0
+            async with lock:
+                now = time.monotonic()
+                cutoff = now - 1.0
+                while events and events[0] <= cutoff:
+                    events.popleft()
+                if len(events) < limit:
+                    events.append(now)
                     return
-            await asyncio.sleep(max(0.01, (window_start + 1) - time.time()))
-
-    async def _next_slot(self, limit: int) -> int:
-        async with self._cursor_lock:
-            slot = self._cursor % limit
-            self._cursor += 1
-            return slot
-
-    @staticmethod
-    def _lease_key(*, bucket: str, slot: int) -> str:
-        return f"rate-budget:{bucket}:{slot}"
-
-    @staticmethod
-    def _lease_ttl_seconds(*, now: float) -> float:
-        window_end = int(now) + 1
-        return max(0.05, (window_end - now) + 0.05)
+                sleep_seconds = max(0.01, 1.0 - (now - events[0]))
+            await asyncio.sleep(sleep_seconds)
 
 
 @lru_cache(maxsize=1)

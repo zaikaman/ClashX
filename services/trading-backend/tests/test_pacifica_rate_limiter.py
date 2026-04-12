@@ -1,49 +1,45 @@
 from __future__ import annotations
 
+from collections import deque
+
 import pytest
 
 from src.services.pacifica_rate_limiter import PacificaRateLimiter
 
 
-class _FakeCoordination:
-    def __init__(self, *, claim_results: list[bool] | None = None) -> None:
-        self.claim_results = list(claim_results or [True])
-        self.calls: list[tuple[str, float]] = []
+@pytest.mark.anyio
+async def test_acquire_token_records_local_bucket_event() -> None:
+    limiter = PacificaRateLimiter()
 
-    def try_claim_lease(self, lease_key: str, *, ttl_seconds: int) -> bool:
-        self.calls.append((lease_key, float(ttl_seconds)))
-        if self.claim_results:
-            return self.claim_results.pop(0)
-        return False
+    await limiter._acquire_token("public", 2)
 
-
-def test_rate_limiter_uses_stable_slot_lease_keys() -> None:
-    assert PacificaRateLimiter._lease_key(bucket="public", slot=3) == "rate-budget:public:3"
-    assert PacificaRateLimiter._lease_key(bucket="global", slot=11) == "rate-budget:global:11"
-
-
-def test_rate_limiter_scopes_ttl_to_current_second_boundary() -> None:
-    ttl = PacificaRateLimiter._lease_ttl_seconds(now=100.95)
-    assert 0.05 <= ttl <= 0.11
-
-    ttl = PacificaRateLimiter._lease_ttl_seconds(now=100.25)
-    assert 0.79 <= ttl <= 0.81
+    assert "public" in limiter._bucket_events
+    assert len(limiter._bucket_events["public"]) == 1
 
 
 @pytest.mark.anyio
-async def test_acquire_token_reuses_stable_slot_keys() -> None:
-    coordination = _FakeCoordination(claim_results=[False, True])
-    limiter = PacificaRateLimiter(coordination=coordination)
+async def test_acquire_token_waits_when_local_bucket_is_full(monkeypatch: pytest.MonkeyPatch) -> None:
+    limiter = PacificaRateLimiter()
+    limiter._bucket_events["public"] = deque([10.0])
 
-    async def _next_slot(limit: int) -> int:
-        assert limit == 4
-        return 0
+    monotonic_values = [10.2, 10.2, 11.25, 11.25]
+    sleep_calls: list[float] = []
 
-    limiter._next_slot = _next_slot  # type: ignore[method-assign]
+    def _fake_monotonic() -> float:
+        if monotonic_values:
+            return monotonic_values.pop(0)
+        return 11.25
 
-    await limiter._acquire_token("public", 4)
+    monkeypatch.setattr("src.services.pacifica_rate_limiter.time.monotonic", _fake_monotonic)
 
-    assert [call[0] for call in coordination.calls] == [
-        "rate-budget:public:0",
-        "rate-budget:public:1",
-    ]
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr("src.services.pacifica_rate_limiter.asyncio.sleep", _fake_sleep)
+
+    await limiter._acquire_token("public", 1)
+
+    assert sleep_calls
+    assert sleep_calls[0] == pytest.approx(0.8, abs=0.01)
+    assert len(limiter._bucket_events["public"]) == 1
+    assert limiter._bucket_events["public"][0] == 11.25
