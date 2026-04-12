@@ -513,13 +513,18 @@ class CreatorMarketplaceService:
         normalized = dict(payload)
         creator = normalized.get("creator")
         if isinstance(creator, dict):
-            normalized["creator"] = self._normalize_creator_profile_payload(creator)
+            normalized["creator"] = self._normalize_runtime_creator_profile_payload(creator)
         return normalized
 
     def _normalize_creator_profile_payload(self, creator: dict[str, Any]) -> dict[str, Any]:
         normalized = dict(creator)
         normalized["bots"] = self._normalize_creator_marketplace_rows(normalized.get("bots"))
         normalized["featured_bots"] = self._normalize_creator_marketplace_rows(normalized.get("featured_bots"))
+        return normalized
+
+    def _normalize_runtime_creator_profile_payload(self, creator: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(creator)
+        normalized["bots"] = self._normalize_creator_bot_summaries(normalized.get("bots"))
         return normalized
 
     def _creator_profile_payload_is_complete(self, payload: dict[str, Any]) -> bool:
