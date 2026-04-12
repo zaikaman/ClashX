@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import uuid
 from datetime import UTC, datetime
 from time import monotonic
 from decimal import ROUND_DOWN, Decimal
@@ -160,7 +161,7 @@ class BotCopyWorker:
                 self._supabase.insert,
                 "audit_events",
                 {
-                    "id": marker,
+                    "id": str(uuid.uuid4()),
                     "user_id": relationship["follower_user_id"],
                     "action": marker,
                     "payload": {
