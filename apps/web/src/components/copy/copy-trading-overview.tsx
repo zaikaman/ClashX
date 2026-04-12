@@ -84,14 +84,14 @@ export function CopyTradingOverview({
               href="/marketplace"
               className="rounded-full bg-[#dce85d] px-5 py-3 text-[0.64rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d]"
             >
-              Find traders
+              Find bots
             </Link>
           </div>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-          <MetricCard label="Active follows" value={`${dashboard.summary.active_follows}`} detail="Traders currently being copied" />
-          <MetricCard label="Open copied trades" value={`${dashboard.summary.open_positions}`} detail="Positions copied from traders" />
+          <MetricCard label="Active follows" value={`${dashboard.summary.active_follows}`} detail="Bots currently being copied" />
+          <MetricCard label="Open copied trades" value={`${dashboard.summary.open_positions}`} detail="Positions copied from bots" />
           <MetricCard label="Copied notional" value={formatUsd(dashboard.summary.copied_open_notional_usd)} detail="Current copied exposure" />
           <MetricCard
             label="Copied unrealized"
@@ -157,7 +157,7 @@ export function CopyTradingOverview({
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="grid gap-1">
             <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-400">Active follows</span>
-            <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Traders you are copying</h2>
+            <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Bots you are copying</h2>
           </div>
           <Link
             href="/marketplace"
@@ -168,7 +168,7 @@ export function CopyTradingOverview({
         </div>
         {dashboard.follows.length === 0 ? (
           <article className="rounded-[1.5rem] border border-dashed border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-5 py-6 text-sm leading-7 text-neutral-400">
-            You are not copying anyone yet. Pick a trader below or head to the marketplace to get started.
+            You are not copying any bots yet. Pick a bot below or head to the marketplace to get started.
           </article>
         ) : (
           <div className="grid gap-4">
@@ -224,11 +224,11 @@ function MyCopyPortfolio({ follows }: { follows: CopyTradingFollow[] }) {
     <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5 md:p-6">
       <div className="grid gap-1">
         <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#74b97f]">My copy portfolio</span>
-        <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Allocation by trader</h2>
+        <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Allocation by bot</h2>
       </div>
       {activeFollows.length === 0 ? (
         <p className="rounded-[1.5rem] border border-dashed border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-5 text-sm leading-6 text-neutral-400">
-          Once you start copying traders, this is where your allocation, exposure, and account health will show up.
+          Once you start copying bots, this is where your allocation, exposure, and account health will show up.
         </p>
       ) : (
         <div className="grid gap-3">
@@ -504,8 +504,8 @@ function DiscoverTraders({ rows }: { rows: CopyTradingDiscoverRow[] }) {
     <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5 md:p-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="grid gap-1">
-          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]">Discover traders</span>
-          <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Traders worth watching</h2>
+          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]">Discover bots</span>
+          <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">Bots worth watching</h2>
         </div>
         <Link
           href="/marketplace"

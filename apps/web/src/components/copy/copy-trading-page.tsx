@@ -395,7 +395,7 @@ export function CopyTradingPage() {
           <div className="grid gap-2">
             <span className="text-[0.64rem] font-semibold uppercase tracking-[0.2em] text-[#dce85d]">Copy trading</span>
             <h1 className="font-mono text-[clamp(2.2rem,5vw,4rem)] font-extrabold uppercase leading-[0.92] tracking-[-0.05em] text-neutral-50">
-              Follow top traders with a clear view of every move
+              Follow top bots with a clear view of every move
             </h1>
             <p className="max-w-3xl text-sm leading-7 text-neutral-400 md:text-base">
               Connect your trading wallet to see open positions, live PnL, and execution status in one place.
@@ -413,7 +413,7 @@ export function CopyTradingPage() {
               href="/marketplace"
               className="rounded-full border border-[rgba(255,255,255,0.12)] px-5 py-3 text-[0.64rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#74b97f] hover:text-[#74b97f]"
             >
-              Browse traders
+              Browse bots
             </Link>
           </div>
         </section>
@@ -445,7 +445,7 @@ export function CopyTradingPage() {
             href="/marketplace"
             className="rounded-full border border-[rgba(255,255,255,0.12)] px-5 py-3 text-[0.64rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#74b97f] hover:text-[#74b97f]"
           >
-            Browse traders
+            Browse bots
           </Link>
         </section>
       </main>
