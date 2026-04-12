@@ -359,7 +359,7 @@ class CreatorMarketplaceService:
         creator_id: str,
         public_rows: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        base_profile = self.trust_service.get_creator_profile(creator_id=creator_id, include_bots=True)
+        base_profile = self.trust_service.get_creator_profile(creator_id=creator_id, include_bots=False)
         user = self.supabase.maybe_one("users", filters={"id": creator_id})
         if user is None:
             raise ValueError("Creator not found")
@@ -727,7 +727,34 @@ class CreatorMarketplaceService:
         if isinstance(payload, dict) and payload:
             if self._creator_profile_payload_is_complete(payload):
                 return self._normalize_creator_profile_payload(payload)
-        return await self._build_creator_profile_live(creator_id=creator_id)
+        return await self._rebuild_creator_profile_snapshot(creator_id=creator_id)
+
+    async def _rebuild_creator_profile_snapshot(self, *, creator_id: str) -> dict[str, Any]:
+        creator_rows = self._list_runtime_snapshot_rows(limit=96, creator_id=creator_id)
+        profile_payload = await self._build_creator_profile_live(
+            creator_id=creator_id,
+            public_rows=creator_rows or None,
+        )
+        highlight_payload = self._creator_profile_to_highlight(profile_payload)
+        self.supabase.insert(
+            MARKETPLACE_CREATOR_SNAPSHOT_TABLE,
+            {
+                "creator_id": creator_id,
+                "display_name": str(profile_payload.get("display_name") or "")[:80],
+                "marketplace_reach_score": int(
+                    highlight_payload.get("marketplace_reach_score")
+                    or profile_payload.get("marketplace_reach_score")
+                    or 0
+                ),
+                "highlight_json": self._json_ready_payload(highlight_payload),
+                "profile_json": self._json_ready_payload(profile_payload),
+                "last_computed_at": datetime.now(tz=UTC).isoformat(),
+            },
+            upsert=True,
+            on_conflict="creator_id",
+            returning="minimal",
+        )
+        return profile_payload
 
     def get_publishing_settings(self, *, bot_id: str, wallet_address: str) -> dict[str, Any]:
         bot = self._require_owned_bot(bot_id=bot_id, wallet_address=wallet_address)

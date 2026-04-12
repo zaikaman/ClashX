@@ -89,6 +89,7 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def startup() -> None:
+        await marketplace_service.start_background_warmup()
         if not settings.background_workers_enabled:
             return
         await market_data_service.start()
@@ -107,6 +108,8 @@ def create_app() -> FastAPI:
         running_bot_runtime_worker: BotRuntimeWorker | None = getattr(app.state, "bot_runtime_worker", None)
         running_bot_runtime_snapshot_worker: BotRuntimeSnapshotWorker | None = getattr(app.state, "bot_runtime_snapshot_worker", None)
         running_portfolio_allocator_worker: PortfolioAllocatorWorker | None = getattr(app.state, "portfolio_allocator_worker", None)
+        with contextlib.suppress(asyncio.CancelledError):
+            await marketplace_service.stop_background_warmup()
         if running_bot_copy_worker is not None:
             with contextlib.suppress(asyncio.CancelledError):
                 await running_bot_copy_worker.stop()

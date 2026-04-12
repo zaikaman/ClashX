@@ -5,6 +5,9 @@ from src.services.creator_marketplace_service import CreatorMarketplaceService
 
 
 class _FakeSupabase:
+    def __init__(self) -> None:
+        self.insert_calls: list[tuple[str, object, dict[str, object]]] = []
+
     def maybe_one(self, table: str, **_kwargs):
         if table == "marketplace_creator_snapshots":
             return {
@@ -22,6 +25,15 @@ class _FakeSupabase:
                 }
             }
         return None
+
+    def select(self, table: str, **_kwargs):
+        if table == "marketplace_runtime_snapshots":
+            return []
+        return []
+
+    def insert(self, table: str, values, **kwargs):
+        self.insert_calls.append((table, values, kwargs))
+        return [values] if isinstance(values, dict) else values
 
 
 def test_get_creator_profile_rebuilds_when_snapshot_bots_are_incomplete(monkeypatch) -> None:
@@ -64,8 +76,9 @@ def test_get_creator_profile_rebuilds_when_snapshot_bots_are_incomplete(monkeypa
         "featured_bots": [],
     }
 
-    async def _fake_build_creator_profile_live(*, creator_id: str):
+    async def _fake_build_creator_profile_live(*, creator_id: str, public_rows=None):
         assert creator_id == "creator-1"
+        assert public_rows is None
         return expected
 
     monkeypatch.setattr(service, "_build_creator_profile_live", _fake_build_creator_profile_live)
@@ -73,6 +86,14 @@ def test_get_creator_profile_rebuilds_when_snapshot_bots_are_incomplete(monkeypa
     payload = asyncio.run(service.get_creator_profile(creator_id="creator-1"))
 
     assert payload == expected
+    assert len(service.supabase.insert_calls) == 1
+    insert_table, insert_values, insert_kwargs = service.supabase.insert_calls[0]
+    assert insert_table == "marketplace_creator_snapshots"
+    assert insert_kwargs["upsert"] is True
+    assert insert_kwargs["on_conflict"] == "creator_id"
+    assert isinstance(insert_values, dict)
+    assert insert_values["creator_id"] == "creator-1"
+    assert insert_values["profile_json"] == expected
 
 
 def test_runtime_profile_normalizes_creator_bots_to_summary_shape() -> None:
