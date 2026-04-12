@@ -11,7 +11,7 @@ const sections = [
   },
   {
     title: "Operate live bots",
-    body: "Open My Bots for runtime health, execution logs, and controls. Use Copy Center when you want to follow or clone proven strategies.",
+    body: "Open My Bots for runtime health, execution logs, and controls. Use Copy Trading when you want to monitor live follows and copied exposure.",
   },
 ];
 
@@ -42,7 +42,7 @@ export default function DocsPage() {
           <div>
             <h2 className="text-2xl font-semibold tracking-tight">Open the product desks</h2>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-neutral-200">
-              Marketplace is where you discover strategies. Builder Studio is where you compose them. My Bots and Copy Center are where you operate what is live.
+              Marketplace is where you discover strategies. Builder Studio is where you compose them. My Bots and Copy Trading are where you operate what is live.
             </p>
           </div>
           <div className="flex flex-wrap gap-3">

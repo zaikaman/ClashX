@@ -157,6 +157,20 @@ class BotCopyWorker:
                 status = "error"
                 error_reason = str(exc)
 
+            execution_record = self._build_execution_record(
+                relationship=relationship,
+                source_event=source_event,
+                action=action,
+                result=result,
+                status=status,
+                error_reason=error_reason,
+            )
+            await asyncio.to_thread(
+                self._supabase.insert,
+                "bot_copy_execution_events",
+                execution_record,
+                returning="minimal",
+            )
             await asyncio.to_thread(
                 self._supabase.insert,
                 "audit_events",
@@ -364,9 +378,22 @@ class BotCopyWorker:
                 raise ValueError("No follower position size to close")
             side = str(follower_position.get("side") or "").lower()
             close_side = "ask" if side in {"bid", "long"} else "bid"
-            return await self._pacifica.place_order(
+            response = await self._pacifica.place_order(
                 {"type": "create_market_order", **payload, "side": close_side, "amount": amount, "reduce_only": True}
             )
+            response["execution_meta"] = {
+                "symbol": symbol,
+                "side": close_side,
+                "position_side": "long" if side in {"bid", "long"} else "short",
+                "amount": amount,
+                "reduce_only": True,
+                "reference_price": float(
+                    follower_position.get("mark_price")
+                    or (market_lookup.get(symbol) or {}).get("mark_price")
+                    or 0
+                ),
+            }
+            return response
 
         if action_type == "set_tpsl":
             follower_position = position_lookup.get(symbol)
@@ -385,7 +412,7 @@ class BotCopyWorker:
             else:
                 take_profit_price = mark_price * (1 - tp_pct / 100)
                 stop_loss_price = mark_price * (1 + sl_pct / 100)
-            return await self._pacifica.place_order(
+            response = await self._pacifica.place_order(
                 {
                     "type": "set_position_tpsl",
                     **payload,
@@ -393,39 +420,75 @@ class BotCopyWorker:
                     "stop_loss": {"stop_price": stop_loss_price, "amount": amount},
                 }
             )
+            response["execution_meta"] = {
+                "symbol": symbol,
+                "side": side,
+                "position_side": "long" if side in {"bid", "long"} else "short",
+                "amount": amount,
+                "reduce_only": False,
+                "reference_price": mark_price,
+            }
+            return response
 
         if action_type == "update_leverage":
             if not symbol:
                 raise ValueError("Leverage updates require a symbol")
             leverage = max(1, int(float(action.get("leverage") or 1)))
-            return await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
+            response = await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
+            response["execution_meta"] = {
+                "symbol": symbol,
+                "side": None,
+                "position_side": None,
+                "amount": 0.0,
+                "reduce_only": False,
+                "reference_price": float((market_lookup.get(symbol) or {}).get("mark_price") or 0),
+            }
+            return response
 
         if action_type == "cancel_order":
             if not symbol:
                 raise ValueError("Cancel order requires a symbol")
-            return await self._pacifica.place_order(
+            response = await self._pacifica.place_order(
                 {
                     "type": "cancel_order",
                     **payload,
                     **self._extract_mirrored_order_identifier(relationship=relationship, source_event=source_event, action=action),
                 }
             )
+            response["execution_meta"] = {
+                "symbol": symbol,
+                "side": str(action.get("side") or "").lower().strip() or None,
+                "position_side": None,
+                "amount": 0.0,
+                "reduce_only": self._to_bool(action.get("reduce_only"), False),
+                "reference_price": float((market_lookup.get(symbol) or {}).get("mark_price") or 0),
+            }
+            return response
 
         if action_type == "cancel_twap_order":
             if not symbol:
                 raise ValueError("Cancel TWAP order requires a symbol")
-            return await self._pacifica.place_order(
+            response = await self._pacifica.place_order(
                 {
                     "type": "cancel_twap_order",
                     **payload,
                     **self._extract_mirrored_order_identifier(relationship=relationship, source_event=source_event, action=action),
                 }
             )
+            response["execution_meta"] = {
+                "symbol": symbol,
+                "side": str(action.get("side") or "").lower().strip() or None,
+                "position_side": None,
+                "amount": 0.0,
+                "reduce_only": self._to_bool(action.get("reduce_only"), False),
+                "reference_price": float((market_lookup.get(symbol) or {}).get("mark_price") or 0),
+            }
+            return response
 
         if action_type == "cancel_all_orders":
             if not self._to_bool(action.get("all_symbols"), True) and not symbol:
                 raise ValueError("Cancel all orders requires a symbol when all_symbols is false")
-            return await self._pacifica.place_order(
+            response = await self._pacifica.place_order(
                 {
                     "type": "cancel_all_orders",
                     **payload,
@@ -433,6 +496,15 @@ class BotCopyWorker:
                     "exclude_reduce_only": self._to_bool(action.get("exclude_reduce_only"), False),
                 }
             )
+            response["execution_meta"] = {
+                "symbol": symbol or None,
+                "side": None,
+                "position_side": None,
+                "amount": 0.0,
+                "reduce_only": False,
+                "reference_price": float((market_lookup.get(symbol) or {}).get("mark_price") or 0) if symbol else 0.0,
+            }
+            return response
 
         raise ValueError(f"Unsupported mirrored action type: {action_type}")
 
@@ -556,6 +628,66 @@ class BotCopyWorker:
         trimmed_relationship = relationship_id.replace("-", "")[:12]
         trimmed_source = source_identifier.replace(" ", "").replace("-", "")[:32]
         return f"mirror-{trimmed_relationship}-{trimmed_source}"
+
+    def _build_execution_record(
+        self,
+        *,
+        relationship: dict[str, Any],
+        source_event: dict[str, Any],
+        action: dict[str, Any],
+        result: dict[str, Any],
+        status: str,
+        error_reason: str | None,
+    ) -> dict[str, Any]:
+        now = datetime.now(tz=UTC).isoformat()
+        execution_meta = result.get("execution_meta") if isinstance(result.get("execution_meta"), dict) else {}
+        response_payload = result.get("response") if isinstance(result.get("response"), dict) else {}
+        action_type = str(action.get("type") or "")
+        symbol = str(execution_meta.get("symbol") or action.get("symbol") or "").upper().replace("-PERP", "")
+        order_side = execution_meta.get("side")
+        normalized_order_side = None
+        if isinstance(order_side, str):
+            normalized_order_side = "long" if order_side in {"bid", "long"} else "short" if order_side in {"ask", "short"} else order_side
+        action_side = str(action.get("side") or "").lower().strip()
+        reduce_only = bool(execution_meta.get("reduce_only")) or self._to_bool(action.get("reduce_only"), False) or action_type == "close_position"
+        position_side = execution_meta.get("position_side")
+        if not isinstance(position_side, str) or not position_side:
+            if action_type == "open_long":
+                position_side = "long"
+            elif action_type == "open_short":
+                position_side = "short"
+            elif action_type in {"place_market_order", "place_limit_order", "place_twap_order"}:
+                position_side = action_side if action_side in {"long", "short"} else normalized_order_side
+            else:
+                position_side = normalized_order_side
+        copied_quantity = float(execution_meta.get("amount") or action.get("quantity") or 0)
+        reference_price = float(execution_meta.get("reference_price") or action.get("price") or 0)
+        if reference_price <= 0:
+            reference_price = float(action.get("mark_price") or 0)
+        return {
+            "id": str(uuid.uuid4()),
+            "relationship_id": relationship["id"],
+            "source_runtime_id": relationship["source_runtime_id"],
+            "source_event_id": source_event["id"],
+            "follower_user_id": relationship["follower_user_id"],
+            "follower_wallet_address": relationship["follower_wallet_address"],
+            "symbol": symbol,
+            "side": normalized_order_side,
+            "position_side": position_side,
+            "action_type": action_type,
+            "reduce_only": reduce_only,
+            "requested_quantity": float(action.get("quantity") or 0),
+            "copied_quantity": copied_quantity,
+            "reference_price": reference_price,
+            "notional_estimate_usd": round(copied_quantity * reference_price, 2) if copied_quantity > 0 and reference_price > 0 else 0.0,
+            "request_id": result.get("request_id"),
+            "client_order_id": response_payload.get("client_order_id") or action.get("client_order_id"),
+            "status": "mirrored" if status == "mirrored" else "error",
+            "error_reason": error_reason,
+            "result_payload_json": result,
+            "created_at": now,
+            "updated_at": now,
+        }
 
     @property
     def is_running(self) -> bool:

@@ -71,8 +71,8 @@ export const appNavGroups: AppNavGroup[] = [
       },
       {
         href: "/copy",
-        label: "Copy center",
-        description: "Manage follows and cloned drafts.",
+        label: "Copy trading",
+        description: "Track copied exposure, trader health, and live follow risk.",
       },
     ],
   },
@@ -128,7 +128,7 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
       ],
       actions: [
         { href: "/marketplace", label: "Back to marketplace", tone: "secondary" },
-        { href: "/copy", label: "Open copy center", tone: "ghost" },
+        { href: "/copy", label: "Open copy trading", tone: "ghost" },
       ],
     };
   }
@@ -163,7 +163,7 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
         "Open a runtime profile before you mirror anything so you can inspect recent behavior.",
       ],
       actions: [
-        { href: "/copy", label: "Open copy center", tone: "primary" },
+        { href: "/copy", label: "Open copy trading", tone: "primary" },
         { href: "/builder", label: "Build your own bot", tone: "secondary" },
       ],
     };
@@ -261,18 +261,18 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
 
   if (normalizedPathname === "/copy") {
     return {
-      eyebrow: "Copy center",
-      title: "Manage follows and cloned drafts",
-      description: "Keep track of the bots you follow live, stop a follow when needed, and reopen cloned bots for editing.",
+      eyebrow: "Copy trading",
+      title: "Run a live copy desk with real exposure visibility",
+      description: "Track copied positions, current PnL, leader health, and execution issues from one trader-facing command center.",
       guidanceTitle: "Use this desk",
       guidance: [
-        "Open the marketplace if you need new bots to evaluate or follow.",
-        "Use cloned drafts when you want to customize a successful idea instead of mirroring it directly.",
-        "Review active follows regularly so your risk stays intentional.",
+        "Start with copied notional, live PnL, and open positions so you know the real book state immediately.",
+        "Use the leader cards to resize, pause, or resume follows without leaving the desk.",
+        "Open the advanced tab only when you actually need multi-trader basket controls.",
       ],
       actions: [
         { href: "/marketplace", label: "Browse marketplace", tone: "primary" },
-        { href: "/bots", label: "Open my bots", tone: "secondary" },
+        { href: "/dashboard", label: "Open operations", tone: "secondary" },
       ],
     };
   }

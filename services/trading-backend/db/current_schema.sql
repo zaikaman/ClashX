@@ -72,9 +72,38 @@ CREATE TABLE public.bot_clones (
   created_by_user_id uuid NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT bot_clones_pkey PRIMARY KEY (id),
-  CONSTRAINT bot_clones_source_bot_definition_id_fkey FOREIGN KEY (source_bot_definition_id) REFERENCES public.bot_definitions(id),
+  CONSTRAINT bot_clones_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id),
   CONSTRAINT bot_clones_new_bot_definition_id_fkey FOREIGN KEY (new_bot_definition_id) REFERENCES public.bot_definitions(id),
-  CONSTRAINT bot_clones_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public.users(id)
+  CONSTRAINT bot_clones_source_bot_definition_id_fkey FOREIGN KEY (source_bot_definition_id) REFERENCES public.bot_definitions(id)
+);
+CREATE TABLE public.bot_copy_execution_events (
+  id uuid NOT NULL,
+  relationship_id uuid NOT NULL,
+  source_runtime_id uuid NOT NULL,
+  source_event_id uuid NOT NULL,
+  follower_user_id uuid NOT NULL,
+  follower_wallet_address character varying NOT NULL,
+  symbol character varying NOT NULL DEFAULT ''::character varying,
+  side character varying,
+  position_side character varying,
+  action_type character varying NOT NULL,
+  reduce_only boolean NOT NULL DEFAULT false,
+  requested_quantity double precision NOT NULL DEFAULT 0,
+  copied_quantity double precision NOT NULL DEFAULT 0,
+  reference_price double precision NOT NULL DEFAULT 0,
+  notional_estimate_usd double precision NOT NULL DEFAULT 0,
+  request_id character varying,
+  client_order_id character varying,
+  status character varying NOT NULL DEFAULT 'queued'::character varying,
+  error_reason text,
+  result_payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT bot_copy_execution_events_pkey PRIMARY KEY (id),
+  CONSTRAINT bot_copy_execution_events_relationship_id_fkey FOREIGN KEY (relationship_id) REFERENCES public.bot_copy_relationships(id),
+  CONSTRAINT bot_copy_execution_events_source_runtime_id_fkey FOREIGN KEY (source_runtime_id) REFERENCES public.bot_runtimes(id),
+  CONSTRAINT bot_copy_execution_events_source_event_id_fkey FOREIGN KEY (source_event_id) REFERENCES public.bot_execution_events(id),
+  CONSTRAINT bot_copy_execution_events_follower_user_id_fkey FOREIGN KEY (follower_user_id) REFERENCES public.users(id)
 );
 CREATE TABLE public.bot_copy_relationships (
   id uuid NOT NULL,
@@ -90,8 +119,8 @@ CREATE TABLE public.bot_copy_relationships (
   portfolio_basket_id uuid,
   max_notional_usd double precision,
   CONSTRAINT bot_copy_relationships_pkey PRIMARY KEY (id),
-  CONSTRAINT bot_copy_relationships_source_runtime_id_fkey FOREIGN KEY (source_runtime_id) REFERENCES public.bot_runtimes(id),
-  CONSTRAINT bot_copy_relationships_follower_user_id_fkey FOREIGN KEY (follower_user_id) REFERENCES public.users(id)
+  CONSTRAINT bot_copy_relationships_follower_user_id_fkey FOREIGN KEY (follower_user_id) REFERENCES public.users(id),
+  CONSTRAINT bot_copy_relationships_source_runtime_id_fkey FOREIGN KEY (source_runtime_id) REFERENCES public.bot_runtimes(id)
 );
 CREATE TABLE public.bot_definitions (
   id uuid NOT NULL,
@@ -160,8 +189,8 @@ CREATE TABLE public.bot_publish_snapshots (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT bot_publish_snapshots_pkey PRIMARY KEY (id),
   CONSTRAINT bot_publish_snapshots_bot_definition_id_fkey FOREIGN KEY (bot_definition_id) REFERENCES public.bot_definitions(id),
-  CONSTRAINT bot_publish_snapshots_strategy_version_id_fkey FOREIGN KEY (strategy_version_id) REFERENCES public.bot_strategy_versions(id),
-  CONSTRAINT bot_publish_snapshots_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id)
+  CONSTRAINT bot_publish_snapshots_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id),
+  CONSTRAINT bot_publish_snapshots_strategy_version_id_fkey FOREIGN KEY (strategy_version_id) REFERENCES public.bot_strategy_versions(id)
 );
 CREATE TABLE public.bot_publishing_settings (
   id uuid NOT NULL,
@@ -195,8 +224,8 @@ CREATE TABLE public.bot_runtime_snapshots (
   source_runtime_updated_at timestamp with time zone,
   last_computed_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT bot_runtime_snapshots_pkey PRIMARY KEY (runtime_id),
-  CONSTRAINT bot_runtime_snapshots_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id),
   CONSTRAINT bot_runtime_snapshots_bot_definition_id_fkey FOREIGN KEY (bot_definition_id) REFERENCES public.bot_definitions(id),
+  CONSTRAINT bot_runtime_snapshots_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id),
   CONSTRAINT bot_runtime_snapshots_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
 CREATE TABLE public.bot_runtimes (
@@ -251,8 +280,8 @@ CREATE TABLE public.bot_trade_closures (
   realized_pnl double precision NOT NULL DEFAULT 0,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT bot_trade_closures_pkey PRIMARY KEY (id),
-  CONSTRAINT bot_trade_closures_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id),
-  CONSTRAINT bot_trade_closures_lot_id_fkey FOREIGN KEY (lot_id) REFERENCES public.bot_trade_lots(id)
+  CONSTRAINT bot_trade_closures_lot_id_fkey FOREIGN KEY (lot_id) REFERENCES public.bot_trade_lots(id),
+  CONSTRAINT bot_trade_closures_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id)
 );
 CREATE TABLE public.bot_trade_lots (
   id uuid NOT NULL,
@@ -367,8 +396,8 @@ CREATE TABLE public.featured_bots (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT featured_bots_pkey PRIMARY KEY (id),
-  CONSTRAINT featured_bots_creator_profile_id_fkey FOREIGN KEY (creator_profile_id) REFERENCES public.creator_marketplace_profiles(id),
-  CONSTRAINT featured_bots_bot_definition_id_fkey FOREIGN KEY (bot_definition_id) REFERENCES public.bot_definitions(id)
+  CONSTRAINT featured_bots_bot_definition_id_fkey FOREIGN KEY (bot_definition_id) REFERENCES public.bot_definitions(id),
+  CONSTRAINT featured_bots_creator_profile_id_fkey FOREIGN KEY (creator_profile_id) REFERENCES public.creator_marketplace_profiles(id)
 );
 CREATE TABLE public.leaderboard_snapshots (
   id uuid NOT NULL,
@@ -403,9 +432,9 @@ CREATE TABLE public.marketplace_runtime_snapshots (
   captured_at timestamp with time zone,
   last_computed_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT marketplace_runtime_snapshots_pkey PRIMARY KEY (runtime_id),
-  CONSTRAINT marketplace_runtime_snapshots_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id),
   CONSTRAINT marketplace_runtime_snapshots_bot_definition_id_fkey FOREIGN KEY (bot_definition_id) REFERENCES public.bot_definitions(id),
-  CONSTRAINT marketplace_runtime_snapshots_creator_id_fkey FOREIGN KEY (creator_id) REFERENCES public.users(id)
+  CONSTRAINT marketplace_runtime_snapshots_creator_id_fkey FOREIGN KEY (creator_id) REFERENCES public.users(id),
+  CONSTRAINT marketplace_runtime_snapshots_runtime_id_fkey FOREIGN KEY (runtime_id) REFERENCES public.bot_runtimes(id)
 );
 CREATE TABLE public.pacifica_authorizations (
   id uuid NOT NULL,
@@ -448,8 +477,8 @@ CREATE TABLE public.portfolio_allocation_members (
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT portfolio_allocation_members_pkey PRIMARY KEY (id),
   CONSTRAINT portfolio_allocation_members_portfolio_basket_id_fkey FOREIGN KEY (portfolio_basket_id) REFERENCES public.portfolio_baskets(id),
-  CONSTRAINT portfolio_allocation_members_source_runtime_id_fkey FOREIGN KEY (source_runtime_id) REFERENCES public.bot_runtimes(id),
-  CONSTRAINT portfolio_allocation_members_relationship_id_fkey FOREIGN KEY (relationship_id) REFERENCES public.bot_copy_relationships(id)
+  CONSTRAINT portfolio_allocation_members_relationship_id_fkey FOREIGN KEY (relationship_id) REFERENCES public.bot_copy_relationships(id),
+  CONSTRAINT portfolio_allocation_members_source_runtime_id_fkey FOREIGN KEY (source_runtime_id) REFERENCES public.bot_runtimes(id)
 );
 CREATE TABLE public.portfolio_baskets (
   id uuid NOT NULL,

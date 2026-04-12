@@ -90,7 +90,7 @@ export default function MarketplacePage() {
             href="/copy"
             className="rounded-full bg-[#dce85d] px-5 py-3 text-[0.64rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d]"
           >
-            Open copy center
+            Open copy trading
           </Link>
           <Link
             href={topThree[0] ? `/marketplace/${topThree[0].runtime_id}` : "/marketplace"}

@@ -8,6 +8,7 @@ from typing import Any as Session
 
 from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authenticated_user
 from src.db.session import get_db
+from src.services.bot_copy_dashboard_service import BotCopyDashboardService
 from src.services.bot_copy_engine import BotCopyEngine
 from src.services.creator_marketplace_service import CreatorMarketplaceService
 from src.services.pacifica_client import PacificaClientError
@@ -15,6 +16,7 @@ from src.services.pacifica_client import PacificaClientError
 router = APIRouter(prefix="/api/bot-copy", tags=["bot-copy"])
 bot_copy_engine = BotCopyEngine()
 marketplace_service = CreatorMarketplaceService()
+dashboard_service = BotCopyDashboardService()
 
 
 def _require_owned_bot_copy_relationship(relationship_id: str, user: AuthenticatedUser) -> None:
@@ -266,6 +268,122 @@ class BotCopyRelationshipResponse(BaseModel):
     follower_display_name: str | None = None
 
 
+class BotCopyDashboardSummaryResponse(BaseModel):
+    active_follows: int
+    open_positions: int
+    copied_open_notional_usd: float
+    copied_unrealized_pnl_usd: float
+    copied_realized_pnl_usd_24h: float
+    copied_realized_pnl_usd_7d: float
+    readiness_status: str
+
+
+class BotCopyDashboardReadinessResponse(BaseModel):
+    can_copy: bool
+    authorization_status: str
+    blockers: list[str]
+
+
+class BotCopyDashboardAlertResponse(BaseModel):
+    kind: str
+    title: str
+    detail: str
+    severity: str
+
+
+class BotCopyDashboardPositionResponse(BaseModel):
+    relationship_id: str
+    symbol: str
+    side: str
+    quantity: float
+    entry_price: float
+    mark_price: float
+    notional_usd: float
+    unrealized_pnl_usd: float
+    opened_at: datetime | None = None
+    last_synced_at: datetime | None = None
+
+
+class BotCopyDashboardFollowResponse(BaseModel):
+    id: str
+    source_runtime_id: str
+    source_bot_definition_id: str
+    source_bot_name: str
+    source_rank: int | None = None
+    source_drawdown_pct: float
+    source_trust_score: int
+    source_risk_grade: str | None = None
+    source_health: str | None = None
+    source_drift_status: str | None = None
+    creator_display_name: str | None = None
+    scale_bps: int
+    status: str
+    confirmed_at: datetime
+    updated_at: datetime
+    copied_open_notional_usd: float
+    copied_unrealized_pnl_usd: float
+    copied_position_count: int
+    positions: list[BotCopyDashboardPositionResponse]
+    last_execution_at: datetime | None = None
+    last_execution_status: str | None = None
+    last_execution_symbol: str | None = None
+    max_notional_usd: float | None = None
+
+
+class BotCopyDashboardActivityResponse(BaseModel):
+    id: str | None = None
+    relationship_id: str | None = None
+    source_runtime_id: str | None = None
+    source_event_id: str | None = None
+    symbol: str | None = None
+    side: str | None = None
+    action_type: str | None = None
+    copied_quantity: float
+    reference_price: float
+    notional_estimate_usd: float
+    status: str | None = None
+    error_reason: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class BotCopyDashboardDiscoverResponse(BaseModel):
+    runtime_id: str | None = None
+    bot_definition_id: str | None = None
+    bot_name: str | None = None
+    strategy_type: str | None = None
+    rank: int | None = None
+    drawdown: float
+    trust_score: int
+    creator_display_name: str | None = None
+    creator_id: str | None = None
+
+
+class BotCopyDashboardBasketSummaryResponse(BaseModel):
+    id: str | None = None
+    name: str | None = None
+    status: str | None = None
+    member_count: int
+    target_notional_usd: float
+    current_notional_usd: float
+    health: str | None = None
+    alert_count: int
+    aggregate_live_pnl_usd: float
+    aggregate_drawdown_pct: float
+    last_rebalanced_at: datetime | None = None
+
+
+class BotCopyDashboardResponse(BaseModel):
+    summary: BotCopyDashboardSummaryResponse
+    readiness: BotCopyDashboardReadinessResponse
+    alerts: list[BotCopyDashboardAlertResponse]
+    follows: list[BotCopyDashboardFollowResponse]
+    positions: list[BotCopyDashboardPositionResponse]
+    activity: list[BotCopyDashboardActivityResponse]
+    discover: list[BotCopyDashboardDiscoverResponse]
+    baskets_summary: list[BotCopyDashboardBasketSummaryResponse]
+
+
 @router.get("/creators/{creator_id}", response_model=CreatorProfileResponse)
 def get_creator_profile(
     creator_id: str,
@@ -319,6 +437,18 @@ async def get_runtime_profile(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return BotRuntimeProfileResponse.model_validate(profile)
+
+
+@router.get("/dashboard", response_model=BotCopyDashboardResponse)
+async def get_bot_copy_dashboard(
+    wallet_address: str = Query(min_length=8),
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> BotCopyDashboardResponse:
+    del db
+    ensure_wallet_owned(user, wallet_address)
+    payload = await dashboard_service.get_dashboard(wallet_address=wallet_address)
+    return BotCopyDashboardResponse.model_validate(payload)
 
 
 @router.get("", response_model=list[BotCopyRelationshipResponse])

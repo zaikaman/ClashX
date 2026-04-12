@@ -297,7 +297,7 @@ export default function OnboardingPage() {
                 <CheckCircle2 className="h-8 w-8" />
               </div>
               <div className="grid gap-3">
-                <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight">You're all set.</h1>
+                <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight">You&apos;re all set.</h1>
                 <p className="text-base text-neutral-400 leading-relaxed max-w-[320px] mx-auto">
                   Dashboard access is unlocked, and your setup is securely cached for the next session.
                 </p>
