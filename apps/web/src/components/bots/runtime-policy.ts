@@ -18,7 +18,7 @@ export const DEFAULT_RUNTIME_POLICY: RuntimePolicyDraft = {
   maxOpenPositions: 1,
   cooldownSeconds: 45,
   maxDrawdownPct: 18,
-  allowedSymbols: "BTC,ETH,SOL",
+  allowedSymbols: "",
   sizingMode: "fixed_usd",
   fixedUsdAmount: 200,
   riskPerTradePct: 1,

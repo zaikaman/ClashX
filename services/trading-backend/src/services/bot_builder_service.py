@@ -6,6 +6,7 @@ from typing import Any
 
 from src.models import BotPublishSnapshotRecord, BotStrategyVersionRecord
 from src.services.bot_backtest_service import infer_backtest_interval_from_rules
+from src.services.bot_runtime_engine import BotRuntimeEngine
 from src.services.rules_engine import RulesEngine
 from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
 
@@ -173,6 +174,7 @@ class BotBuilderService:
             },
             filters={"id": bot_id},
         )[0]
+        self._sync_runtime_allowed_symbols_if_derived(runtime=runtime, previous_bot=bot, next_bot=row)
         self._record_strategy_history(bot=row, created_by_user_id=str(bot["user_id"]), previous_bot=bot)
         return self.serialize(row)
 
@@ -299,6 +301,38 @@ class BotBuilderService:
             self.supabase.insert("bot_publish_snapshots", publish_record.to_row())
         except SupabaseRestError:
             return
+
+    def _sync_runtime_allowed_symbols_if_derived(
+        self,
+        *,
+        runtime: dict[str, Any] | None,
+        previous_bot: dict[str, Any],
+        next_bot: dict[str, Any],
+    ) -> None:
+        if not isinstance(runtime, dict):
+            return
+        policy = runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {}
+        allowed_symbols = policy.get("allowed_symbols")
+        current_allowed = (
+            BotRuntimeEngine._normalize_symbols(allowed_symbols)
+            if isinstance(allowed_symbols, list)
+            else []
+        )
+        previous_allowed = BotRuntimeEngine._derive_allowed_symbols_from_bot(previous_bot)
+        next_allowed = BotRuntimeEngine._derive_allowed_symbols_from_bot(next_bot)
+        if current_allowed != previous_allowed or current_allowed == next_allowed:
+            return
+        updated_policy = dict(policy)
+        updated_policy["allowed_symbols"] = next_allowed
+        self.supabase.update(
+            "bot_runtimes",
+            {
+                "risk_policy_json": updated_policy,
+                "updated_at": datetime.now(tz=UTC).isoformat(),
+            },
+            filters={"id": runtime["id"]},
+            returning="minimal",
+        )
 
     def _strategy_history_changed(self, *, previous_bot: dict[str, Any], next_bot: dict[str, Any]) -> bool:
         return any(previous_bot.get(field) != next_bot.get(field) for field in self.STRATEGY_VERSION_FIELDS)

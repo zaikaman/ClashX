@@ -192,13 +192,32 @@ class PacificaMarketDataService:
         except PacificaClientError:
             return []
 
-    async def _load_candles_with_backfill(
+    async def _load_mark_candles(
+        self,
+        *,
+        symbol: str,
+        timeframe: str,
+        start_time: int,
+        end_time: int,
+    ) -> list[dict[str, Any]]:
+        try:
+            return await self._pacifica.get_mark_kline(
+                symbol,
+                interval=timeframe,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        except PacificaClientError:
+            return []
+
+    async def _backfill_candles_from_loader(
         self,
         *,
         symbol: str,
         timeframe: str,
         lookback: int,
         boundary_end: int,
+        loader: Any,
     ) -> list[dict[str, Any]]:
         timeframe_ms = TIMEFRAME_TO_MS.get(timeframe)
         if timeframe_ms is None:
@@ -211,7 +230,7 @@ class PacificaMarketDataService:
 
         for _ in range(MAX_CANDLE_BACKFILL_WINDOWS):
             start_time = window_end - timeframe_ms * window_candles
-            candles = await self._load_candles(
+            candles = await loader(
                 symbol=symbol,
                 timeframe=timeframe,
                 start_time=start_time,
@@ -236,6 +255,33 @@ class PacificaMarketDataService:
             window_end = start_time - 1
 
         return [candles_by_open_time[key] for key in sorted(candles_by_open_time)]
+
+    async def _load_candles_with_backfill(
+        self,
+        *,
+        symbol: str,
+        timeframe: str,
+        lookback: int,
+        boundary_end: int,
+    ) -> list[dict[str, Any]]:
+        trade_candles = await self._backfill_candles_from_loader(
+            symbol=symbol,
+            timeframe=timeframe,
+            lookback=lookback,
+            boundary_end=boundary_end,
+            loader=self._load_candles,
+        )
+        if len(trade_candles) >= lookback:
+            return trade_candles
+
+        mark_candles = await self._backfill_candles_from_loader(
+            symbol=symbol,
+            timeframe=timeframe,
+            lookback=lookback,
+            boundary_end=boundary_end,
+            loader=self._load_mark_candles,
+        )
+        return mark_candles if len(mark_candles) > len(trade_candles) else trade_candles
 
     async def _run_price_subscription(self) -> None:
         reconnect_delay = INITIAL_RECONNECT_DELAY_SECONDS

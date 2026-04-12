@@ -46,6 +46,21 @@ class _FakePacificaClient:
             for index, close in enumerate(closes)
         ]
 
+    async def get_mark_kline(
+        self,
+        symbol: str,
+        *,
+        interval: str = "15m",
+        start_time: int,
+        end_time: int | None = None,
+    ) -> list[dict[str, Any]]:
+        return await self.get_kline(
+            symbol,
+            interval=interval,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
 
 def _graph_rules(symbol: str = "ETH") -> dict[str, Any]:
     return {

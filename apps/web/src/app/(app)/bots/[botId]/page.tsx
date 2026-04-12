@@ -121,6 +121,59 @@ async function unwrapResponse<T>(response: Response, fallback: string): Promise<
   return payload as T;
 }
 
+function normalizeAllowedSymbol(value: unknown): string {
+  return String(value ?? "").trim().toUpperCase().replace("-PERP", "");
+}
+
+function inferAllowedSymbolsFromBot(bot: BotDefinition): string {
+  const selectedSymbols = Array.isArray(bot.rules_json.selected_market_symbols)
+    ? bot.rules_json.selected_market_symbols
+        .map((value) => normalizeAllowedSymbol(value))
+        .filter(Boolean)
+    : [];
+
+  if (selectedSymbols.length > 0) {
+    return Array.from(new Set(selectedSymbols)).join(",");
+  }
+
+  const explicitSymbols = new Set<string>();
+  const appendSymbol = (value: unknown) => {
+    const symbol = normalizeAllowedSymbol(value);
+    if (!symbol || symbol === "__BOT_MARKET_UNIVERSE__") {
+      return;
+    }
+    explicitSymbols.add(symbol);
+  };
+
+  const conditions = Array.isArray(bot.rules_json.conditions) ? bot.rules_json.conditions : [];
+  for (const row of conditions) {
+    if (row && typeof row === "object" && "symbol" in row) {
+      appendSymbol(row.symbol);
+    }
+  }
+
+  const actions = Array.isArray(bot.rules_json.actions) ? bot.rules_json.actions : [];
+  for (const row of actions) {
+    if (row && typeof row === "object" && "symbol" in row) {
+      appendSymbol(row.symbol);
+    }
+  }
+
+  const graph = typeof bot.rules_json.graph === "object" && bot.rules_json.graph !== null ? bot.rules_json.graph : null;
+  const nodes = graph && Array.isArray((graph as { nodes?: unknown[] }).nodes) ? (graph as { nodes: unknown[] }).nodes : [];
+  for (const node of nodes) {
+    if (!node || typeof node !== "object") {
+      continue;
+    }
+    const config = "config" in node ? node.config : null;
+    if (config && typeof config === "object" && "symbol" in config) {
+      appendSymbol(config.symbol);
+    }
+  }
+
+  return Array.from(explicitSymbols).join(",");
+}
+
 function DeferredPanelPlaceholder({
   eyebrow,
   title,
@@ -251,6 +304,12 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
         setBot(nextBot);
         setRuntimeOverview(nextOverview);
         setPerformance(nextOverview.performance ?? null);
+        if (!nextOverview.health.runtime_id) {
+          setRuntimePolicy({
+            ...DEFAULT_RUNTIME_POLICY,
+            allowedSymbols: inferAllowedSymbolsFromBot(nextBot),
+          });
+        }
         setError(null);
       } catch (loadError) {
         if (controller.signal.aborted) {

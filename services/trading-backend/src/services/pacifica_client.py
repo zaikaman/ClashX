@@ -647,6 +647,39 @@ class PacificaClient:
         start_time: int,
         end_time: int | None = None,
     ) -> list[dict[str, Any]]:
+        return await self._get_kline(
+            symbol,
+            interval=interval,
+            start_time=start_time,
+            end_time=end_time,
+            endpoint_path="/kline",
+        )
+
+    async def get_mark_kline(
+        self,
+        symbol: str,
+        *,
+        interval: str = "15m",
+        start_time: int,
+        end_time: int | None = None,
+    ) -> list[dict[str, Any]]:
+        return await self._get_kline(
+            symbol,
+            interval=interval,
+            start_time=start_time,
+            end_time=end_time,
+            endpoint_path="/kline/mark",
+        )
+
+    async def _get_kline(
+        self,
+        symbol: str,
+        *,
+        interval: str,
+        start_time: int,
+        end_time: int | None,
+        endpoint_path: str,
+    ) -> list[dict[str, Any]]:
         interval_ms = KLINE_INTERVAL_MS.get(interval)
         resolved_end_time = end_time if end_time is not None else int(time() * 1000)
         if interval_ms is None or resolved_end_time <= start_time:
@@ -655,6 +688,7 @@ class PacificaClient:
                 interval=interval,
                 start_time=start_time,
                 end_time=end_time,
+                endpoint_path=endpoint_path,
             )
 
         estimated_candles = ((resolved_end_time - start_time) // interval_ms) + 1
@@ -664,6 +698,7 @@ class PacificaClient:
                 interval=interval,
                 start_time=start_time,
                 end_time=end_time,
+                endpoint_path=endpoint_path,
             )
 
         chunk_span_ms = interval_ms * (MAX_KLINE_CANDLES_PER_REQUEST - 1)
@@ -677,6 +712,7 @@ class PacificaClient:
                 interval=interval,
                 start_time=chunk_start,
                 end_time=chunk_end,
+                endpoint_path=endpoint_path,
             )
             for candle in chunk_candles:
                 open_time = self._coerce_int(candle.get("open_time"), -1)
@@ -696,6 +732,7 @@ class PacificaClient:
         interval: str,
         start_time: int,
         end_time: int | None,
+        endpoint_path: str = "/kline",
     ) -> list[dict[str, Any]]:
         await self._throttle(bucket="public")
         params: dict[str, Any] = {
@@ -710,7 +747,7 @@ class PacificaClient:
             params["end_time"] = end_time
             params["endTime"] = end_time
         response = await self._http.get(
-            f"{self.settings.pacifica_rest_url}/kline",
+            f"{self.settings.pacifica_rest_url}{endpoint_path}",
             params=params,
             headers={"Accept": "*/*"},
         )

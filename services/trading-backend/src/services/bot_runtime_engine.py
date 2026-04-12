@@ -14,6 +14,8 @@ from src.services.pacifica_readiness_service import PacificaReadinessService
 from src.services.rules_engine import RulesEngine
 from src.services.supabase_rest import SupabaseRestClient
 
+MARKET_UNIVERSE_SYMBOL = "__BOT_MARKET_UNIVERSE__"
+
 
 class BotRuntimeEngine:
     def __init__(self) -> None:
@@ -39,6 +41,11 @@ class BotRuntimeEngine:
 
         now = datetime.now(tz=UTC).isoformat()
         normalized_policy = self._risk.normalize_policy(risk_policy_json)
+        normalized_policy = self._apply_default_allowed_symbols(
+            bot=bot,
+            normalized_policy=normalized_policy,
+            requested_policy=risk_policy_json,
+        )
         self._validate_runtime_policy(bot=bot, risk_policy_json=normalized_policy)
         if runtime is None:
             runtime = self._supabase.insert(
@@ -60,12 +67,18 @@ class BotRuntimeEngine:
             merged_policy = dict(runtime.get("risk_policy_json") or {})
             if isinstance(risk_policy_json, dict):
                 merged_policy.update(risk_policy_json)
+            normalized_merged_policy = self._risk.normalize_policy(merged_policy)
+            normalized_merged_policy = self._apply_default_allowed_symbols(
+                bot=bot,
+                normalized_policy=normalized_merged_policy,
+                requested_policy=risk_policy_json,
+            )
             runtime = self._supabase.update(
                 "bot_runtimes",
                 {
                     "status": "active",
                     "mode": "live",
-                    "risk_policy_json": self._risk.normalize_policy(merged_policy),
+                    "risk_policy_json": normalized_merged_policy,
                     "deployed_at": runtime.get("deployed_at") or now,
                     "stopped_at": None,
                     "updated_at": now,
@@ -290,6 +303,103 @@ class BotRuntimeEngine:
         issues = self._rules.risk_adjusted_sizing_issues(rules_json=rules_json)
         if issues:
             raise ValueError("Risk-adjusted sizing is not available for this bot: " + "; ".join(issues))
+
+    def _apply_default_allowed_symbols(
+        self,
+        *,
+        bot: dict[str, Any],
+        normalized_policy: dict[str, Any],
+        requested_policy: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if self._requested_policy_includes_allowed_symbols(requested_policy):
+            return normalized_policy
+        derived_symbols = self._derive_allowed_symbols_from_bot(bot)
+        if not derived_symbols:
+            return normalized_policy
+        next_policy = dict(normalized_policy)
+        next_policy["allowed_symbols"] = derived_symbols
+        return self._risk.normalize_policy(next_policy)
+
+    @staticmethod
+    def _requested_policy_includes_allowed_symbols(requested_policy: dict[str, Any] | None) -> bool:
+        if not isinstance(requested_policy, dict):
+            return False
+        allowed_symbols = requested_policy.get("allowed_symbols")
+        return isinstance(allowed_symbols, list) and any(str(symbol).strip() for symbol in allowed_symbols)
+
+    @classmethod
+    def _derive_allowed_symbols_from_bot(cls, bot: dict[str, Any]) -> list[str]:
+        rules_json = bot.get("rules_json") if isinstance(bot.get("rules_json"), dict) else {}
+        selected_symbols = rules_json.get("selected_market_symbols")
+        if isinstance(selected_symbols, list):
+            normalized_selected = cls._normalize_symbols(selected_symbols)
+            if normalized_selected:
+                return normalized_selected
+
+        explicit_symbols = cls._extract_rule_symbols(rules_json)
+        if explicit_symbols:
+            return explicit_symbols
+
+        return cls._market_scope_symbols(str(bot.get("market_scope") or ""))
+
+    @classmethod
+    def _extract_rule_symbols(cls, rules_json: dict[str, Any]) -> list[str]:
+        symbols: list[str] = []
+        seen: set[str] = set()
+        for group in ("conditions", "actions"):
+            rows = rules_json.get(group)
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                symbol = cls._normalize_symbol(row.get("symbol"))
+                if not symbol or symbol == MARKET_UNIVERSE_SYMBOL or symbol in seen:
+                    continue
+                seen.add(symbol)
+                symbols.append(symbol)
+
+        graph = rules_json.get("graph")
+        if isinstance(graph, dict):
+            nodes = graph.get("nodes")
+            if isinstance(nodes, list):
+                for node in nodes:
+                    if not isinstance(node, dict):
+                        continue
+                    config = node.get("config")
+                    if not isinstance(config, dict):
+                        continue
+                    symbol = cls._normalize_symbol(config.get("symbol"))
+                    if not symbol or symbol == MARKET_UNIVERSE_SYMBOL or symbol in seen:
+                        continue
+                    seen.add(symbol)
+                    symbols.append(symbol)
+
+        return symbols
+
+    @classmethod
+    def _market_scope_symbols(cls, scope: str) -> list[str]:
+        normalized = scope.strip()
+        if not normalized or "all pacifica" in normalized.lower():
+            return []
+        tail = normalized.split("/")[-1]
+        return cls._normalize_symbols(tail.split(","))
+
+    @classmethod
+    def _normalize_symbols(cls, values: list[Any]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            symbol = cls._normalize_symbol(value)
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            normalized.append(symbol)
+        return normalized
+
+    @staticmethod
+    def _normalize_symbol(value: Any) -> str:
+        return str(value or "").upper().replace("-PERP", "").strip()
 
     def _require_runtime_readiness(self, wallet_address: str) -> dict[str, Any]:
         try:

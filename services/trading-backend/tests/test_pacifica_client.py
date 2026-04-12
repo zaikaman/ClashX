@@ -297,6 +297,25 @@ def test_get_kline_sends_snake_case_and_legacy_camel_case_query_params() -> None
     assert candles[0]["trade_count"] == 7
 
 
+def test_get_mark_kline_uses_mark_endpoint() -> None:
+    client = object.__new__(PacificaClient)
+    client.settings = SimpleNamespace(pacifica_rest_url="https://pacifica.test")
+    client._http = _FakeHttpClient()
+    client._throttle = _noop_throttle
+
+    candles = asyncio.run(
+        client.get_mark_kline(
+            "BTC",
+            interval="1m",
+            start_time=1_000,
+            end_time=2_000,
+        )
+    )
+
+    assert client._http.calls[0]["url"] == "https://pacifica.test/kline/mark"
+    assert candles[0]["symbol"] == "BTC"
+
+
 def test_get_kline_chunks_long_ranges_into_multiple_requests() -> None:
     client = object.__new__(PacificaClient)
     client.settings = SimpleNamespace(pacifica_rest_url="https://pacifica.test")
@@ -320,6 +339,60 @@ def test_get_kline_chunks_long_ranges_into_multiple_requests() -> None:
     assert len(candles) == 4
     assert candles[0]["open_time"] == 0
     assert candles[-1]["open_time"] == 900_000 * 4_001
+
+
+def test_load_candle_lookup_falls_back_to_mark_candles_when_trade_feed_is_sparse() -> None:
+    service = object.__new__(PacificaMarketDataService)
+    service._candle_cache = {}
+    service._candle_lock = asyncio.Lock()
+
+    async def fake_load_candles(*, symbol: str, timeframe: str, start_time: int, end_time: int) -> list[dict[str, Any]]:
+        del symbol, timeframe, start_time, end_time
+        return []
+
+    async def fake_load_mark_candles(*, symbol: str, timeframe: str, start_time: int, end_time: int) -> list[dict[str, Any]]:
+        del symbol, timeframe, start_time, end_time
+        return [
+            {
+                "open_time": 0,
+                "close_time": 59_999,
+                "symbol": "BTC",
+                "interval": "1m",
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.5,
+                "volume": 0.0,
+                "trade_count": 0,
+            },
+            {
+                "open_time": 60_000,
+                "close_time": 119_999,
+                "symbol": "BTC",
+                "interval": "1m",
+                "open": 100.5,
+                "high": 101.5,
+                "low": 100.0,
+                "close": 101.0,
+                "volume": 0.0,
+                "trade_count": 0,
+            },
+        ]
+
+    service._load_candles = fake_load_candles
+    service._load_mark_candles = fake_load_mark_candles
+
+    candles = asyncio.run(
+        service._load_candles_with_backfill(
+            symbol="BTC",
+            timeframe="1m",
+            lookback=2,
+            boundary_end=120_000,
+        )
+    )
+
+    assert [item["open_time"] for item in candles] == [0, 60_000]
+    assert all(item["trade_count"] == 0 for item in candles)
 
 
 def test_execute_action_uses_normalized_client_order_id_from_client_payload() -> None:

@@ -336,6 +336,161 @@ def test_deploy_runtime_persists_supabase_runtime_and_event() -> None:
     assert fake_supabase.tables["bot_execution_events"][0]["event_type"] == "runtime.deployed"
 
 
+def test_deploy_runtime_defaults_allowed_symbols_from_selected_market_scope() -> None:
+    tables = _seed_tables()
+    tables["bot_definitions"][0]["rules_json"] = {
+        "selected_market_symbols": ["BTC", "ETH", "SOL"],
+        "graph": {
+            "version": 1,
+            "entry": "builder-entry",
+            "nodes": [
+                {"id": "builder-entry", "kind": "entry", "position": {"x": 0, "y": 0}},
+                {
+                    "id": "condition-rsi",
+                    "kind": "condition",
+                    "position": {"x": 180, "y": 80},
+                    "config": {
+                        "type": "rsi_above",
+                        "symbol": "__BOT_MARKET_UNIVERSE__",
+                        "timeframe": "1m",
+                        "period": 14,
+                        "value": 70,
+                    },
+                },
+                {
+                    "id": "action-open",
+                    "kind": "action",
+                    "position": {"x": 380, "y": 80},
+                    "config": {"type": "open_long", "symbol": "__BOT_MARKET_UNIVERSE__", "size_usd": 100, "leverage": 3},
+                },
+            ],
+            "edges": [
+                {"id": "edge-entry-condition", "source": "builder-entry", "target": "condition-rsi"},
+                {"id": "edge-condition-action", "source": "condition-rsi", "target": "action-open"},
+            ],
+        },
+    }
+    fake_supabase = FakeSupabaseRestClient({"bot_definitions": tables["bot_definitions"], "bot_runtimes": [], "bot_execution_events": []})
+    engine = BotRuntimeEngine()
+    engine._supabase = fake_supabase
+    engine._auth = FakeAuthService()
+    engine._readiness = FakeReadinessService()
+
+    runtime = engine.deploy_runtime(
+        None,
+        bot_id="bot-1",
+        wallet_address="wallet-1",
+        user_id="user-1",
+        risk_policy_json={"max_order_size_usd": 180},
+    )
+
+    assert runtime["risk_policy_json"]["allowed_symbols"] == ["BTC", "ETH", "SOL"]
+
+
+def test_update_bot_syncs_runtime_allowlist_when_it_still_matches_previous_builder_scope() -> None:
+    tables = _seed_tables()
+    tables["bot_definitions"][0]["rules_json"] = {
+        "selected_market_symbols": ["BTC", "ETH", "SOL"],
+        "graph": {
+            "version": 1,
+            "entry": "builder-entry",
+            "nodes": [
+                {"id": "builder-entry", "kind": "entry", "position": {"x": 0, "y": 0}},
+                {
+                    "id": "condition-rsi",
+                    "kind": "condition",
+                    "position": {"x": 180, "y": 80},
+                    "config": {
+                        "type": "rsi_above",
+                        "symbol": "__BOT_MARKET_UNIVERSE__",
+                        "timeframe": "1m",
+                        "period": 14,
+                        "value": 70,
+                    },
+                },
+                {
+                    "id": "action-open",
+                    "kind": "action",
+                    "position": {"x": 380, "y": 80},
+                    "config": {"type": "open_long", "symbol": "__BOT_MARKET_UNIVERSE__", "size_usd": 100, "leverage": 3},
+                },
+            ],
+            "edges": [
+                {"id": "edge-entry-condition", "source": "builder-entry", "target": "condition-rsi"},
+                {"id": "edge-condition-action", "source": "condition-rsi", "target": "action-open"},
+            ],
+        },
+    }
+    tables["bot_runtimes"][0]["risk_policy_json"]["allowed_symbols"] = ["BTC", "ETH", "SOL"]
+    fake_supabase = FakeSupabaseRestClient(tables)
+    service = BotBuilderService()
+    service.supabase = fake_supabase
+
+    service.update_bot(
+        None,
+        bot_id="bot-1",
+        wallet_address="wallet-1",
+        rules_json={
+            "selected_market_symbols": ["BTC", "ETH", "SOL", "DOGE"],
+            "graph": {
+                "version": 1,
+                "entry": "builder-entry",
+                "nodes": [
+                    {"id": "builder-entry", "kind": "entry", "position": {"x": 0, "y": 0}},
+                    {
+                        "id": "condition-rsi",
+                        "kind": "condition",
+                        "position": {"x": 180, "y": 80},
+                        "config": {
+                            "type": "rsi_above",
+                            "symbol": "__BOT_MARKET_UNIVERSE__",
+                            "timeframe": "1m",
+                            "period": 14,
+                            "value": 70,
+                        },
+                    },
+                    {
+                        "id": "action-open",
+                        "kind": "action",
+                        "position": {"x": 380, "y": 80},
+                        "config": {"type": "open_long", "symbol": "__BOT_MARKET_UNIVERSE__", "size_usd": 100, "leverage": 3},
+                    },
+                ],
+                "edges": [
+                    {"id": "edge-entry-condition", "source": "builder-entry", "target": "condition-rsi"},
+                    {"id": "edge-condition-action", "source": "condition-rsi", "target": "action-open"},
+                ],
+            },
+        },
+    )
+
+    assert fake_supabase.tables["bot_runtimes"][0]["risk_policy_json"]["allowed_symbols"] == ["BTC", "ETH", "SOL", "DOGE"]
+
+
+def test_update_bot_preserves_manual_runtime_allowlist_overrides() -> None:
+    tables = _seed_tables()
+    tables["bot_definitions"][0]["rules_json"] = {
+        "selected_market_symbols": ["BTC", "ETH", "SOL"],
+        "graph": _graph_rules()["graph"],
+    }
+    tables["bot_runtimes"][0]["risk_policy_json"]["allowed_symbols"] = ["BTC"]
+    fake_supabase = FakeSupabaseRestClient(tables)
+    service = BotBuilderService()
+    service.supabase = fake_supabase
+
+    service.update_bot(
+        None,
+        bot_id="bot-1",
+        wallet_address="wallet-1",
+        rules_json={
+            "selected_market_symbols": ["BTC", "ETH", "SOL", "DOGE"],
+            "graph": _graph_rules()["graph"],
+        },
+    )
+
+    assert fake_supabase.tables["bot_runtimes"][0]["risk_policy_json"]["allowed_symbols"] == ["BTC"]
+
+
 def test_list_runtimes_for_wallet_returns_serialized_runtime_summaries() -> None:
     fake_supabase = FakeSupabaseRestClient(_seed_tables())
     engine = BotRuntimeEngine()
