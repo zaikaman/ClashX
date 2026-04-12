@@ -120,6 +120,8 @@ class _FakeSupabaseRestClient:
                     return False
                 if operator == "eq" and value != operand:
                     return False
+                if operator == "in" and value not in operand:
+                    return False
                 continue
             if value != expected:
                 return False
@@ -148,6 +150,7 @@ def _build_service(supabase: _FakeSupabaseRestClient, *, owner_id: str = "worker
     service = WorkerCoordinationService.__new__(WorkerCoordinationService)
     service._supabase = supabase
     service._owner_id = owner_id
+    service._next_lease_cleanup_at = 0.0
     return service
 
 
@@ -249,6 +252,48 @@ def test_try_claim_lease_takes_over_expired_lease_without_insert_attempt() -> No
     assert service.try_claim_lease("lease-1", ttl_seconds=30) is True
     assert supabase.tables["worker_leases"][0]["owner_id"] == "worker-2"
     assert supabase.tables["worker_leases"][0]["expires_at"] > now.isoformat()
+
+
+def test_try_claim_lease_cleans_up_long_expired_rows_before_claiming() -> None:
+    supabase = _FakeSupabaseRestClient()
+    now = datetime.now(tz=UTC)
+    stale_expiry = (now - timedelta(days=3)).isoformat()
+    recent_expiry = (now - timedelta(hours=2)).isoformat()
+    supabase.tables["worker_leases"] = [
+        {
+            "lease_key": "lease-stale",
+            "owner_id": "worker-old",
+            "expires_at": stale_expiry,
+            "updated_at": stale_expiry,
+        },
+        {
+            "lease_key": "lease-recent",
+            "owner_id": "worker-old",
+            "expires_at": recent_expiry,
+            "updated_at": recent_expiry,
+        },
+    ]
+    service = _build_service(supabase)
+
+    assert service.try_claim_lease("lease-fresh", ttl_seconds=30) is True
+
+    remaining_keys = {row["lease_key"] for row in supabase.tables["worker_leases"]}
+    assert "lease-stale" not in remaining_keys
+    assert "lease-recent" in remaining_keys
+    assert "lease-fresh" in remaining_keys
+
+
+def test_try_claim_lease_ignores_cleanup_lookup_failure() -> None:
+    supabase = _FakeSupabaseRestClient()
+    supabase.queue_failure(
+        "select",
+        "worker_leases",
+        SupabaseRestError("temporary outage", status_code=502),
+    )
+    service = _build_service(supabase)
+
+    assert service.try_claim_lease("lease-fresh", ttl_seconds=30) is True
+    assert supabase.tables["worker_leases"][0]["lease_key"] == "lease-fresh"
 
 
 def test_release_lease_ignores_transient_supabase_error() -> None:

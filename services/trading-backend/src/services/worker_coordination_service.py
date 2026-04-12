@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import Any
 
 from src.core.settings import get_settings
@@ -11,6 +12,9 @@ from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
 
 logger = logging.getLogger(__name__)
 ACTION_CLAIM_TTL_SECONDS = 90
+LEASE_CLEANUP_INTERVAL_SECONDS = 15 * 60
+LEASE_CLEANUP_RETENTION_SECONDS = 24 * 60 * 60
+LEASE_CLEANUP_BATCH_SIZE = 5000
 RETRYABLE_TERMINAL_ACTION_EVENTS = {"action.failed"}
 NON_RETRYABLE_TERMINAL_ACTION_EVENTS = {"action.executed"}
 
@@ -20,9 +24,11 @@ class WorkerCoordinationService:
         self._settings = get_settings()
         self._supabase = supabase or SupabaseRestClient()
         self._owner_id = self._settings.worker_instance_id
+        self._next_lease_cleanup_at = 0.0
 
     def try_claim_lease(self, lease_key: str, *, ttl_seconds: int) -> bool:
         now = datetime.now(tz=UTC)
+        self._cleanup_expired_leases_if_due(now)
         expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat()
         payload = {
             "lease_key": lease_key,
@@ -133,6 +139,44 @@ class WorkerCoordinationService:
                 logger.warning("Deferred lease release for %s because Supabase is temporarily unavailable: %s", lease_key, exc)
                 return
             raise
+
+    def _cleanup_expired_leases_if_due(self, now: datetime) -> None:
+        if monotonic() < self._next_lease_cleanup_at:
+            return
+        self._next_lease_cleanup_at = monotonic() + LEASE_CLEANUP_INTERVAL_SECONDS
+        cutoff = (now - timedelta(seconds=LEASE_CLEANUP_RETENTION_SECONDS)).isoformat()
+        try:
+            stale_leases = self._supabase.select(
+                "worker_leases",
+                columns="lease_key",
+                filters={"expires_at": ("lt", cutoff)},
+                order="expires_at.asc",
+                limit=LEASE_CLEANUP_BATCH_SIZE,
+            )
+        except SupabaseRestError as exc:
+            if exc.is_retryable:
+                logger.warning("Skipping worker lease cleanup lookup because Supabase is temporarily unavailable: %s", exc)
+                return
+            logger.exception("Worker lease cleanup lookup failed")
+            return
+
+        stale_keys = [str(row.get("lease_key") or "") for row in stale_leases if isinstance(row, dict) and row.get("lease_key")]
+        if not stale_keys:
+            return
+
+        try:
+            self._supabase.delete(
+                "worker_leases",
+                filters={
+                    "lease_key": ("in", stale_keys),
+                    "expires_at": ("lt", cutoff),
+                },
+            )
+        except SupabaseRestError as exc:
+            if exc.is_retryable:
+                logger.warning("Skipping worker lease cleanup delete because Supabase is temporarily unavailable: %s", exc)
+                return
+            logger.exception("Worker lease cleanup delete failed")
 
     def try_claim_action(self, *, runtime_id: str, idempotency_key: str) -> bool:
         claim_payload = {
