@@ -86,7 +86,16 @@ def _seed_tables() -> dict[str, list[dict[str, Any]]]:
         "bot_trade_lots": [],
         "bot_trade_closures": [],
         "bot_leaderboard_snapshots": [],
+        "bot_copy_execution_events": [],
         "bot_copy_relationships": [],
+        "portfolio_allocation_members": [],
+        "bot_backtest_runs": [],
+        "bot_invite_access": [],
+        "bot_publish_snapshots": [],
+        "bot_publishing_settings": [],
+        "bot_strategy_versions": [],
+        "featured_bots": [],
+        "bot_clones": [],
     }
 
 
@@ -603,6 +612,86 @@ def test_delete_bot_removes_stopped_runtime_and_events() -> None:
             "updated_at": "2026-03-16T01:00:00+00:00",
         }
     ]
+    tables["bot_copy_execution_events"] = [
+        {
+            "id": "copy-event-1",
+            "relationship_id": "copy-1",
+            "source_runtime_id": "runtime-1",
+            "source_event_id": "event-1",
+            "follower_user_id": "user-2",
+            "follower_wallet_address": "wallet-2",
+            "status": "applied",
+            "result_payload_json": {},
+            "created_at": "2026-03-16T01:00:00+00:00",
+            "updated_at": "2026-03-16T01:00:00+00:00",
+        }
+    ]
+    tables["portfolio_allocation_members"] = [
+        {
+            "id": "member-1",
+            "portfolio_basket_id": "basket-1",
+            "source_runtime_id": "runtime-1",
+            "relationship_id": "copy-1",
+            "status": "active",
+            "created_at": "2026-03-16T01:00:00+00:00",
+            "updated_at": "2026-03-16T01:00:00+00:00",
+        }
+    ]
+    tables["bot_backtest_runs"] = [
+        {
+            "id": "backtest-1",
+            "bot_definition_id": "bot-1",
+            "user_id": "user-1",
+            "wallet_address": "wallet-1",
+        }
+    ]
+    tables["bot_invite_access"] = [
+        {
+            "id": "invite-1",
+            "bot_definition_id": "bot-1",
+            "invited_wallet_address": "wallet-3",
+            "invited_by_user_id": "user-1",
+            "status": "active",
+        }
+    ]
+    tables["bot_strategy_versions"] = [
+        {
+            "id": "version-1",
+            "bot_definition_id": "bot-1",
+            "created_by_user_id": "user-1",
+            "version_number": 1,
+        }
+    ]
+    tables["bot_publish_snapshots"] = [
+        {
+            "id": "publish-1",
+            "bot_definition_id": "bot-1",
+            "strategy_version_id": "version-1",
+            "runtime_id": "runtime-1",
+        }
+    ]
+    tables["bot_publishing_settings"] = [
+        {
+            "id": "settings-1",
+            "bot_definition_id": "bot-1",
+            "user_id": "user-1",
+        }
+    ]
+    tables["featured_bots"] = [
+        {
+            "id": "featured-1",
+            "creator_profile_id": "profile-1",
+            "bot_definition_id": "bot-1",
+        }
+    ]
+    tables["bot_clones"] = [
+        {
+            "id": "clone-1",
+            "source_bot_definition_id": "bot-1",
+            "new_bot_definition_id": "bot-2",
+            "created_by_user_id": "user-2",
+        }
+    ]
     fake_supabase = FakeSupabaseRestClient(tables)
     service = BotBuilderService()
     service.supabase = fake_supabase
@@ -617,7 +706,16 @@ def test_delete_bot_removes_stopped_runtime_and_events() -> None:
     assert fake_supabase.tables["bot_trade_lots"] == []
     assert fake_supabase.tables["bot_trade_closures"] == []
     assert fake_supabase.tables["bot_leaderboard_snapshots"] == []
+    assert fake_supabase.tables["bot_copy_execution_events"] == []
     assert fake_supabase.tables["bot_copy_relationships"] == []
+    assert fake_supabase.tables["portfolio_allocation_members"] == []
+    assert fake_supabase.tables["bot_backtest_runs"] == []
+    assert fake_supabase.tables["bot_invite_access"] == []
+    assert fake_supabase.tables["bot_publish_snapshots"] == []
+    assert fake_supabase.tables["bot_publishing_settings"] == []
+    assert fake_supabase.tables["bot_strategy_versions"] == []
+    assert fake_supabase.tables["featured_bots"] == []
+    assert fake_supabase.tables["bot_clones"] == []
 
 
 def test_delete_bot_rejects_active_runtime() -> None:

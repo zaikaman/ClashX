@@ -24,16 +24,27 @@ class BotBuilderService:
         "rules_version",
         "rules_json",
     )
-    RUNTIME_DEPENDENT_TABLES = (
-        "bot_execution_events",
-        "bot_action_claims",
-        "marketplace_runtime_snapshots",
-        "bot_runtime_snapshots",
-        "bot_trade_sync_state",
-        "bot_trade_closures",
-        "bot_trade_lots",
-        "bot_leaderboard_snapshots",
-        "bot_copy_relationships",
+    RUNTIME_DEPENDENT_TABLE_FILTERS = (
+        ("bot_copy_execution_events", "source_runtime_id"),
+        ("portfolio_allocation_members", "source_runtime_id"),
+        ("bot_copy_relationships", "source_runtime_id"),
+        ("bot_execution_events", "runtime_id"),
+        ("bot_action_claims", "runtime_id"),
+        ("marketplace_runtime_snapshots", "runtime_id"),
+        ("bot_runtime_snapshots", "runtime_id"),
+        ("bot_trade_sync_state", "runtime_id"),
+        ("bot_trade_closures", "runtime_id"),
+        ("bot_trade_lots", "runtime_id"),
+        ("bot_leaderboard_snapshots", "runtime_id"),
+        ("bot_publish_snapshots", "runtime_id"),
+    )
+    BOT_DEPENDENT_TABLE_FILTERS = (
+        ("bot_backtest_runs", "bot_definition_id"),
+        ("bot_invite_access", "bot_definition_id"),
+        ("featured_bots", "bot_definition_id"),
+        ("bot_publishing_settings", "bot_definition_id"),
+        ("bot_publish_snapshots", "bot_definition_id"),
+        ("bot_strategy_versions", "bot_definition_id"),
     )
 
     def __init__(self, rules_engine: RulesEngine | None = None) -> None:
@@ -189,11 +200,18 @@ class BotBuilderService:
         for runtime in runtimes:
             self._delete_runtime_dependencies(runtime_id=runtime["id"])
             self.supabase.delete("bot_runtimes", filters={"id": runtime["id"]})
+        self._delete_bot_dependencies(bot_id=bot_id)
         self.supabase.delete("bot_definitions", filters={"id": bot_id, "wallet_address": wallet_address})
 
     def _delete_runtime_dependencies(self, *, runtime_id: str) -> None:
-        for table in self.RUNTIME_DEPENDENT_TABLES:
-            self.supabase.delete(table, filters={"runtime_id" if table != "bot_copy_relationships" else "source_runtime_id": runtime_id})
+        for table, filter_key in self.RUNTIME_DEPENDENT_TABLE_FILTERS:
+            self.supabase.delete(table, filters={filter_key: runtime_id})
+
+    def _delete_bot_dependencies(self, *, bot_id: str) -> None:
+        for table, filter_key in self.BOT_DEPENDENT_TABLE_FILTERS:
+            self.supabase.delete(table, filters={filter_key: bot_id})
+        self.supabase.delete("bot_clones", filters={"source_bot_definition_id": bot_id})
+        self.supabase.delete("bot_clones", filters={"new_bot_definition_id": bot_id})
 
     def validate_definition(self, *, authoring_mode: str, visibility: str, rules_version: int, rules_json: dict) -> list[str]:
         issues: list[str] = []
