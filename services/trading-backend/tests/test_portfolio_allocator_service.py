@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from src.services.portfolio_allocator_service import PortfolioAllocatorService
+from src.services.supabase_rest import SupabaseRestError
 from tests.helpers.runtime_fakes import FakeAuthService
 
 
@@ -50,8 +51,9 @@ class FakeSupabaseRestClient:
         *,
         upsert: bool = False,
         on_conflict: str | None = None,
+        returning: str = "representation",
     ) -> list[dict[str, Any]]:
-        del upsert, on_conflict
+        del upsert, on_conflict, returning
         items = payload if isinstance(payload, list) else [payload]
         stored = [deepcopy(item) for item in items]
         self.tables.setdefault(table, []).extend(stored)
@@ -247,3 +249,65 @@ def test_delete_portfolio_pauses_members_and_removes_records(monkeypatch: pytest
     assert service.supabase.tables["portfolio_rebalance_events"] == []
     assert service.supabase.tables["bot_copy_relationships"] == []
     assert fake_broadcaster.messages == [("user:user-1", "portfolio.deleted", {"portfolio_id": "basket-1"})]
+
+
+def test_record_rebalance_event_ignores_missing_basket_fk_violation(caplog: pytest.LogCaptureFixture) -> None:
+    class MissingBasketEventSupabase:
+        def insert(
+            self,
+            table: str,
+            payload: dict[str, Any] | list[dict[str, Any]],
+            *,
+            upsert: bool = False,
+            on_conflict: str | None = None,
+            returning: str = "representation",
+        ) -> list[dict[str, Any]]:
+            del payload, upsert, on_conflict, returning
+            if table == "portfolio_rebalance_events":
+                raise SupabaseRestError(
+                    'Supabase request failed with status 409: insert or update on table "portfolio_rebalance_events" violates foreign key constraint "portfolio_rebalance_events_portfolio_basket_id_fkey"',
+                    status_code=409,
+                )
+            return []
+
+    service = PortfolioAllocatorService()
+    service.supabase = MissingBasketEventSupabase()
+
+    with caplog.at_level("WARNING"):
+        service._record_rebalance_event(
+            portfolio_basket_id="basket-missing",
+            trigger="manual",
+            status="completed",
+            summary_json={"member_updates": []},
+        )
+
+    assert "Skipping portfolio rebalance event for basket basket-missing" in caplog.text
+
+
+def test_record_rebalance_event_reraises_other_supabase_errors() -> None:
+    class FailingSupabase:
+        def insert(
+            self,
+            table: str,
+            payload: dict[str, Any] | list[dict[str, Any]],
+            *,
+            upsert: bool = False,
+            on_conflict: str | None = None,
+            returning: str = "representation",
+        ) -> list[dict[str, Any]]:
+            del table, payload, upsert, on_conflict, returning
+            raise SupabaseRestError(
+                "Supabase request failed with status 500: upstream error",
+                status_code=500,
+            )
+
+    service = PortfolioAllocatorService()
+    service.supabase = FailingSupabase()
+
+    with pytest.raises(SupabaseRestError, match="status 500"):
+        service._record_rebalance_event(
+            portfolio_basket_id="basket-1",
+            trigger="manual",
+            status="completed",
+            summary_json={"member_updates": []},
+        )

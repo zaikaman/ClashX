@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -12,7 +13,10 @@ from src.services.bot_trust_service import BotTrustService
 from src.services.event_broadcaster import broadcaster
 from src.services.pacifica_auth_service import PacificaAuthService
 from src.services.portfolio_risk_service import PortfolioRiskService
-from src.services.supabase_rest import SupabaseRestClient
+from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
+
+
+logger = logging.getLogger(__name__)
 
 
 class PortfolioAllocatorService:
@@ -552,13 +556,29 @@ class PortfolioAllocatorService:
         return list(snapshots_by_runtime.values())
 
     def _record_rebalance_event(self, *, portfolio_basket_id: str, trigger: str, status: str, summary_json: dict[str, Any]) -> None:
-        self.supabase.insert(
-            "portfolio_rebalance_events",
-            PortfolioRebalanceEventRecord.create(
-                portfolio_basket_id=portfolio_basket_id,
-                trigger=trigger,
-                status=status,
-                summary_json=summary_json,
-            ).to_row(),
-            returning="minimal",
-        )
+        try:
+            self.supabase.insert(
+                "portfolio_rebalance_events",
+                PortfolioRebalanceEventRecord.create(
+                    portfolio_basket_id=portfolio_basket_id,
+                    trigger=trigger,
+                    status=status,
+                    summary_json=summary_json,
+                ).to_row(),
+                returning="minimal",
+            )
+        except SupabaseRestError as exc:
+            if not self._is_missing_portfolio_basket_fk_violation(exc):
+                raise
+            logger.warning(
+                "Skipping portfolio rebalance event for basket %s because the basket reference is no longer valid: %s",
+                portfolio_basket_id,
+                exc,
+            )
+
+    @staticmethod
+    def _is_missing_portfolio_basket_fk_violation(exc: SupabaseRestError) -> bool:
+        if exc.status_code != 409:
+            return False
+        detail = str(exc).lower()
+        return "portfolio_rebalance_events_portfolio_basket_id_fkey" in detail
