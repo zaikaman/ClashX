@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { ClashxPrivyProvider } from "@/components/providers/clashx-privy-provider";
+import { TransitionProvider } from "@/components/providers/transition-provider";
 
 import "@xyflow/react/dist/style.css";
 import "./globals.css";
@@ -16,7 +17,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en">
       <body>
-        <ClashxPrivyProvider appId={privyAppId}>{children}</ClashxPrivyProvider>
+        <TransitionProvider>
+          <ClashxPrivyProvider appId={privyAppId}>{children}</ClashxPrivyProvider>
+        </TransitionProvider>
       </body>
     </html>
   );
