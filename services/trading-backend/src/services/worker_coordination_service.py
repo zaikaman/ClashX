@@ -31,6 +31,25 @@ class WorkerCoordinationService:
             "updated_at": now.isoformat(),
         }
         try:
+            current_lease = self._supabase.maybe_one(
+                "worker_leases",
+                filters={"lease_key": lease_key},
+            )
+        except SupabaseRestError as exc:
+            if exc.is_retryable:
+                logger.warning("Skipping lease lookup for %s because Supabase is temporarily unavailable: %s", lease_key, exc)
+                return False
+            raise
+
+        if isinstance(current_lease, dict):
+            return self._try_update_existing_lease(
+                lease_key=lease_key,
+                current_lease=current_lease,
+                now=now,
+                expires_at=expires_at,
+            )
+
+        try:
             self._supabase.insert("worker_leases", payload, returning="minimal")
             return True
         except SupabaseRestError as exc:
@@ -42,38 +61,64 @@ class WorkerCoordinationService:
             else:
                 raise
         try:
-            renewed = self._supabase.update(
+            current_lease = self._supabase.maybe_one(
                 "worker_leases",
-                {"owner_id": self._owner_id, "expires_at": expires_at, "updated_at": now.isoformat()},
-                filters={"lease_key": lease_key, "owner_id": self._owner_id},
+                filters={"lease_key": lease_key},
             )
         except SupabaseRestError as exc:
             if exc.is_retryable:
                 logger.warning(
-                    "Skipping lease renewal for %s because Supabase is temporarily unavailable: %s",
+                    "Skipping lease conflict lookup for %s because Supabase is temporarily unavailable: %s",
                     lease_key,
                     exc,
                 )
                 return False
             raise
-        if renewed:
-            return True
+        if not isinstance(current_lease, dict):
+            return False
+        return self._try_update_existing_lease(
+            lease_key=lease_key,
+            current_lease=current_lease,
+            now=now,
+            expires_at=expires_at,
+        )
+
+    def _try_update_existing_lease(
+        self,
+        *,
+        lease_key: str,
+        current_lease: dict[str, Any],
+        now: datetime,
+        expires_at: str,
+    ) -> bool:
+        current_owner = str(current_lease.get("owner_id") or "")
+        current_expiry = self._parse_timestamp(current_lease.get("expires_at"))
+        if current_owner != self._owner_id and (current_expiry is None or current_expiry > now):
+            return False
+
         try:
-            updated = self._supabase.update(
-                "worker_leases",
-                {"owner_id": self._owner_id, "expires_at": expires_at, "updated_at": now.isoformat()},
-                filters={"lease_key": lease_key, "expires_at": ("lt", now.isoformat())},
-            )
+            if current_owner == self._owner_id:
+                renewed = self._supabase.update(
+                    "worker_leases",
+                    {"owner_id": self._owner_id, "expires_at": expires_at, "updated_at": now.isoformat()},
+                    filters={"lease_key": lease_key, "owner_id": self._owner_id},
+                )
+            else:
+                renewed = self._supabase.update(
+                    "worker_leases",
+                    {"owner_id": self._owner_id, "expires_at": expires_at, "updated_at": now.isoformat()},
+                    filters={"lease_key": lease_key, "expires_at": ("lt", now.isoformat())},
+                )
         except SupabaseRestError as exc:
             if exc.is_retryable:
                 logger.warning(
-                    "Skipping expired lease takeover for %s because Supabase is temporarily unavailable: %s",
+                    "Skipping lease update for %s because Supabase is temporarily unavailable: %s",
                     lease_key,
                     exc,
                 )
                 return False
             raise
-        return bool(updated)
+        return bool(renewed)
 
     def release_lease(self, lease_key: str) -> None:
         now = datetime.now(tz=UTC).isoformat()

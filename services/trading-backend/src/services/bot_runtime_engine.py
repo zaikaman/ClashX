@@ -148,6 +148,7 @@ class BotRuntimeEngine:
             columns="id,bot_definition_id,user_id,wallet_address,status,mode,risk_policy_json,deployed_at,stopped_at,updated_at",
             filters={"wallet_address": wallet_address},
             order="updated_at.desc",
+            cache_ttl_seconds=15,
         )
         return [self.serialize_runtime(row) for row in rows]
 
@@ -250,13 +251,21 @@ class BotRuntimeEngine:
 
     def _resolve_bot(self, *, bot_id: str, wallet_address: str, user_id: str) -> dict[str, Any]:
         del user_id
-        bot = self._supabase.maybe_one("bot_definitions", filters={"id": bot_id, "wallet_address": wallet_address})
+        bot = self._supabase.maybe_one(
+            "bot_definitions",
+            filters={"id": bot_id, "wallet_address": wallet_address},
+            cache_ttl_seconds=15,
+        )
         if bot is None:
             raise ValueError("Bot not found")
         return bot
 
     def _resolve_runtime(self, *, bot_definition_id: str, wallet_address: str) -> dict[str, Any] | None:
-        return self._supabase.maybe_one("bot_runtimes", filters={"bot_definition_id": bot_definition_id, "wallet_address": wallet_address})
+        return self._supabase.maybe_one(
+            "bot_runtimes",
+            filters={"bot_definition_id": bot_definition_id, "wallet_address": wallet_address},
+            cache_ttl_seconds=15,
+        )
 
     def _append_runtime_transition(self, *, runtime: dict[str, Any], event_type: str) -> None:
         self._supabase.insert(

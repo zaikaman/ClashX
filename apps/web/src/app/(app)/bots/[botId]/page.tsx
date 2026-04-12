@@ -107,7 +107,7 @@ type RuntimeRiskStateResponse = {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const EVENTS_PAGE_SIZE = 40;
-const REFRESH_INTERVAL_MS = 30000;
+const REFRESH_INTERVAL_MS = 60000;
 
 async function unwrapResponse<T>(response: Response, fallback: string): Promise<T> {
   const payload = (await response.json()) as unknown;
@@ -158,9 +158,30 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
   const [runtimePolicyStatus, setRuntimePolicyStatus] = useState<"idle" | "loading" | "saving">("idle");
   const [runtimePolicyError, setRuntimePolicyError] = useState<string | null>(null);
   const [runtimePolicyRuntimeId, setRuntimePolicyRuntimeId] = useState<string | null>(null);
+  const [pageVisible, setPageVisible] = useState(
+    typeof document === "undefined" ? true : document.visibilityState === "visible",
+  );
 
   const sessionActive = authenticated && Boolean(walletAddress);
   const activeRuntimeId = runtimeOverview?.health.runtime_id ?? null;
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const syncVisibility = () => {
+      setPageVisible(document.visibilityState === "visible");
+    };
+
+    syncVisibility();
+    document.addEventListener("visibilitychange", syncVisibility);
+    window.addEventListener("focus", syncVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", syncVisibility);
+      window.removeEventListener("focus", syncVisibility);
+    };
+  }, []);
 
   useEffect(() => {
     if (!sessionActive || !walletAddress) {
@@ -260,7 +281,7 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
         const headers = await getAuthHeaders();
         const walletQuery = encodeURIComponent(resolvedWallet);
         const overviewResponse = await fetch(
-          `${API_BASE_URL}/api/bots/${params.botId}/runtime-overview?wallet_address=${walletQuery}&include_performance=true&performance_mode=full`,
+          `${API_BASE_URL}/api/bots/${params.botId}/runtime-overview?wallet_address=${walletQuery}&include_performance=true&performance_mode=fast`,
           {
             headers,
             signal: controller.signal,
@@ -348,15 +369,16 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
       return;
     }
 
+    const effectiveRefreshIntervalMs = pageVisible ? REFRESH_INTERVAL_MS : Math.max(REFRESH_INTERVAL_MS * 3, 180000);
     const interval = window.setInterval(() => {
       setRuntimeRefreshToken((value) => value + 1);
       if (activeTab === "activity") {
         setActivityRefreshToken((value) => value + 1);
       }
-    }, REFRESH_INTERVAL_MS);
+    }, effectiveRefreshIntervalMs);
 
     return () => window.clearInterval(interval);
-  }, [activeTab, primaryLoading, sessionActive, walletAddress]);
+  }, [activeTab, pageVisible, primaryLoading, sessionActive, walletAddress]);
 
   useEffect(() => {
     if (!sessionActive || !walletAddress || activeTab !== "operate") {
@@ -733,7 +755,7 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
                 copy="Latest decisions, outcomes, and repeated checks."
               />
               <span className="text-xs text-neutral-500">
-                latest {EVENTS_PAGE_SIZE} events, refreshed every 15 seconds
+                latest {EVENTS_PAGE_SIZE} events, refreshed about every minute
               </span>
             </div>
 

@@ -46,12 +46,17 @@ class BotBuilderService:
             columns="id,wallet_address,name,description,visibility,market_scope,strategy_type,authoring_mode,rules_json,updated_at",
             filters={"wallet_address": wallet_address},
             order="updated_at.desc",
+            cache_ttl_seconds=15,
         )
         return [self.serialize_summary(row) for row in rows]
 
     def get_bot(self, db: Any, *, bot_id: str, wallet_address: str) -> dict:
         del db
-        bot = self.supabase.maybe_one("bot_definitions", filters={"id": bot_id, "wallet_address": wallet_address})
+        bot = self.supabase.maybe_one(
+            "bot_definitions",
+            filters={"id": bot_id, "wallet_address": wallet_address},
+            cache_ttl_seconds=15,
+        )
         if bot is None:
             raise ValueError("Bot not found")
         return self.serialize(bot)

@@ -579,6 +579,56 @@ def test_runtime_overviews_for_wallet_batches_runtime_snapshots() -> None:
     assert overview_by_bot["bot-2"]["metrics"]["status"] == "draft"
 
 
+def test_skip_event_lookup_uses_local_cache_after_first_match() -> None:
+    tables = _seed_tables()
+    now = datetime.now(tz=UTC)
+    request_payload = {
+        "type": "open_long",
+        "symbol": "BTC",
+        "leverage": 2,
+        "size_usd": 100,
+    }
+    result_payload = {"issues": ["existing bot entry order on BTC is still open"]}
+    tables["bot_execution_events"] = [
+        {
+            "id": "event-skip-1",
+            "runtime_id": "runtime-1",
+            "event_type": "action.skipped",
+            "decision_summary": "skip-key",
+            "request_payload": request_payload,
+            "result_payload": result_payload,
+            "status": "skipped",
+            "error_reason": None,
+            "created_at": now.isoformat(),
+        }
+    ]
+    fake_supabase = CountingFakeSupabaseRestClient(tables)
+    worker = BotRuntimeWorker.__new__(BotRuntimeWorker)
+    worker._supabase = fake_supabase
+    worker._recent_skip_events = {}
+
+    first = asyncio.run(
+        worker._should_record_skip_event_async(
+            runtime_id="runtime-1",
+            decision_summary="skip-key",
+            request_payload=request_payload,
+            result_payload=result_payload,
+        )
+    )
+    second = asyncio.run(
+        worker._should_record_skip_event_async(
+            runtime_id="runtime-1",
+            decision_summary="skip-key",
+            request_payload=request_payload,
+            result_payload=result_payload,
+        )
+    )
+
+    assert first is False
+    assert second is False
+    assert len(fake_supabase.select_calls) == 1
+
+
 def test_list_runtime_events_returns_empty_list_when_runtime_is_missing() -> None:
     tables = _seed_tables()
     tables["bot_runtimes"] = []

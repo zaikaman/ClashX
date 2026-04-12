@@ -36,6 +36,12 @@ DEFAULT_CORS_ALLOWED_ORIGINS = (
     "http://localhost:3000",
     "https://clash-x.vercel.app",
 )
+FREE_TIER_MIN_SNAPSHOT_CACHE_TTL_SECONDS = 15
+FREE_TIER_MIN_FAST_EVALUATION_SECONDS = 15
+FREE_TIER_MIN_ACTIVE_WALLET_POLL_SECONDS = 15
+FREE_TIER_MIN_WARM_WALLET_POLL_SECONDS = 60
+FREE_TIER_MIN_IDLE_WALLET_POLL_SECONDS = 180
+FREE_TIER_MIN_PERFORMANCE_REFRESH_SECONDS = 180
 
 
 def _parse_cors_allowed_origins(*raw_values: str) -> tuple[str, ...]:
@@ -144,13 +150,31 @@ def get_settings() -> Settings:
         pacifica_write_requests_per_second=max(int(os.getenv("PACIFICA_WRITE_REQUESTS_PER_SECOND", "4")), 1),
         pacifica_market_cache_ttl_seconds=max(int(os.getenv("PACIFICA_MARKET_CACHE_TTL_SECONDS", "15")), 1),
         pacifica_price_cache_ttl_seconds=max(int(os.getenv("PACIFICA_PRICE_CACHE_TTL_SECONDS", "5")), 1),
-        pacifica_snapshot_cache_ttl_seconds=max(int(os.getenv("PACIFICA_SNAPSHOT_CACHE_TTL_SECONDS", "8")), 1),
-        pacifica_fast_evaluation_seconds=max(int(os.getenv("PACIFICA_FAST_EVALUATION_SECONDS", "5")), 1),
-        pacifica_active_wallet_poll_seconds=max(int(os.getenv("PACIFICA_ACTIVE_WALLET_POLL_SECONDS", "4")), 1),
-        pacifica_warm_wallet_poll_seconds=max(int(os.getenv("PACIFICA_WARM_WALLET_POLL_SECONDS", "15")), 1),
-        pacifica_idle_wallet_poll_seconds=max(int(os.getenv("PACIFICA_IDLE_WALLET_POLL_SECONDS", "45")), 1),
+        pacifica_snapshot_cache_ttl_seconds=max(
+            int(os.getenv("PACIFICA_SNAPSHOT_CACHE_TTL_SECONDS", "8")),
+            FREE_TIER_MIN_SNAPSHOT_CACHE_TTL_SECONDS,
+        ),
+        pacifica_fast_evaluation_seconds=max(
+            int(os.getenv("PACIFICA_FAST_EVALUATION_SECONDS", "5")),
+            FREE_TIER_MIN_FAST_EVALUATION_SECONDS,
+        ),
+        pacifica_active_wallet_poll_seconds=max(
+            int(os.getenv("PACIFICA_ACTIVE_WALLET_POLL_SECONDS", "4")),
+            FREE_TIER_MIN_ACTIVE_WALLET_POLL_SECONDS,
+        ),
+        pacifica_warm_wallet_poll_seconds=max(
+            int(os.getenv("PACIFICA_WARM_WALLET_POLL_SECONDS", "15")),
+            FREE_TIER_MIN_WARM_WALLET_POLL_SECONDS,
+        ),
+        pacifica_idle_wallet_poll_seconds=max(
+            int(os.getenv("PACIFICA_IDLE_WALLET_POLL_SECONDS", "45")),
+            FREE_TIER_MIN_IDLE_WALLET_POLL_SECONDS,
+        ),
         pacifica_recent_activity_window_seconds=max(int(os.getenv("PACIFICA_RECENT_ACTIVITY_WINDOW_SECONDS", "90")), 1),
-        pacifica_performance_refresh_seconds=max(int(os.getenv("PACIFICA_PERFORMANCE_REFRESH_SECONDS", "60")), 5),
+        pacifica_performance_refresh_seconds=max(
+            int(os.getenv("PACIFICA_PERFORMANCE_REFRESH_SECONDS", "60")),
+            FREE_TIER_MIN_PERFORMANCE_REFRESH_SECONDS,
+        ),
         privy_app_id=os.getenv("PRIVY_APP_ID", ""),
         privy_verification_key=os.getenv("PRIVY_VERIFICATION_KEY", ""),
         gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),

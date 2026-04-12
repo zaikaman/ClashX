@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class BotRuntimeSnapshotWorker:
-    def __init__(self, poll_interval_seconds: float = 30.0) -> None:
+    def __init__(self, poll_interval_seconds: float = 120.0) -> None:
         self.poll_interval_seconds = poll_interval_seconds
         self._task: asyncio.Task | None = None
         self._running = False

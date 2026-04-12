@@ -305,7 +305,7 @@ export function BotsFleetPage() {
         const walletParam = encodeURIComponent(resolvedWallet ?? "");
 
         const listResponse = await fetch(
-          `${API_BASE_URL}/api/bots?wallet_address=${walletParam}&include_performance=true&performance_mode=full`,
+          `${API_BASE_URL}/api/bots?wallet_address=${walletParam}&include_performance=true&performance_mode=fast`,
           {
             headers,
             signal: controller.signal,

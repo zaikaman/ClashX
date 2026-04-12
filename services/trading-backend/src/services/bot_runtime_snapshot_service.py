@@ -10,6 +10,11 @@ from src.services.supabase_rest import SupabaseRestClient
 
 
 class BotRuntimeSnapshotService:
+    SNAPSHOT_COLUMNS = (
+        "runtime_id,bot_definition_id,user_id,wallet_address,status,mode,"
+        "health_json,metrics_json,performance_json,source_runtime_updated_at,last_computed_at"
+    )
+
     def __init__(
         self,
         *,
@@ -97,8 +102,9 @@ class BotRuntimeSnapshotService:
             return {}
         rows = self._supabase.select(
             "bot_runtime_snapshots",
-            columns="runtime_id,bot_definition_id,user_id,wallet_address,status,mode,health_json,metrics_json,performance_json,source_runtime_updated_at,last_computed_at",
+            columns=self.SNAPSHOT_COLUMNS,
             filters={"wallet_address": resolved_wallet},
+            cache_ttl_seconds=15,
         )
         return {
             str(row.get("bot_definition_id") or "").strip(): row
@@ -113,9 +119,9 @@ class BotRuntimeSnapshotService:
             return None
         return self._supabase.maybe_one(
             "bot_runtime_snapshots",
-            columns="runtime_id,bot_definition_id,user_id,wallet_address,status,mode,health_json,metrics_json,performance_json,source_runtime_updated_at,last_computed_at",
+            columns=self.SNAPSHOT_COLUMNS,
             filters={"bot_definition_id": resolved_bot_id, "wallet_address": resolved_wallet},
-            cache_ttl_seconds=5,
+            cache_ttl_seconds=15,
         )
 
     @staticmethod

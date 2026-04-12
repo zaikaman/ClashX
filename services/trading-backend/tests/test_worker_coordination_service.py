@@ -215,11 +215,40 @@ def test_try_claim_lease_renews_existing_lease_for_same_owner() -> None:
             "updated_at": now.isoformat(),
         }
     ]
+    supabase.queue_failure(
+        "insert",
+        "worker_leases",
+        SupabaseRestError("insert should not be attempted for same-owner renewal", status_code=503),
+    )
     service = _build_service(supabase)
 
     assert service.try_claim_lease("lease-1", ttl_seconds=30) is True
     assert supabase.tables["worker_leases"][0]["owner_id"] == "worker-2"
     assert supabase.tables["worker_leases"][0]["expires_at"] > previous_expiry
+
+
+def test_try_claim_lease_takes_over_expired_lease_without_insert_attempt() -> None:
+    supabase = _FakeSupabaseRestClient()
+    now = datetime.now(tz=UTC)
+    previous_expiry = (now - timedelta(seconds=5)).isoformat()
+    supabase.tables["worker_leases"] = [
+        {
+            "lease_key": "lease-1",
+            "owner_id": "worker-1",
+            "expires_at": previous_expiry,
+            "updated_at": previous_expiry,
+        }
+    ]
+    supabase.queue_failure(
+        "insert",
+        "worker_leases",
+        SupabaseRestError("insert should not be attempted for expired takeover", status_code=503),
+    )
+    service = _build_service(supabase)
+
+    assert service.try_claim_lease("lease-1", ttl_seconds=30) is True
+    assert supabase.tables["worker_leases"][0]["owner_id"] == "worker-2"
+    assert supabase.tables["worker_leases"][0]["expires_at"] > now.isoformat()
 
 
 def test_release_lease_ignores_transient_supabase_error() -> None:

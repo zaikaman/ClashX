@@ -30,8 +30,9 @@ from src.services.worker_coordination_service import WorkerCoordinationService
 
 logger = logging.getLogger(__name__)
 PENDING_ENTRY_TTL_SECONDS = 120
-RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 30
+RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 120
 SKIP_EVENT_DEDUP_SECONDS = 300
+SKIP_EVENT_CACHE_TTL_SECONDS = SKIP_EVENT_DEDUP_SECONDS
 IDLE_RUNTIME_DISCOVERY_SECONDS = 5.0
 RUNTIME_SET_REFRESH_SECONDS = 15.0
 MIN_WORKER_SLEEP_SECONDS = 1.0
@@ -61,6 +62,7 @@ class BotRuntimeWorker:
         self._coordination = WorkerCoordinationService(self._supabase)
         self._metrics = get_performance_metrics_store()
         self._held_leases: dict[str, float] = {}
+        self._recent_skip_events: dict[str, float] = {}
         self.last_iteration_at: str | None = None
         self.last_error: str | None = None
 
@@ -464,6 +466,7 @@ class BotRuntimeWorker:
                         event="bot.execution.skipped",
                         payload=self._serialize_event_payload(event),
                     )
+                    self._remember_skip_event(runtime_id=runtime["id"], decision_summary=skipped_key)
                     logger.debug(
                         "Runtime %s skipped action %s for %s: %s",
                         runtime["id"],
@@ -1478,6 +1481,8 @@ class BotRuntimeWorker:
         request_payload: dict[str, Any],
         result_payload: dict[str, Any],
     ) -> bool:
+        if self._skip_event_recently_recorded(runtime_id=runtime_id, decision_summary=decision_summary):
+            return False
         latest_events = await asyncio.to_thread(
             self._supabase.select,
             "bot_execution_events",
@@ -1485,13 +1490,16 @@ class BotRuntimeWorker:
             order="created_at.desc",
             limit=12,
         )
-        return self._should_record_skip_event(
+        should_record = self._should_record_skip_event(
             runtime_id=runtime_id,
             decision_summary=decision_summary,
             request_payload=request_payload,
             result_payload=result_payload,
             latest_events=latest_events,
         )
+        if not should_record:
+            self._remember_skip_event(runtime_id=runtime_id, decision_summary=decision_summary)
+        return should_record
 
     def _should_record_skip_event(
         self,
@@ -1526,6 +1534,26 @@ class BotRuntimeWorker:
             ):
                 return False
         return True
+
+    def _skip_event_recently_recorded(self, *, runtime_id: str, decision_summary: str) -> bool:
+        cache_key = self._skip_event_cache_key(runtime_id=runtime_id, decision_summary=decision_summary)
+        expires_at = self._recent_skip_events.get(cache_key)
+        if expires_at is None:
+            return False
+        if monotonic() >= expires_at:
+            self._recent_skip_events.pop(cache_key, None)
+            return False
+        return True
+
+    def _remember_skip_event(self, *, runtime_id: str, decision_summary: str) -> None:
+        self._recent_skip_events[
+            self._skip_event_cache_key(runtime_id=runtime_id, decision_summary=decision_summary)
+        ] = monotonic() + SKIP_EVENT_CACHE_TTL_SECONDS
+
+    @staticmethod
+    def _skip_event_cache_key(*, runtime_id: str, decision_summary: str) -> str:
+        digest = hashlib.sha256(f"{runtime_id}:{decision_summary}".encode()).hexdigest()[:24]
+        return f"skip:{runtime_id}:{digest}"
 
     def _should_suspend_entry_evaluation(
         self,

@@ -23,7 +23,7 @@ class BotPerformanceService:
         self._supabase = supabase or SupabaseRestClient()
         self._risk = BotRiskService()
         configured_ttl = get_settings().pacifica_snapshot_cache_ttl_seconds
-        self._wallet_performance_cache_ttl = float(max(1, min(configured_ttl, 2)))
+        self._wallet_performance_cache_ttl = float(max(5, min(configured_ttl, 60)))
         self._wallet_performance_cache: dict[str, tuple[float, dict[str, dict[str, Any]]]] = {}
         self._wallet_performance_locks: dict[str, asyncio.Lock] = {}
 
