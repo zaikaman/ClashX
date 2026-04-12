@@ -3,11 +3,12 @@ from datetime import datetime
 from typing import Literal
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from typing import Any as Session
 
 from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authenticated_user, resolve_app_user_id
+from src.api.marketplace import marketplace_service
 from src.db.session import get_db
 from src.services.bot_builder_service import BotBuilderService
 from src.services.bot_performance_service import BotPerformanceService
@@ -236,6 +237,10 @@ def _resolve_wallet_user_id(user: AuthenticatedUser, wallet_address: str | None)
     return resolved_wallet, resolve_app_user_id(user, resolved_wallet)
 
 
+def _schedule_marketplace_refresh(background_tasks: BackgroundTasks) -> None:
+    background_tasks.add_task(marketplace_service.refresh_after_publication, limit=120)
+
+
 async def _build_runtime_performance(runtime: dict[str, Any] | None) -> RuntimePerformanceResponse | None:
     if runtime is None:
         return None
@@ -453,6 +458,7 @@ async def list_bots(
 @router.post("", response_model=BotDefinitionResponse)
 def create_bot(
     payload: BotCreateRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> BotDefinitionResponse:
@@ -472,6 +478,8 @@ def create_bot(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if str(bot.get("visibility") or "") == "public":
+        _schedule_marketplace_refresh(background_tasks)
     return BotDefinitionResponse.model_validate(bot)
 
 
@@ -545,6 +553,7 @@ def get_bot(
 def patch_bot(
     bot_id: str,
     payload: BotUpdateRequest,
+    background_tasks: BackgroundTasks,
     wallet_address: str | None = Query(default=None, min_length=8),
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
@@ -566,6 +575,8 @@ def patch_bot(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if str(bot.get("visibility") or "") == "public" or payload.visibility is not None:
+        _schedule_marketplace_refresh(background_tasks)
     return BotDefinitionResponse.model_validate(bot)
 
 
@@ -622,6 +633,7 @@ def validate_draft(payload: BotValidationRequest) -> BotValidationResponse:
 def deploy_bot_runtime(
     bot_id: str,
     payload: BotDeployRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> BotRuntimeResponse:
@@ -636,6 +648,7 @@ def deploy_bot_runtime(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _schedule_marketplace_refresh(background_tasks)
     return BotRuntimeResponse.model_validate(runtime)
 
 

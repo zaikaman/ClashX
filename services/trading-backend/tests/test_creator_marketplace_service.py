@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 from src.api.bot_copy import BotRuntimeProfileResponse
 from src.services.creator_marketplace_service import CreatorMarketplaceService
@@ -209,3 +210,31 @@ def test_runtime_profile_normalizes_creator_bots_to_summary_shape() -> None:
     assert model.creator.bots[0].trust_score == 80
     assert model.creator.bots[0].risk_grade == "A"
     assert model.creator.bots[0].drift_status == "aligned"
+
+
+def test_refresh_after_publication_refreshes_leaderboard_then_snapshots(monkeypatch) -> None:
+    service = CreatorMarketplaceService.__new__(CreatorMarketplaceService)
+    calls: list[tuple[str, int | None]] = []
+
+    async def _fake_refresh_public_leaderboard(_db, *, limit: int):
+        calls.append(("leaderboard", limit))
+
+    async def _fake_refresh_public_snapshots(*, limit: int = 120):
+        calls.append(("snapshots", limit))
+
+    monkeypatch.setattr(
+        service,
+        "leaderboard_engine",
+        SimpleNamespace(refresh_public_leaderboard=_fake_refresh_public_leaderboard),
+        raising=False,
+    )
+    monkeypatch.setattr(service, "refresh_public_snapshots", _fake_refresh_public_snapshots, raising=False)
+    monkeypatch.setattr(service, "_clear_marketplace_cache", lambda: calls.append(("clear", None)), raising=False)
+
+    asyncio.run(service.refresh_after_publication(limit=75))
+
+    assert calls == [
+        ("leaderboard", 120),
+        ("clear", None),
+        ("snapshots", 120),
+    ]

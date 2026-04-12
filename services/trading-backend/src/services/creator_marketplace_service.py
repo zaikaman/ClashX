@@ -182,6 +182,19 @@ class CreatorMarketplaceService:
                 self._clear_marketplace_cache()
         await self.refresh_public_snapshots(limit=max(limit, 120))
 
+    async def refresh_after_publication(self, *, limit: int = 120) -> None:
+        target_limit = max(limit, 120)
+        try:
+            await self.leaderboard_engine.refresh_public_leaderboard(None, limit=max(target_limit, 60))
+        except Exception:
+            logger.exception("Marketplace mutation refresh failed during leaderboard rebuild")
+        finally:
+            self._clear_marketplace_cache()
+        try:
+            await self.refresh_public_snapshots(limit=target_limit)
+        except Exception:
+            logger.exception("Marketplace mutation refresh failed during snapshot rebuild")
+
     async def refresh_public_snapshots(self, *, limit: int = 120) -> None:
         target_limit = max(limit, 120)
         public_rows = await self._load_public_leaderboard(limit=target_limit)

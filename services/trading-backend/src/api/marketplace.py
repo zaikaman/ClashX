@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from typing import Any as Session
 
@@ -259,6 +259,7 @@ def get_publishing_settings(
 def patch_publishing_settings(
     bot_id: str,
     payload: PublishingSettingsUpdateRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> PublishingSettingsResponse:
@@ -281,4 +282,5 @@ def patch_publishing_settings(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    background_tasks.add_task(marketplace_service.refresh_after_publication, limit=120)
     return PublishingSettingsResponse.model_validate(result)
