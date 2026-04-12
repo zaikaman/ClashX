@@ -310,7 +310,7 @@ class CreatorMarketplaceService:
         )
         payload = (snapshot or {}).get("detail_json")
         if isinstance(payload, dict) and payload:
-            return payload
+            return self._normalize_runtime_profile_payload(payload)
         return await self._build_runtime_profile_live(runtime_id=runtime_id)
 
     def _list_runtime_snapshot_rows(
@@ -391,7 +391,7 @@ class CreatorMarketplaceService:
             "follower_count": follower_count,
             "featured_bot_count": 0,
             "marketplace_reach_score": marketplace_reach_score,
-            "bots": creator_rows,
+            "bots": self._normalize_creator_bot_summaries(base_profile.get("bots")),
             "featured_bots": [],
         }
 
@@ -423,7 +423,8 @@ class CreatorMarketplaceService:
         )
         creator = await self._build_creator_profile_live(creator_id=str(definition["user_id"]))
         recent_events = self._load_recent_runtime_events_map([runtime_id]).get(runtime_id, [])
-        return {
+        return self._normalize_runtime_profile_payload(
+            {
             "runtime_id": runtime["id"],
             "bot_definition_id": definition["id"],
             "bot_name": definition["name"],
@@ -443,7 +444,8 @@ class CreatorMarketplaceService:
             "drift": public_context["drift"],
             "passport": public_context["passport"],
             "creator": creator,
-        }
+            }
+        )
 
     def _load_recent_runtime_events_map(self, runtime_ids: list[str], *, limit_per_runtime: int = 12) -> dict[str, list[dict[str, Any]]]:
         normalized_runtime_ids = [runtime_id for runtime_id in runtime_ids if runtime_id]
@@ -506,6 +508,54 @@ class CreatorMarketplaceService:
                 "copy_stats": spotlight.get("copy_stats") or {"mirror_count": 0, "active_mirror_count": 0, "clone_count": 0},
             },
         }
+
+    def _normalize_runtime_profile_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(payload)
+        creator = normalized.get("creator")
+        if isinstance(creator, dict):
+            normalized["creator"] = self._normalize_creator_profile_payload(creator)
+        return normalized
+
+    def _normalize_creator_profile_payload(self, creator: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(creator)
+        normalized["bots"] = self._normalize_creator_bot_summaries(normalized.get("bots"))
+        return normalized
+
+    def _normalize_creator_bot_summaries(self, bots: Any) -> list[dict[str, Any]]:
+        if not isinstance(bots, list):
+            return []
+
+        normalized: list[dict[str, Any]] = []
+        for bot in bots:
+            if not isinstance(bot, dict):
+                continue
+
+            trust = bot.get("trust") if isinstance(bot.get("trust"), dict) else {}
+            drift = bot.get("drift") if isinstance(bot.get("drift"), dict) else {}
+            normalized.append(
+                {
+                    "runtime_id": str(bot.get("runtime_id") or ""),
+                    "bot_definition_id": str(bot.get("bot_definition_id") or ""),
+                    "bot_name": str(bot.get("bot_name") or ""),
+                    "strategy_type": str(bot.get("strategy_type") or ""),
+                    "rank": int(bot["rank"]) if bot.get("rank") is not None else None,
+                    "pnl_total": float(bot.get("pnl_total") or 0.0),
+                    "drawdown": float(bot.get("drawdown") or 0.0),
+                    "trust_score": int(bot.get("trust_score") if bot.get("trust_score") is not None else trust.get("trust_score") or 0),
+                    "risk_grade": str(bot.get("risk_grade") or trust.get("risk_grade") or "N/A"),
+                    "drift_status": str(bot.get("drift_status") or drift.get("status") or "unverified"),
+                    "captured_at": bot.get("captured_at"),
+                }
+            )
+
+        return sorted(
+            normalized,
+            key=lambda item: (
+                9999 if item["rank"] is None else item["rank"],
+                -item["trust_score"],
+                item["bot_name"],
+            ),
+        )
 
     def _delete_stale_marketplace_runtime_snapshots(self, *, active_runtime_ids: list[str]) -> None:
         existing_rows = self.supabase.select(MARKETPLACE_RUNTIME_SNAPSHOT_TABLE, columns="runtime_id")
