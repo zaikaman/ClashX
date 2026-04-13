@@ -43,8 +43,8 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8
 const INSPECTOR_PAGE_SIZE = 12;
 const COMPARE_COLORS = ["#dce85d", "#74b97f", "#8ec5ff", "#f59e0b"];
 const MAX_KLINE_CANDLES_PER_REQUEST = 4000;
-const BACKTEST_JOB_POLL_VISIBLE_MS = 1800;
-const BACKTEST_JOB_POLL_HIDDEN_MS = 6000;
+const BACKTEST_JOB_POLL_VISIBLE_MS = 4000;
+const BACKTEST_JOB_POLL_HIDDEN_MS = 12000;
 const TIMEFRAME_TO_MS: Record<string, number> = {
   "1m": 60_000,
   "5m": 300_000,

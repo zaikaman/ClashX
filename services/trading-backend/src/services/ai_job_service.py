@@ -9,6 +9,8 @@ from src.services.supabase_rest import SupabaseRestClient
 
 AiJobType = Literal["builder_ai_chat", "copilot_chat", "backtest_run"]
 AiJobStatus = Literal["queued", "running", "completed", "failed"]
+JOB_STATUS_COLUMNS = "id,job_type,status,wallet_address,result_payload_json,error_detail,created_at,updated_at,completed_at"
+JOB_WORKER_COLUMNS = f"{JOB_STATUS_COLUMNS},request_payload_json"
 
 
 def _utc_now() -> str:
@@ -45,15 +47,22 @@ class AiJobService:
         self._supabase.insert("ai_job_runs", row, returning="minimal")
         return row
 
-    def get_job(self, *, job_id: str) -> dict[str, Any] | None:
-        return self._supabase.maybe_one("ai_job_runs", filters={"id": job_id})
+    def get_job(self, *, job_id: str, columns: str = "*") -> dict[str, Any] | None:
+        return self._supabase.maybe_one("ai_job_runs", columns=columns, filters={"id": job_id})
 
-    def get_job_for_wallets(self, *, job_id: str, wallet_addresses: list[str]) -> dict[str, Any] | None:
+    def get_job_for_wallets(
+        self,
+        *,
+        job_id: str,
+        wallet_addresses: list[str],
+        columns: str = "*",
+    ) -> dict[str, Any] | None:
         normalized_wallets = [wallet.strip() for wallet in wallet_addresses if wallet and wallet.strip()]
         if not normalized_wallets:
             return None
         return self._supabase.maybe_one(
             "ai_job_runs",
+            columns=columns,
             filters={
                 "id": job_id,
                 "wallet_address": ("in", normalized_wallets),
@@ -69,6 +78,7 @@ class AiJobService:
         order: str | None = "created_at.desc",
         limit: int | None = None,
         updated_before: str | None = None,
+        columns: str = "*",
     ) -> list[dict[str, Any]]:
         filters: dict[str, Any] = {}
         if job_type:
@@ -87,6 +97,7 @@ class AiJobService:
             filters["updated_at"] = ("lt", updated_before)
         return self._supabase.select(
             "ai_job_runs",
+            columns=columns,
             filters=filters,
             order=order,
             limit=limit,
@@ -94,7 +105,7 @@ class AiJobService:
 
     def mark_running(self, *, job_id: str) -> dict[str, Any] | None:
         now = _utc_now()
-        updated = self._supabase.update(
+        self._supabase.update(
             "ai_job_runs",
             {
                 "status": "running",
@@ -103,24 +114,26 @@ class AiJobService:
                 "error_detail": None,
             },
             filters={"id": job_id},
+            returning="minimal",
         )
-        return updated[0] if updated else None
+        return {"id": job_id, "status": "running", "started_at": now, "updated_at": now}
 
     def update_progress(self, *, job_id: str, progress_payload: dict[str, Any]) -> dict[str, Any] | None:
         now = _utc_now()
-        updated = self._supabase.update(
+        self._supabase.update(
             "ai_job_runs",
             {
                 "result_payload_json": progress_payload,
                 "updated_at": now,
             },
             filters={"id": job_id},
+            returning="minimal",
         )
-        return updated[0] if updated else None
+        return {"id": job_id, "status": "running", "updated_at": now}
 
     def mark_completed(self, *, job_id: str, result_payload: dict[str, Any]) -> dict[str, Any] | None:
         now = _utc_now()
-        updated = self._supabase.update(
+        self._supabase.update(
             "ai_job_runs",
             {
                 "status": "completed",
@@ -130,12 +143,13 @@ class AiJobService:
                 "updated_at": now,
             },
             filters={"id": job_id},
+            returning="minimal",
         )
-        return updated[0] if updated else None
+        return {"id": job_id, "status": "completed", "completed_at": now, "updated_at": now}
 
     def mark_failed(self, *, job_id: str, error_detail: str) -> dict[str, Any] | None:
         now = _utc_now()
-        updated = self._supabase.update(
+        self._supabase.update(
             "ai_job_runs",
             {
                 "status": "failed",
@@ -144,5 +158,6 @@ class AiJobService:
                 "updated_at": now,
             },
             filters={"id": job_id},
+            returning="minimal",
         )
-        return updated[0] if updated else None
+        return {"id": job_id, "status": "failed", "completed_at": now, "updated_at": now}

@@ -297,7 +297,7 @@ def test_backtest_job_runner_persists_progress_then_result() -> None:
     ]
     assert jobs.completed_jobs[0][0] == "job-4"
     assert jobs.completed_jobs[0][1]["type"] == "result"
-    assert jobs.completed_jobs[0][1]["run"]["id"] == "run-1"
+    assert jobs.completed_jobs[0][1]["run_id"] == "run-1"
     assert jobs.failed_jobs == []
 
 

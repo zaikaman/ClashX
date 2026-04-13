@@ -174,13 +174,17 @@ def test_get_backtest_run_job_returns_completed_result(monkeypatch) -> None:
             "status": "completed",
             "result_payload_json": {
                 "type": "result",
-                "run": _completed_run_payload(),
+                "run_id": "run-1",
             },
             "error_detail": None,
             "created_at": "2026-04-10T00:00:00+00:00",
             "updated_at": "2026-04-10T00:00:05+00:00",
             "completed_at": "2026-04-10T00:00:05+00:00",
         },
+    )
+    monkeypatch.setattr(
+        "src.api.backtests.bot_backtest_service.get_run",
+        lambda db, run_id, wallet_address, user_id: _completed_run_payload(),
     )
 
     response = asyncio.run(get_backtest_run_job("job-1", user=_job_user()))

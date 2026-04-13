@@ -54,6 +54,15 @@ DEFAULT_BACKTEST_ASSUMPTIONS = {
 DEFAULT_BACKTEST_INTERVAL = "15m"
 MAX_BACKTEST_CONCURRENT_CANDLE_REQUESTS = 3
 BACKTEST_CHECKPOINT_INTERVAL_SECONDS = 5.0
+MAX_PERSISTED_EQUITY_CURVE_POINTS = 2_500
+MAX_PERSISTED_PRICE_SERIES_POINTS_PER_SYMBOL = 1_500
+MAX_CHECKPOINT_EQUITY_CURVE_POINTS = 600
+BACKTEST_RUN_SUMMARY_COLUMNS = (
+    "id,bot_definition_id,bot_name_snapshot,market_scope_snapshot,strategy_type_snapshot,"
+    "interval,start_time,end_time,initial_capital_usd,execution_model,pnl_total,pnl_total_pct,"
+    "max_drawdown_pct,win_rate,trade_count,status,assumption_config_json,failure_reason,"
+    "created_at,completed_at,updated_at"
+)
 ProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 
 
@@ -181,39 +190,38 @@ class BotBacktestService:
                 execution_issues=[str(exc)],
             )
 
-        summary = result_json.get("summary") if isinstance(result_json.get("summary"), dict) else {}
+        persisted_result_json = self._compact_result_json(result_json)
+        summary = persisted_result_json.get("summary") if isinstance(persisted_result_json.get("summary"), dict) else {}
         completed_at = self._now_iso()
-        failure_reason = self._extract_failure_reason(result_json=result_json, status=status)
-        row = self._supabase.insert(
-            "bot_backtest_runs",
-            {
-                "id": str(uuid.uuid4()),
-                "bot_definition_id": bot["id"],
-                "user_id": bot["user_id"],
-                "wallet_address": wallet_address,
-                "bot_name_snapshot": bot["name"],
-                "market_scope_snapshot": str(bot.get("market_scope") or ""),
-                "strategy_type_snapshot": str(bot.get("strategy_type") or ""),
-                "rules_snapshot_json": rules_snapshot,
-                "interval": resolved_interval,
-                "start_time": start_time,
-                "end_time": end_time,
-                "initial_capital_usd": initial_capital_usd,
-                "execution_model": "candle_close_v2",
-                "pnl_total": self._to_float(summary.get("pnl_total"), 0.0),
-                "pnl_total_pct": self._to_float(summary.get("pnl_total_pct"), 0.0),
-                "max_drawdown_pct": self._to_float(summary.get("max_drawdown_pct"), 0.0),
-                "win_rate": self._to_float(summary.get("win_rate"), 0.0),
-                "trade_count": int(self._to_float(summary.get("trade_count"), 0.0)),
-                "status": status,
-                "assumption_config_json": normalized_assumptions,
-                "failure_reason": failure_reason,
-                "result_json": result_json,
-                "created_at": now_iso,
-                "completed_at": completed_at,
-                "updated_at": completed_at,
-            },
-        )[0]
+        failure_reason = self._extract_failure_reason(result_json=persisted_result_json, status=status)
+        row = {
+            "id": str(uuid.uuid4()),
+            "bot_definition_id": bot["id"],
+            "user_id": bot["user_id"],
+            "wallet_address": wallet_address,
+            "bot_name_snapshot": bot["name"],
+            "market_scope_snapshot": str(bot.get("market_scope") or ""),
+            "strategy_type_snapshot": str(bot.get("strategy_type") or ""),
+            "rules_snapshot_json": rules_snapshot,
+            "interval": resolved_interval,
+            "start_time": start_time,
+            "end_time": end_time,
+            "initial_capital_usd": initial_capital_usd,
+            "execution_model": "candle_close_v2",
+            "pnl_total": self._to_float(summary.get("pnl_total"), 0.0),
+            "pnl_total_pct": self._to_float(summary.get("pnl_total_pct"), 0.0),
+            "max_drawdown_pct": self._to_float(summary.get("max_drawdown_pct"), 0.0),
+            "win_rate": self._to_float(summary.get("win_rate"), 0.0),
+            "trade_count": int(self._to_float(summary.get("trade_count"), 0.0)),
+            "status": status,
+            "assumption_config_json": normalized_assumptions,
+            "failure_reason": failure_reason,
+            "result_json": persisted_result_json,
+            "created_at": now_iso,
+            "completed_at": completed_at,
+            "updated_at": completed_at,
+        }
+        self._supabase.insert("bot_backtest_runs", row, returning="minimal")
         await self._emit_progress(
             progress,
             stage="Replay complete" if status == "completed" else "Run finished with issues",
@@ -235,7 +243,12 @@ class BotBacktestService:
         filters: dict[str, Any] = {"wallet_address": wallet_address}
         if bot_id:
             filters["bot_definition_id"] = bot_id
-        rows = self._supabase.select("bot_backtest_runs", filters=filters, order="completed_at.desc")
+        rows = self._supabase.select(
+            "bot_backtest_runs",
+            columns=BACKTEST_RUN_SUMMARY_COLUMNS,
+            filters=filters,
+            order="completed_at.desc",
+        )
         return [self.serialize_run_summary(row) for row in rows]
 
     def get_run(
@@ -247,7 +260,10 @@ class BotBacktestService:
         user_id: str,
     ) -> dict[str, Any]:
         del db, user_id
-        row = self._supabase.maybe_one("bot_backtest_runs", filters={"id": run_id, "wallet_address": wallet_address})
+        row = self._supabase.maybe_one(
+            "bot_backtest_runs",
+            filters={"id": run_id, "wallet_address": wallet_address},
+        )
         if row is None:
             raise ValueError("Backtest run not found")
         return self.serialize_run_detail(row)
@@ -871,7 +887,7 @@ class BotBacktestService:
         trade_counter: int,
     ) -> dict[str, Any]:
         return {
-            "version": 1,
+            "version": 2,
             "interval": interval,
             "requested_symbols": deepcopy(requested_symbols),
             "active_symbols": deepcopy(active_symbols),
@@ -880,7 +896,7 @@ class BotBacktestService:
             "positions": deepcopy(positions),
             "trigger_events": deepcopy(trigger_events),
             "closed_trades": deepcopy(closed_trades),
-            "equity_curve": deepcopy(equity_curve),
+            "equity_curve": self._downsample_rows(equity_curve, MAX_CHECKPOINT_EQUITY_CURVE_POINTS),
             "last_executed_at": last_executed_at,
             "cumulative_realized": round(cumulative_realized, 8),
             "trade_counter": int(trade_counter),
@@ -905,7 +921,8 @@ class BotBacktestService:
     ) -> tuple[int, float, int, str | None, dict[str, Any]] | None:
         if not isinstance(checkpoint, dict):
             return None
-        if int(self._to_float(checkpoint.get("version"), 0.0)) != 1:
+        checkpoint_version = int(self._to_float(checkpoint.get("version"), 0.0))
+        if checkpoint_version not in {1, 2}:
             return None
         if str(checkpoint.get("interval") or "").strip().lower() != interval:
             return None
@@ -963,6 +980,69 @@ class BotBacktestService:
                 trade_counter=int(self._to_float(checkpoint.get("trade_counter"), 0.0)),
             ),
         )
+
+    def _compact_result_json(self, result_json: dict[str, Any]) -> dict[str, Any]:
+        equity_curve = result_json.get("equity_curve") if isinstance(result_json.get("equity_curve"), list) else []
+        compacted_equity_curve = self._downsample_rows(equity_curve, MAX_PERSISTED_EQUITY_CURVE_POINTS)
+        compacted = {
+            key: deepcopy(value)
+            for key, value in result_json.items()
+            if key not in {"equity_curve", "price_series", "data_reduction"}
+        }
+        compacted["equity_curve"] = compacted_equity_curve
+
+        raw_price_series = result_json.get("price_series") if isinstance(result_json.get("price_series"), dict) else {}
+        raw_series_by_symbol = raw_price_series.get("series_by_symbol") if isinstance(raw_price_series.get("series_by_symbol"), dict) else {}
+        compacted["price_series"] = {
+            "primary_symbol": raw_price_series.get("primary_symbol"),
+            "series_by_symbol": {
+                str(symbol): self._downsample_rows(series if isinstance(series, list) else [], MAX_PERSISTED_PRICE_SERIES_POINTS_PER_SYMBOL)
+                for symbol, series in raw_series_by_symbol.items()
+            },
+        }
+
+        data_reduction: dict[str, Any] = {}
+        if len(compacted_equity_curve) != len(equity_curve):
+            data_reduction["equity_curve"] = {
+                "original_points": len(equity_curve),
+                "stored_points": len(compacted_equity_curve),
+            }
+        reduced_series = {
+            str(symbol): {
+                "original_points": len(series if isinstance(series, list) else []),
+                "stored_points": len(compacted["price_series"]["series_by_symbol"].get(str(symbol), [])),
+            }
+            for symbol, series in raw_series_by_symbol.items()
+            if len(compacted["price_series"]["series_by_symbol"].get(str(symbol), [])) != len(series if isinstance(series, list) else [])
+        }
+        if reduced_series:
+            data_reduction["price_series"] = reduced_series
+        if data_reduction:
+            compacted["data_reduction"] = data_reduction
+        else:
+            compacted.pop("data_reduction", None)
+        return compacted
+
+    @staticmethod
+    def _downsample_rows(rows: list[dict[str, Any]], max_points: int) -> list[dict[str, Any]]:
+        if max_points <= 0:
+            return []
+        if len(rows) <= max_points:
+            return deepcopy(rows)
+        if max_points == 1:
+            return [deepcopy(rows[-1])]
+        step = (len(rows) - 1) / (max_points - 1)
+        sampled: list[dict[str, Any]] = []
+        used_indexes: set[int] = set()
+        for sample_index in range(max_points):
+            row_index = len(rows) - 1 if sample_index == max_points - 1 else int(round(sample_index * step))
+            if row_index in used_indexes:
+                continue
+            used_indexes.add(row_index)
+            sampled.append(deepcopy(rows[row_index]))
+        if sampled and sampled[-1] != rows[-1]:
+            sampled[-1] = deepcopy(rows[-1])
+        return sampled
 
     @staticmethod
     def _create_candle_request_task(

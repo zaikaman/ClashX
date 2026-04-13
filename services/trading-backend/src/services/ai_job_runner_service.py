@@ -227,7 +227,15 @@ class AiJobRunnerService:
                 job_id=job_id,
                 result_payload={
                     "type": "result",
-                    "run": result,
+                    "run_id": result.get("id"),
+                    "summary": {
+                        "id": result.get("id"),
+                        "status": result.get("status"),
+                        "interval": result.get("interval"),
+                        "trade_count": result.get("trade_count"),
+                        "pnl_total": result.get("pnl_total"),
+                        "completed_at": result.get("completed_at"),
+                    },
                 },
             )
         except Exception as exc:

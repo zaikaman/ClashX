@@ -9,7 +9,7 @@ from typing import Any
 
 from src.core.performance_metrics import get_performance_metrics_store
 from src.services.ai_job_runner_service import AiJobRunnerService
-from src.services.ai_job_service import AiJobService
+from src.services.ai_job_service import AiJobService, JOB_WORKER_COLUMNS
 from src.services.bot_backtest_service import BotBacktestService
 from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
 from src.services.worker_coordination_service import WorkerCoordinationService
@@ -98,6 +98,7 @@ class BacktestJobWorker:
             statuses=["queued"],
             order="created_at.asc",
             limit=BACKTEST_JOB_BATCH_SIZE,
+            columns=JOB_WORKER_COLUMNS,
         )
         stale_before = (datetime.now(tz=UTC) - timedelta(seconds=self.stale_after_seconds)).isoformat()
         stale_running = self._jobs.list_jobs(
@@ -106,6 +107,7 @@ class BacktestJobWorker:
             updated_before=stale_before,
             order="updated_at.asc",
             limit=BACKTEST_JOB_BATCH_SIZE,
+            columns=JOB_WORKER_COLUMNS,
         )
         seen: set[str] = set()
         candidates: list[dict[str, Any]] = []

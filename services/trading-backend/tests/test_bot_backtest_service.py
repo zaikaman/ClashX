@@ -107,11 +107,14 @@ class FakeSupabaseRestClient:
         *,
         upsert: bool = False,
         on_conflict: str | None = None,
+        returning: str = "representation",
     ) -> list[dict[str, Any]]:
         del upsert, on_conflict
         items = payload if isinstance(payload, list) else [payload]
         stored = [deepcopy(item) for item in items]
         self.tables.setdefault(table, []).extend(stored)
+        if returning == "minimal":
+            return []
         return [deepcopy(item) for item in stored]
 
     @staticmethod
