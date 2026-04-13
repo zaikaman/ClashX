@@ -17,6 +17,7 @@ from src.services.creator_marketplace_service import CreatorMarketplaceService
 from src.services.pacifica_auth_service import PacificaAuthService
 from src.services.pacifica_readiness_service import PacificaReadinessService
 from src.services.portfolio_allocator_service import PortfolioAllocatorService
+from src.services.runtime_health_service import RuntimeHealthService
 from src.services.runtime_observability_service import RuntimeObservabilityService
 from src.services.supabase_rest import SupabaseRestClient
 from src.services.trading_service import TradingService
@@ -91,8 +92,12 @@ class CopilotService:
         "list_bots",
         "get_bot",
         "get_runtime_overview",
+        "get_runtime_health",
         "get_bot_events",
         "get_trading_account",
+        "get_positions",
+        "get_open_orders",
+        "get_recent_trades",
         "list_portfolios",
         "get_portfolio",
         "get_pacifica_authorization",
@@ -110,6 +115,7 @@ class CopilotService:
         self._bot_builder = BotBuilderService()
         self._bot_runtime = BotRuntimeEngine()
         self._runtime_observability = RuntimeObservabilityService()
+        self._runtime_health = RuntimeHealthService()
         self._trading = TradingService()
         self._portfolio_allocator = PortfolioAllocatorService()
         self._pacifica_auth = PacificaAuthService()
@@ -298,6 +304,21 @@ class CopilotService:
                         }
                     )
                     continue
+                if tool_traces and self._final_reply_requires_grounded_answer_retry(reply):
+                    conversation.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "SYSTEM_RETRY Your previous final response did not answer using the available "
+                                "TOOL_RESULT data. After one or more tool calls, your next response must provide "
+                                "the best grounded answer you can from the returned results. Do not say tool call "
+                                "issued, request sent, waiting for results, or imply background work is still in "
+                                "progress unless the tool result explicitly says that and you explain the current "
+                                "known state."
+                            ),
+                        }
+                    )
+                    continue
                 return {
                     "reply": reply,
                     "followUps": follow_ups,
@@ -409,6 +430,16 @@ class CopilotService:
                 runtime = self._bot_runtime.get_runtime(None, bot_id=bot_id, wallet_address=wallet, user_id=app_user_id)
                 return {"ok": True, "data": {"wallet_address": wallet, "bot_id": bot_id, "runtime": runtime, "overview": overview}}
 
+            if tool_name == "get_runtime_health":
+                wallet = self._resolve_wallet(user=user, requested_wallet=arguments.get("wallet_address") or default_wallet_address)
+                app_user_id = resolve_app_user_id(user, wallet)
+                scope_cache["default_wallet_address"] = wallet
+                bot_id = str(arguments.get("bot_id") or "").strip()
+                if not bot_id:
+                    raise RuntimeError("get_runtime_health requires bot_id")
+                health = self._runtime_health.get_health(None, bot_id=bot_id, wallet_address=wallet, user_id=app_user_id)
+                return {"ok": True, "data": {"wallet_address": wallet, "bot_id": bot_id, "health": health}}
+
             if tool_name == "get_bot_events":
                 wallet = self._resolve_wallet(user=user, requested_wallet=arguments.get("wallet_address") or default_wallet_address)
                 app_user_id = resolve_app_user_id(user, wallet)
@@ -431,6 +462,37 @@ class CopilotService:
                 scope_cache["default_wallet_address"] = wallet
                 snapshot = await self._trading.get_account_snapshot(None, wallet)
                 return {"ok": True, "data": snapshot}
+
+            if tool_name == "get_positions":
+                wallet = self._resolve_wallet(user=user, requested_wallet=arguments.get("wallet_address") or default_wallet_address)
+                scope_cache["default_wallet_address"] = wallet
+                limit = self._bounded_int(arguments.get("limit"), default=12, minimum=1, maximum=100)
+                positions = await self._trading.list_positions(None, wallet)
+                return {"ok": True, "data": {"wallet_address": wallet, "positions": positions[:limit], "count": len(positions)}}
+
+            if tool_name == "get_open_orders":
+                wallet = self._resolve_wallet(user=user, requested_wallet=arguments.get("wallet_address") or default_wallet_address)
+                scope_cache["default_wallet_address"] = wallet
+                limit = self._bounded_int(arguments.get("limit"), default=20, minimum=1, maximum=100)
+                orders = await self._trading.list_orders(None, wallet)
+                return {"ok": True, "data": {"wallet_address": wallet, "orders": orders[:limit], "count": len(orders)}}
+
+            if tool_name == "get_recent_trades":
+                wallet = self._resolve_wallet(user=user, requested_wallet=arguments.get("wallet_address") or default_wallet_address)
+                scope_cache["default_wallet_address"] = wallet
+                limit = self._bounded_int(arguments.get("limit"), default=20, minimum=1, maximum=100)
+                snapshot = await self._trading.get_account_snapshot(None, wallet)
+                fills = snapshot.get("fills")
+                normalized_fills = fills if isinstance(fills, list) else []
+                return {
+                    "ok": True,
+                    "data": {
+                        "wallet_address": wallet,
+                        "trades": normalized_fills[:limit],
+                        "count": len(normalized_fills),
+                        "positions_loaded": bool(snapshot.get("positions_loaded")),
+                    },
+                }
 
             if tool_name == "list_portfolios":
                 wallet = self._resolve_wallet(user=user, requested_wallet=arguments.get("wallet_address") or default_wallet_address)
@@ -648,8 +710,10 @@ class CopilotService:
                 "When you receive a message starting with CONTEXT_SUMMARY, treat it as compacted history from older turns in the same conversation.",
                 "Never invent balances, bot statuses, event counts, or database rows.",
                 "Do not say you are checking, fetching, pulling, or loading live data unless your response is a tool_call.",
+                "After receiving TOOL_RESULT data, answer from that data immediately. Do not say tool call issued, request sent, waiting for results, or imply background work unless the tool result explicitly states that condition.",
                 "If clarification is required before any tool call, ask only the single blocking question plainly.",
                 "Do not ask optional presentation questions before the first tool call. Choose a sensible default instead.",
+                "Prefer targeted tools for focused questions about positions, open orders, recent trades, or runtime health, and use get_trading_account when you need a broader account snapshot.",
                 "Prefer concise answers that cite concrete numbers, names, ids, or timestamps from tool results when available.",
                 "If the user asks about tables or raw data, prefer list_schema_tables, describe_schema_table, or query_database.",
                 "Use query_database sparingly, with a small limit and explicit relevant tables only.",
@@ -671,16 +735,20 @@ class CopilotService:
         return "\n".join(
             [
                 '- `get_linked_wallets` args: `{"wallet_address":"optional linked wallet"}`',
-                '- `list_bots` args: `{"wallet_address":"optional linked wallet"}`',
-                '- `get_bot` args: `{"bot_id":"required","wallet_address":"optional linked wallet"}`',
-                '- `get_runtime_overview` args: `{"bot_id":"required","wallet_address":"optional linked wallet"}`',
-                '- `get_bot_events` args: `{"bot_id":"required","wallet_address":"optional linked wallet","limit":20}`',
-                '- `get_trading_account` args: `{"wallet_address":"optional linked wallet"}`',
-                '- `list_portfolios` args: `{"wallet_address":"optional linked wallet"}`',
-                '- `get_portfolio` args: `{"portfolio_id":"required","wallet_address":"optional linked wallet"}`',
-                '- `get_pacifica_authorization` args: `{"wallet_address":"optional linked wallet"}`',
-                '- `get_pacifica_readiness` args: `{"wallet_address":"optional linked wallet"}`',
-                '- `get_marketplace_overview` args: `{"discover_limit":12,"creator_limit":6}`',
+                '- `list_bots` args: `{"wallet_address":"optional linked wallet"}` returns bot definitions with runtime and overview context for that wallet',
+                '- `get_bot` args: `{"bot_id":"required","wallet_address":"optional linked wallet"}` returns one bot plus its runtime',
+                '- `get_runtime_overview` args: `{"bot_id":"required","wallet_address":"optional linked wallet"}` returns one bot runtime overview and current runtime row',
+                '- `get_runtime_health` args: `{"bot_id":"required","wallet_address":"optional linked wallet"}` returns heartbeat, stale/offline/degraded status, and reasons',
+                '- `get_bot_events` args: `{"bot_id":"required","wallet_address":"optional linked wallet","limit":20}` returns recent runtime events for one bot',
+                '- `get_trading_account` args: `{"wallet_address":"optional linked wallet"}` returns a full trading snapshot with balances, summary, positions, orders, fills, and recent activity',
+                '- `get_positions` args: `{"wallet_address":"optional linked wallet","limit":12}` returns current open positions and total count',
+                '- `get_open_orders` args: `{"wallet_address":"optional linked wallet","limit":20}` returns current open orders and total count',
+                '- `get_recent_trades` args: `{"wallet_address":"optional linked wallet","limit":20}` returns recent fills/trades and total count',
+                '- `list_portfolios` args: `{"wallet_address":"optional linked wallet"}` returns portfolio baskets for the wallet',
+                '- `get_portfolio` args: `{"portfolio_id":"required","wallet_address":"optional linked wallet"}` returns one portfolio basket',
+                '- `get_pacifica_authorization` args: `{"wallet_address":"optional linked wallet"}` returns delegated trading authorization status',
+                '- `get_pacifica_readiness` args: `{"wallet_address":"optional linked wallet"}` returns Pacifica readiness checks and blockers',
+                '- `get_marketplace_overview` args: `{"discover_limit":12,"creator_limit":6}` returns creator marketplace and discover data',
                 '- `list_schema_tables` args: `{}`',
                 '- `describe_schema_table` args: `{"table":"required"}`',
                 '- `query_database` args: `{"table":"required","columns":"optional comma-separated columns","filters":{"field":"value or structured filter"},"order":"optional field.asc|field.desc","limit":10,"wallet_address":"optional linked wallet"}`',
@@ -912,6 +980,24 @@ class CopilotService:
             "loading your",
             "gathering your",
             "reviewing your",
+        )
+        return any(phrase in normalized for phrase in blocked_phrases)
+
+    def _final_reply_requires_grounded_answer_retry(self, reply: str) -> bool:
+        normalized = re.sub(r"\s+", " ", reply.strip().lower())
+        if not normalized:
+            return False
+        blocked_phrases = (
+            "tool call issued",
+            "request sent",
+            "waiting for results",
+            "awaiting results",
+            "once the results come in",
+            "as soon as they're available",
+            "as soon as they are available",
+            "i'm awaiting",
+            "i am awaiting",
+            "still waiting",
         )
         return any(phrase in normalized for phrase in blocked_phrases)
 

@@ -85,20 +85,20 @@ type ComposerState = "idle" | "creating" | "sending";
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const QUICK_PROMPTS = [
   {
-    title: "Give me a quick account health check and call out anything that needs attention.",
-    description: "A strong first prompt for balances, bot status, open risk, and urgent issues.",
+    title: "What are my active bots doing right now?",
+    description: "The safest first prompt for a live status snapshot of running strategies and recent activity.",
   },
   {
-    title: "What are my active bots doing right now?",
-    description: "Get a live snapshot of running strategies, positions, and recent actions.",
+    title: "Show my open order exposure",
+    description: "Review active orders, side concentration, and where risk is currently sitting.",
   },
   {
     title: "Am I ready to trade on Pacifica?",
     description: "Check account readiness, balances, and anything blocking a new trade.",
   },
   {
-    title: "Show my open order exposure",
-    description: "Review active orders, side concentration, and where risk is currently sitting.",
+    title: "Give me a quick account health check and call out anything that needs attention.",
+    description: "A broader check across balance state, bot status, and anything obviously urgent.",
   },
 ];
 const LOADING_MESSAGES = ["Thinking...", "Reviewing your account context...", "Checking recent activity...", "Putting the answer together..."];
