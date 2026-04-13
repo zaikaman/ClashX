@@ -34,13 +34,14 @@ class TradingService:
             for item in markets
             if str(item.get("symbol") or "")
         }
-        account_info, positions, orders, fills, portfolio = await asyncio.gather(
+        account_info, positions_result, orders, fills, portfolio = await asyncio.gather(
             self._safe_read(lambda: self.pacifica.get_account_info(wallet_address), {"balance": 0.0, "equity": 0.0, "fee_level": 0}),
-            self._safe_read(lambda: self.pacifica.get_positions(wallet_address, price_lookup=price_lookup), []),
+            self._safe_read_with_status(lambda: self.pacifica.get_positions(wallet_address, price_lookup=price_lookup), []),
             self._safe_read(lambda: self.pacifica.get_open_orders(wallet_address), []),
             self._safe_read(lambda: self.pacifica.get_position_history(wallet_address, limit=60, offset=0), []),
             self._safe_read(lambda: self.pacifica.get_portfolio_history(wallet_address, limit=90, offset=0), []),
         )
+        positions, positions_loaded = positions_result
         market_lookup = {item["symbol"]: item for item in markets}
         normalized_positions = [self._serialize_position(item) for item in positions]
         normalized_orders = [self._serialize_order(item, market_lookup) for item in orders]
@@ -74,6 +75,7 @@ class TradingService:
             },
             "portfolio": portfolio,
             "markets": markets,
+            "positions_loaded": positions_loaded,
             "positions": normalized_positions,
             "orders": normalized_orders,
             "fills": normalized_fills,
@@ -180,6 +182,12 @@ class TradingService:
             return await loader()
         except PacificaClientError:
             return fallback
+
+    async def _safe_read_with_status(self, loader: Any, fallback: Any) -> tuple[Any, bool]:
+        try:
+            return await loader(), True
+        except PacificaClientError:
+            return fallback, False
 
     async def _ensure_leverage(
         self,

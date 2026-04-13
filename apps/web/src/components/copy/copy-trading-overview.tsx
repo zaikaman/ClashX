@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 
 import type {
   CopyTradingActivity,
@@ -9,6 +10,8 @@ import type {
   CopyTradingFollow,
   CopyTradingPosition,
 } from "@/lib/copy-dashboard";
+
+const CARD_PAGE_SIZE = 10;
 
 function formatUsd(value: number) {
   return `$${Math.abs(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
@@ -49,6 +52,21 @@ export function CopyTradingOverview({
   onResumeFollow,
   onStopFollow,
 }: CopyTradingOverviewProps) {
+  const [currentFollowPage, setCurrentFollowPage] = useState(1);
+  const totalFollowPages = Math.max(1, Math.ceil(dashboard.follows.length / CARD_PAGE_SIZE));
+  const followPage = Math.max(1, Math.min(currentFollowPage, totalFollowPages));
+  const followPageStart =
+    dashboard.follows.length === 0 ? 0 : (followPage - 1) * CARD_PAGE_SIZE + 1;
+  const followPageEnd = Math.min(followPage * CARD_PAGE_SIZE, dashboard.follows.length);
+  const paginatedFollows = dashboard.follows.slice(
+    (followPage - 1) * CARD_PAGE_SIZE,
+    followPage * CARD_PAGE_SIZE,
+  );
+
+  useEffect(() => {
+    setCurrentFollowPage((page) => Math.max(1, Math.min(page, totalFollowPages)));
+  }, [totalFollowPages]);
+
   return (
     <div className="grid gap-6 md:gap-8">
       <section className="grid gap-5 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[radial-gradient(circle_at_top_left,rgba(220,232,93,0.14),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(116,185,127,0.14),transparent_24%),linear-gradient(140deg,#16181a,#0d0f10)] p-6 md:p-8">
@@ -150,7 +168,7 @@ export function CopyTradingOverview({
           </article>
         ) : (
           <div className="grid gap-4">
-            {dashboard.follows.map((follow) => (
+            {paginatedFollows.map((follow) => (
               <FollowCard
                 key={follow.id}
                 follow={follow}
@@ -162,6 +180,18 @@ export function CopyTradingOverview({
                 onStopFollow={onStopFollow}
               />
             ))}
+            {dashboard.follows.length > CARD_PAGE_SIZE ? (
+              <PaginationBar
+                currentPage={followPage}
+                totalPages={totalFollowPages}
+                pageStart={followPageStart}
+                pageEnd={followPageEnd}
+                totalItems={dashboard.follows.length}
+                itemLabel="follows"
+                onPrevious={() => setCurrentFollowPage((page) => Math.max(1, page - 1))}
+                onNext={() => setCurrentFollowPage((page) => Math.min(totalFollowPages, page + 1))}
+              />
+            ) : null}
           </div>
         )}
       </section>
@@ -252,7 +282,20 @@ function OpenCopyPositions({
   positions: CopyTradingPosition[];
   follows: CopyTradingFollow[];
 }) {
+  const [currentPositionPage, setCurrentPositionPage] = useState(1);
   const followById = new Map(follows.map((item) => [item.id, item]));
+  const totalPositionPages = Math.max(1, Math.ceil(positions.length / CARD_PAGE_SIZE));
+  const positionPage = Math.max(1, Math.min(currentPositionPage, totalPositionPages));
+  const positionPageStart = positions.length === 0 ? 0 : (positionPage - 1) * CARD_PAGE_SIZE + 1;
+  const positionPageEnd = Math.min(positionPage * CARD_PAGE_SIZE, positions.length);
+  const paginatedPositions = positions.slice(
+    (positionPage - 1) * CARD_PAGE_SIZE,
+    positionPage * CARD_PAGE_SIZE,
+  );
+
+  useEffect(() => {
+    setCurrentPositionPage((page) => Math.max(1, Math.min(page, totalPositionPages)));
+  }, [totalPositionPages]);
 
   return (
     <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5 md:p-6">
@@ -266,7 +309,7 @@ function OpenCopyPositions({
         </p>
       ) : (
         <div className="grid gap-3">
-          {positions.map((position) => {
+          {paginatedPositions.map((position) => {
             const follow = followById.get(position.relationship_id);
             return (
               <article
@@ -288,9 +331,70 @@ function OpenCopyPositions({
               </article>
             );
           })}
+          {positions.length > CARD_PAGE_SIZE ? (
+            <PaginationBar
+              currentPage={positionPage}
+              totalPages={totalPositionPages}
+              pageStart={positionPageStart}
+              pageEnd={positionPageEnd}
+              totalItems={positions.length}
+              itemLabel="positions"
+              onPrevious={() => setCurrentPositionPage((page) => Math.max(1, page - 1))}
+              onNext={() => setCurrentPositionPage((page) => Math.min(totalPositionPages, page + 1))}
+            />
+          ) : null}
         </div>
       )}
     </article>
+  );
+}
+
+function PaginationBar({
+  currentPage,
+  totalPages,
+  pageStart,
+  pageEnd,
+  totalItems,
+  itemLabel,
+  onPrevious,
+  onNext,
+}: {
+  currentPage: number;
+  totalPages: number;
+  pageStart: number;
+  pageEnd: number;
+  totalItems: number;
+  itemLabel: string;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] px-4 py-3">
+      <span className="text-sm text-neutral-400">
+        Showing {pageStart}-{pageEnd} of {totalItems} {itemLabel}
+      </span>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onPrevious}
+          disabled={currentPage === 1}
+          className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-white hover:text-neutral-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Previous page
+        </button>
+        <span className="text-xs uppercase tracking-[0.16em] text-neutral-500">
+          {currentPage} / {totalPages}
+        </span>
+        <button
+          type="button"
+          onClick={onNext}
+          disabled={currentPage === totalPages}
+          className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-white hover:text-neutral-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Next page
+        </button>
+      </div>
+    </div>
   );
 }
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from src.services.bot_copy_dashboard_service import BotCopyDashboardService
@@ -160,6 +161,7 @@ def test_dashboard_uses_copy_only_positions_and_flags_unattributed_exposure() ->
     service.trading_service = FakeTradingService(
         {
             "wallet_address": "wallet-1",
+            "positions_loaded": True,
             "positions": [
                 {
                     "symbol": "BTC",
@@ -215,6 +217,9 @@ def test_dashboard_uses_copy_only_positions_and_flags_unattributed_exposure() ->
 
 
 def test_dashboard_tracks_realized_copy_pnl_from_mirrored_closes() -> None:
+    now = datetime.now(tz=UTC)
+    opened_at = (now - timedelta(days=2)).isoformat()
+    closed_at = (now - timedelta(hours=6)).isoformat()
     service = BotCopyDashboardService()
     service.supabase = FakeSupabaseRestClient(
         {
@@ -235,8 +240,8 @@ def test_dashboard_tracks_realized_copy_pnl_from_mirrored_closes() -> None:
                     "notional_estimate_usd": 100.0,
                     "status": "mirrored",
                     "error_reason": None,
-                    "created_at": "2026-04-10T09:00:00+00:00",
-                    "updated_at": "2026-04-10T09:00:00+00:00",
+                    "created_at": opened_at,
+                    "updated_at": opened_at,
                 },
                 {
                     "id": "exec-close",
@@ -253,8 +258,8 @@ def test_dashboard_tracks_realized_copy_pnl_from_mirrored_closes() -> None:
                     "notional_estimate_usd": 130.0,
                     "status": "mirrored",
                     "error_reason": None,
-                    "created_at": "2026-04-12T09:00:00+00:00",
-                    "updated_at": "2026-04-12T09:00:00+00:00",
+                    "created_at": closed_at,
+                    "updated_at": closed_at,
                 },
             ],
         }
@@ -280,7 +285,14 @@ def test_dashboard_tracks_realized_copy_pnl_from_mirrored_closes() -> None:
         ]
     )
     service.portfolio_service = FakePortfolioService([])
-    service.trading_service = FakeTradingService({"wallet_address": "wallet-1", "positions": [], "markets": []})
+    service.trading_service = FakeTradingService(
+        {
+            "wallet_address": "wallet-1",
+            "positions_loaded": True,
+            "positions": [],
+            "markets": [],
+        }
+    )
     service.readiness_service = FakeReadinessService(
         {
             "wallet_address": "wallet-1",
@@ -296,3 +308,77 @@ def test_dashboard_tracks_realized_copy_pnl_from_mirrored_closes() -> None:
     assert dashboard["summary"]["open_positions"] == 0
     assert dashboard["summary"]["copied_realized_pnl_usd_24h"] == 30.0
     assert dashboard["summary"]["copied_realized_pnl_usd_7d"] == 30.0
+
+
+def test_dashboard_hides_stale_copy_positions_when_pacifica_reports_none_open() -> None:
+    service = BotCopyDashboardService()
+    service.supabase = FakeSupabaseRestClient(
+        {
+            "marketplace_runtime_snapshots": [],
+            "bot_copy_execution_events": [
+                {
+                    "id": "exec-open",
+                    "relationship_id": "rel-1",
+                    "source_runtime_id": "runtime-1",
+                    "source_event_id": "event-open",
+                    "follower_wallet_address": "wallet-1",
+                    "symbol": "BTC",
+                    "position_side": "long",
+                    "action_type": "open_long",
+                    "reduce_only": False,
+                    "copied_quantity": 1.0,
+                    "reference_price": 100.0,
+                    "notional_estimate_usd": 100.0,
+                    "status": "mirrored",
+                    "error_reason": None,
+                    "created_at": "2026-04-12T09:00:00+00:00",
+                    "updated_at": "2026-04-12T09:00:00+00:00",
+                }
+            ],
+        }
+    )
+    service.copy_engine = FakeCopyEngine(
+        [
+            {
+                "id": "rel-1",
+                "source_runtime_id": "runtime-1",
+                "source_bot_definition_id": "bot-1",
+                "source_bot_name": "Momentum Atlas",
+                "follower_user_id": "user-1",
+                "follower_wallet_address": "wallet-1",
+                "mode": "mirror",
+                "scale_bps": 10_000,
+                "status": "active",
+                "risk_ack_version": "v1",
+                "confirmed_at": "2026-04-11T08:00:00+00:00",
+                "updated_at": "2026-04-12T09:00:00+00:00",
+                "follower_display_name": "Trader",
+                "max_notional_usd": None,
+            }
+        ]
+    )
+    service.portfolio_service = FakePortfolioService([])
+    service.trading_service = FakeTradingService(
+        {
+            "wallet_address": "wallet-1",
+            "positions_loaded": True,
+            "positions": [],
+            "markets": [{"symbol": "BTC", "mark_price": 125.0}],
+        }
+    )
+    service.readiness_service = FakeReadinessService(
+        {
+            "wallet_address": "wallet-1",
+            "ready": True,
+            "blockers": [],
+            "metrics": {"authorization_status": "active"},
+        }
+    )
+    service.marketplace_service = FakeMarketplaceService([])
+
+    dashboard = asyncio.run(service.get_dashboard(wallet_address="wallet-1"))
+
+    assert dashboard["summary"]["open_positions"] == 0
+    assert dashboard["summary"]["copied_open_notional_usd"] == 0.0
+    assert dashboard["positions"] == []
+    assert dashboard["follows"][0]["copied_position_count"] == 0

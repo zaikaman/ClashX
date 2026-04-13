@@ -46,7 +46,6 @@ class BotCopyDashboardService:
 
         attributed_positions, unattributed_details = self._build_attributed_positions(
             copy_state=copy_state,
-            runtime_profiles=runtime_profiles,
             trading_snapshot=trading_snapshot,
         )
         follows = self._build_follows(
@@ -215,13 +214,14 @@ class BotCopyDashboardService:
         self,
         *,
         copy_state: dict[str, Any],
-        runtime_profiles: dict[str, dict[str, Any]],
         trading_snapshot: dict[str, Any],
     ) -> tuple[list[dict[str, Any]], list[str]]:
         wallet_positions = trading_snapshot.get("positions") if isinstance(trading_snapshot.get("positions"), list) else []
+        positions_loaded = self._positions_loaded(trading_snapshot)
         wallet_position_lookup = {
             (str(item.get("symbol") or "").upper(), str(item.get("side") or "").lower()): item
             for item in wallet_positions
+            if str(item.get("symbol") or "").strip() and str(item.get("side") or "").strip()
         }
         markets = trading_snapshot.get("markets") if isinstance(trading_snapshot.get("markets"), list) else []
         market_lookup = {
@@ -235,15 +235,17 @@ class BotCopyDashboardService:
             symbol = str(item["symbol"]).upper()
             side = str(item["side"]).lower()
             wallet_position = wallet_position_lookup.get((symbol, side))
+            if positions_loaded and self._position_size(wallet_position) <= 0:
+                continue
             mark_price = self._to_float((wallet_position or {}).get("mark_price")) or market_lookup.get(symbol, 0.0)
+            if positions_loaded and mark_price <= 0:
+                continue
             quantity = self._to_float(item["quantity"])
             entry_price = self._to_float(item["entry_price"])
             notional_usd = quantity * mark_price if mark_price > 0 else 0.0
             unrealized_pnl = 0.0
             if mark_price > 0 and entry_price > 0:
                 unrealized_pnl = (mark_price - entry_price) * quantity if side == "long" else (entry_price - mark_price) * quantity
-            runtime_profile = runtime_profiles.get(str(item["relationship_id"])) or {}
-            del runtime_profile
             attributed_positions.append(
                 {
                     **item,
@@ -256,12 +258,15 @@ class BotCopyDashboardService:
                 used_wallet_keys.add((symbol, side))
 
         unattributed_details: list[str] = []
+        if not positions_loaded:
+            return attributed_positions, unattributed_details
+
         for wallet_position in wallet_positions:
             symbol = str(wallet_position.get("symbol") or "").upper()
             side = str(wallet_position.get("side") or "").lower()
             key = (symbol, side)
             if key in used_wallet_keys:
-                wallet_qty = self._to_float(wallet_position.get("quantity"))
+                wallet_qty = self._position_size(wallet_position)
                 copy_qty = sum(
                     self._to_float(item["quantity"])
                     for item in attributed_positions
@@ -272,7 +277,7 @@ class BotCopyDashboardService:
                         f"{symbol} {side} has wallet size {wallet_qty:.4f} while copy-attributed size is {copy_qty:.4f}."
                     )
                 continue
-            if self._to_float(wallet_position.get("quantity")) > 0:
+            if self._position_size(wallet_position) > 0:
                 unattributed_details.append(
                     f"{symbol} {side} exposure is present in the wallet but not attributable to mirrored activity."
                 )
@@ -507,3 +512,17 @@ class BotCopyDashboardService:
             return float(value)
         except (TypeError, ValueError):
             return default
+
+    @staticmethod
+    def _positions_loaded(trading_snapshot: dict[str, Any]) -> bool:
+        if "positions_loaded" in trading_snapshot:
+            return bool(trading_snapshot.get("positions_loaded"))
+        return "positions" in trading_snapshot
+
+    def _position_size(self, position: dict[str, Any] | None) -> float:
+        if not isinstance(position, dict):
+            return 0.0
+        return abs(
+            self._to_float(position.get("quantity"))
+            or self._to_float(position.get("amount"))
+        )
