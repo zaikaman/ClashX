@@ -548,7 +548,7 @@ CREATE TABLE public.users (
   telegram_link_code character varying,
   telegram_link_code_expires_at timestamp with time zone,
   telegram_notifications_enabled boolean NOT NULL DEFAULT true,
-  telegram_notification_prefs jsonb NOT NULL DEFAULT '{"copy_activity": true, "critical_alerts": true, "execution_failures": true}'::jsonb,
+  telegram_notification_prefs jsonb NOT NULL DEFAULT '{"copy_activity": true, "critical_alerts": true, "execution_failures": true, "trade_activity": true}'::jsonb,
   CONSTRAINT users_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.worker_leases (

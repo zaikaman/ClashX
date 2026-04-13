@@ -221,3 +221,54 @@ def test_configure_bot_logs_warning_on_rate_limit(monkeypatch: pytest.MonkeyPatc
 
     assert "Telegram bot configuration rate limited" in caplog.text
     assert "setWebhook" in caplog.text
+
+
+def test_render_trade_open_notification() -> None:
+    service = TelegramService(supabase=_FakeSupabase())
+
+    rendered = service._render_notification_message(
+        event="bot.execution.success",
+        payload={
+            "request_payload": {"type": "open_long", "symbol": "btc"},
+            "result_payload": {
+                "execution_meta": {
+                    "side": "bid",
+                    "amount": 0.25,
+                    "reduce_only": False,
+                }
+            },
+        },
+    )
+
+    assert rendered == "Trade opened\nBTC long\nSize: 0.2500"
+
+
+def test_render_tpsl_armed_notification() -> None:
+    service = TelegramService(supabase=_FakeSupabase())
+
+    rendered = service._render_notification_message(
+        event="bot.execution.success",
+        payload={
+            "request_payload": {"type": "set_tpsl", "symbol": "eth"},
+            "result_payload": {"execution_meta": {"amount": 1.5}},
+        },
+    )
+
+    assert rendered == "Protection armed\nETH\nTP and SL orders were placed for 1.5000."
+
+
+def test_render_position_closed_notification() -> None:
+    service = TelegramService(supabase=_FakeSupabase())
+
+    rendered = service._render_notification_message(
+        event="bot.position.closed",
+        payload={
+            "symbol": "sol",
+            "reason": "take_profit",
+            "quantity": 3,
+            "position_side": "long",
+            "realized_pnl": 42.5,
+        },
+    )
+
+    assert rendered == "Position closed\nSOL long\nReason: take profit\nSize: 3.0000\nRealized PnL: +$42.50"

@@ -447,6 +447,20 @@ class FakeSupabaseForProcessRelationship:
         return [{"id": filters["id"], **values}]
 
 
+class FakeSupabaseForQueuedSourceEvent(FakeSupabaseForProcessRelationship):
+    def __init__(self, relationship: dict[str, str], source_events: list[dict] | None = None) -> None:
+        super().__init__(source_events=source_events)
+        self.relationship = dict(relationship)
+
+    def select(self, table: str, **kwargs):
+        if table == "bot_copy_relationships":
+            filters = kwargs.get("filters") or {}
+            if filters.get("source_runtime_id") == self.relationship["source_runtime_id"]:
+                return [dict(self.relationship)]
+            return []
+        return super().select(table, **kwargs)
+
+
 class FakeAuthService:
     def get_trading_credentials(self, db, wallet_address: str):
         del db, wallet_address
@@ -468,6 +482,7 @@ def test_copy_worker_records_uuid_audit_event_ids_when_processing_relationship(m
     worker._pacifica = fake_pacifica
     worker._auth = FakeAuthService()
     worker._supabase = fake_supabase
+    worker._claim_local_lease = lambda lease_key, *, ttl_seconds: True
     monkeypatch.setattr(bot_copy_worker_module.broadcaster, "publish", _noop_publish)
 
     asyncio.run(
@@ -522,6 +537,7 @@ def test_copy_worker_refreshes_positions_before_mirroring_tpsl(monkeypatch) -> N
     worker._pacifica = fake_pacifica
     worker._auth = FakeAuthService()
     worker._supabase = fake_supabase
+    worker._claim_local_lease = lambda lease_key, *, ttl_seconds: True
     monkeypatch.setattr(bot_copy_worker_module.broadcaster, "publish", _noop_publish)
 
     asyncio.run(
@@ -544,3 +560,57 @@ def test_copy_worker_refreshes_positions_before_mirroring_tpsl(monkeypatch) -> N
     ]
     mirrored_execution_rows = [payload for table, payload, _ in fake_supabase.insert_calls if table == "bot_copy_execution_events"]
     assert [row["status"] for row in mirrored_execution_rows] == ["mirrored", "mirrored"]
+
+
+def test_copy_worker_processes_queued_source_events_without_waiting_for_poll(monkeypatch) -> None:
+    worker = BotCopyWorker(poll_interval_seconds=60.0)
+    fake_pacifica = FakePacificaClient()
+    fake_supabase = FakeSupabaseForQueuedSourceEvent(
+        relationship={
+            "id": "046b4691-80dc-4eda-8171-73753f6f7606",
+            "source_runtime_id": "runtime-1",
+            "follower_user_id": "user-1",
+            "follower_wallet_address": "wallet-1",
+            "scale_bps": 10_000,
+            "updated_at": "2026-04-12T07:14:16.663410+00:00",
+        }
+    )
+    worker._pacifica = fake_pacifica
+    worker._auth = FakeAuthService()
+    worker._supabase = fake_supabase
+    worker._claim_local_lease = lambda lease_key, *, ttl_seconds: True
+    monkeypatch.setattr(bot_copy_worker_module.broadcaster, "publish", _noop_publish)
+
+    async def scenario() -> None:
+        worker.start()
+        worker.submit_source_event(
+            source_runtime_id="runtime-1",
+            source_event={
+                "id": "source-event-queued",
+                "runtime_id": "runtime-1",
+                "event_type": "action.executed",
+                "request_payload": {
+                    "type": "open_long",
+                    "symbol": "BTC",
+                    "size_usd": 150,
+                    "leverage": 2,
+                },
+                "result_payload": {},
+                "created_at": "2026-04-12T12:28:28.167974+00:00",
+            },
+        )
+        for _ in range(20):
+            mirrored_order_submitted = any(order["type"] == "create_market_order" for order in fake_pacifica.orders)
+            relationship_cursor_updated = any(
+                table == "bot_copy_relationships" for table, _, _ in fake_supabase.update_calls
+            )
+            if mirrored_order_submitted and relationship_cursor_updated:
+                break
+            await asyncio.sleep(0.01)
+        await worker.stop()
+
+    asyncio.run(scenario())
+
+    assert [order["type"] for order in fake_pacifica.orders] == ["update_leverage", "create_market_order"]
+    relationship_updates = [values for table, values, _ in fake_supabase.update_calls if table == "bot_copy_relationships"]
+    assert relationship_updates[-1]["updated_at"] == "2026-04-12T12:28:28.167974+00:00"

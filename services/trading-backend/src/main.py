@@ -52,6 +52,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name)
     bot_copy_worker = BotCopyWorker()
     bot_runtime_worker = BotRuntimeWorker()
+    bot_runtime_worker.copy_worker = bot_copy_worker
     bot_runtime_snapshot_worker = BotRuntimeSnapshotWorker()
     portfolio_allocator_worker = PortfolioAllocatorWorker()
     backtest_job_worker = BacktestJobWorker()
@@ -104,8 +105,8 @@ def create_app() -> FastAPI:
         app.state.bot_runtime_snapshot_worker = bot_runtime_snapshot_worker
         app.state.portfolio_allocator_worker = portfolio_allocator_worker
         app.state.backtest_job_worker = backtest_job_worker
-        bot_runtime_worker.start()
         bot_copy_worker.start()
+        bot_runtime_worker.start()
         bot_runtime_snapshot_worker.start()
         portfolio_allocator_worker.start()
         backtest_job_worker.start()

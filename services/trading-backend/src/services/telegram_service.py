@@ -23,6 +23,7 @@ DEFAULT_NOTIFICATION_PREFS = {
     "critical_alerts": True,
     "execution_failures": True,
     "copy_activity": True,
+    "trade_activity": True,
 }
 TELEGRAM_API_BASE_URL = "https://api.telegram.org"
 NOTIFICATION_PREFERENCE_BY_EVENT = {
@@ -31,6 +32,8 @@ NOTIFICATION_PREFERENCE_BY_EVENT = {
     "portfolio.kill_switch": "critical_alerts",
     "bot.execution.failed": "execution_failures",
     "bot.copy.updated": "copy_activity",
+    "bot.execution.success": "trade_activity",
+    "bot.position.closed": "trade_activity",
 }
 BOT_COMMANDS = [
     {"command": "status", "description": "Get your fleet summary"},
@@ -573,6 +576,34 @@ class TelegramService:
             status = str(payload.get("status") or "updated")
             scale_bps = int(self._to_float(payload.get("scale_bps")))
             return f"Copy trading update\nRelationship status: {status}\nScale: {scale_bps} bps"
+        if event == "bot.execution.success":
+            request_payload = payload.get("request_payload") if isinstance(payload.get("request_payload"), dict) else {}
+            result_payload = payload.get("result_payload") if isinstance(payload.get("result_payload"), dict) else {}
+            action_type = str(request_payload.get("type") or "").strip()
+            symbol = str(request_payload.get("symbol") or "").upper().strip()
+            execution_meta = result_payload.get("execution_meta") if isinstance(result_payload.get("execution_meta"), dict) else {}
+            amount = self._to_float(execution_meta.get("amount"))
+            if action_type in {"open_long", "open_short", "place_market_order", "place_limit_order", "place_twap_order"} and not bool(execution_meta.get("reduce_only")):
+                side = str(execution_meta.get("side") or "").lower().strip()
+                normalized_side = "long" if side in {"bid", "long"} else "short" if side in {"ask", "short"} else side
+                return f"Trade opened\n{symbol} {normalized_side}\nSize: {amount:.4f}"
+            if action_type == "set_tpsl":
+                return f"Protection armed\n{symbol}\nTP and SL orders were placed for {amount:.4f}."
+            if action_type == "close_position" or bool(execution_meta.get("reduce_only")):
+                return f"Trade close submitted\n{symbol}\nReduce-only close order executed for {amount:.4f}."
+            return None
+        if event == "bot.position.closed":
+            symbol = str(payload.get("symbol") or "").upper().strip()
+            reason = str(payload.get("reason") or "closed").replace("_", " ").strip()
+            realized_pnl = self._to_float(payload.get("realized_pnl"))
+            quantity = self._to_float(payload.get("quantity"))
+            side = str(payload.get("position_side") or "").strip()
+            return (
+                f"Position closed\n{symbol} {side}\n"
+                f"Reason: {reason}\n"
+                f"Size: {quantity:.4f}\n"
+                f"Realized PnL: {self._format_signed_usd(realized_pnl)}"
+            )
         return None
 
     def _resolve_runtime_bot_name(self, runtime_id: str) -> str:

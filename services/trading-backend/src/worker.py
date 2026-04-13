@@ -21,9 +21,12 @@ async def run_worker() -> None:
         raise RuntimeError("BACKGROUND_WORKERS_ENABLED must be true for the worker process")
 
     market_data_service = get_pacifica_market_data_service()
+    bot_copy_worker = BotCopyWorker()
+    bot_runtime_worker = BotRuntimeWorker()
+    bot_runtime_worker.copy_worker = bot_copy_worker
     workers = [
-        BotRuntimeWorker(),
-        BotCopyWorker(),
+        bot_copy_worker,
+        bot_runtime_worker,
         BotRuntimeSnapshotWorker(),
         PortfolioAllocatorWorker(),
         BacktestJobWorker(),

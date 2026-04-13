@@ -78,6 +78,7 @@ class BotRuntimeWorker:
         self._held_leases: dict[str, float] = {}
         self._recent_skip_events: dict[str, float] = {}
         self._runtime_state_cache: dict[str, dict[str, Any]] = {}
+        self.copy_worker: Any | None = None
         self.last_iteration_at: str | None = None
         self.last_error: str | None = None
 
@@ -264,8 +265,11 @@ class BotRuntimeWorker:
             return self._maybe_refresh_runtime_heartbeat(runtime, now=now)
 
         resolved_price_lookup = dict(price_lookup or {})
+        previous_wallet_synced_at = str(runtime_state.get("wallet_synced_at") or "").strip()
         positions: list[dict[str, Any]] = []
         open_orders: list[dict[str, Any]] = []
+        manual_close_history: list[dict[str, Any]] = []
+        close_notifications: list[dict[str, Any]] = []
         if wallet_due:
             positions, open_orders = await asyncio.gather(
                 self._safe_load(
@@ -310,6 +314,11 @@ class BotRuntimeWorker:
             )
             runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
             runtime_state["performance_synced_at"] = now.isoformat()
+            runtime_state, close_notifications = self._capture_trade_close_notifications(
+                runtime_state=runtime_state,
+                history_rows=manual_close_history,
+                notified_after=previous_wallet_synced_at,
+            )
         runtime_state = self._reconcile_runtime_state(
             runtime_state=runtime_state,
             position_lookup=position_lookup,
@@ -317,6 +326,13 @@ class BotRuntimeWorker:
         )
         runtime_policy["_runtime_state"] = runtime_state
         runtime = self._persist_runtime_policy(runtime, runtime_policy, now=now)
+        for notification in close_notifications:
+            with contextlib.suppress(Exception):
+                await telegram_service.notify_user(
+                    user_id=str(runtime["user_id"]),
+                    event="bot.position.closed",
+                    payload={**notification, "runtime_id": runtime["id"]},
+                )
         drawdown_reason = self._risk.drawdown_breach_reason(policy=runtime_policy, runtime_state=runtime_state)
         if drawdown_reason is not None:
             logger.warning(
@@ -571,11 +587,18 @@ class BotRuntimeWorker:
                     result_payload=response,
                     status="success",
                 )
+                self._queue_copy_source_event(runtime=runtime, event=event)
                 await broadcaster.publish(
                     channel=f"user:{runtime['user_id']}",
                     event="bot.execution.success",
                     payload=self._serialize_event_payload(event),
                 )
+                with contextlib.suppress(Exception):
+                    await telegram_service.notify_user(
+                        user_id=str(runtime["user_id"]),
+                        event="bot.execution.success",
+                        payload=self._serialize_event_payload(event),
+                    )
                 logger.info(
                     "Runtime %s executed action %s for %s successfully",
                     runtime["id"],
@@ -750,11 +773,18 @@ class BotRuntimeWorker:
                 result_payload=response,
                 status="success",
             )
+            self._queue_copy_source_event(runtime=runtime, event=event)
             await broadcaster.publish(
                 channel=f"user:{runtime['user_id']}",
                 event="bot.execution.success",
                 payload=self._serialize_event_payload(event),
             )
+            with contextlib.suppress(Exception):
+                await telegram_service.notify_user(
+                    user_id=str(runtime["user_id"]),
+                    event="bot.execution.success",
+                    payload=self._serialize_event_payload(event),
+                )
 
         position_lookup = await self._refresh_position_lookup(
             credentials["account_address"],
@@ -1945,6 +1975,120 @@ class BotRuntimeWorker:
             open_order_lookup=open_order_lookup,
         )
 
+    def _capture_trade_close_notifications(
+        self,
+        *,
+        runtime_state: dict[str, Any],
+        history_rows: list[dict[str, Any]],
+        notified_after: str,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        next_state = dict(runtime_state)
+        if not history_rows:
+            return next_state, []
+        managed_positions = next_state.get("managed_positions")
+        if not isinstance(managed_positions, dict) or not managed_positions:
+            return next_state, []
+        notified_after_at = self._parse_runtime_state_timestamp(notified_after)
+        existing_keys = next_state.get("telegram_notified_closure_keys")
+        notification_keys = [str(item).strip() for item in existing_keys] if isinstance(existing_keys, list) else []
+        seen_keys = {item for item in notification_keys if item}
+        notifications: list[dict[str, Any]] = []
+        for raw_row in history_rows:
+            normalized_row = self._normalize_close_history_row(raw_row)
+            if normalized_row is None:
+                continue
+            created_at = self._parse_runtime_state_timestamp(str(normalized_row.get("created_at") or ""))
+            if notified_after_at is not None and (created_at is None or created_at <= notified_after_at):
+                continue
+            symbol = str(normalized_row.get("symbol") or "")
+            managed_position = managed_positions.get(symbol)
+            if not isinstance(managed_position, dict):
+                continue
+            notification_key = self._trade_close_notification_key(normalized_row)
+            if notification_key in seen_keys:
+                continue
+            client_order_id = str(normalized_row.get("client_order_id") or "").strip()
+            tp_client_order_id = str(managed_position.get("take_profit_client_order_id") or "").strip()
+            sl_client_order_id = str(managed_position.get("stop_loss_client_order_id") or "").strip()
+            reason = "manual_close"
+            if client_order_id and client_order_id == tp_client_order_id:
+                reason = "take_profit"
+            elif client_order_id and client_order_id == sl_client_order_id:
+                reason = "stop_loss"
+            notifications.append(
+                {
+                    "symbol": symbol,
+                    "reason": reason,
+                    "quantity": normalized_row.get("amount"),
+                    "position_side": normalized_row.get("position_side"),
+                    "realized_pnl": normalized_row.get("pnl"),
+                    "created_at": normalized_row.get("created_at"),
+                }
+            )
+            seen_keys.add(notification_key)
+            notification_keys.append(notification_key)
+        if notification_keys:
+            next_state["telegram_notified_closure_keys"] = notification_keys[-50:]
+        return next_state, notifications
+
+    def _normalize_close_history_row(self, row: dict[str, Any]) -> dict[str, Any] | None:
+        event_kind = str(row.get("event_kind") or "").strip().lower()
+        event_type = str(row.get("event_type") or row.get("eventType") or "").strip().lower()
+        if event_kind != "close":
+            if event_type.startswith("close_"):
+                event_kind = "close"
+            else:
+                return None
+        position_side = str(row.get("position_side") or "").strip().lower()
+        if position_side not in {"long", "short"}:
+            if event_type.endswith("_long"):
+                position_side = "long"
+            elif event_type.endswith("_short"):
+                position_side = "short"
+        symbol = self._normalize_symbol(row.get("symbol"))
+        amount = self._coerce_float(row.get("amount"))
+        price = self._coerce_float(row.get("price"))
+        if not symbol or position_side not in {"long", "short"} or amount <= 1e-12 or price <= 0:
+            return None
+        return {
+            "history_id": row.get("history_id") or row.get("historyId"),
+            "order_id": row.get("order_id") or row.get("orderId"),
+            "client_order_id": str(row.get("client_order_id") or row.get("clientOrderId") or "").strip() or None,
+            "symbol": symbol,
+            "position_side": position_side,
+            "amount": amount,
+            "price": price,
+            "pnl": self._coerce_float(row.get("pnl")),
+            "created_at": row.get("created_at") or row.get("createdAt"),
+        }
+
+    @staticmethod
+    def _trade_close_notification_key(row: dict[str, Any]) -> str:
+        history_id = row.get("history_id")
+        if history_id not in (None, ""):
+            return f"history:{history_id}"
+        order_id = row.get("order_id")
+        if order_id not in (None, ""):
+            return f"order:{order_id}"
+        return "|".join(
+            [
+                str(row.get("symbol") or "").strip(),
+                str(row.get("position_side") or "").strip(),
+                str(row.get("client_order_id") or "").strip(),
+                str(row.get("amount") or "").strip(),
+                str(row.get("created_at") or "").strip(),
+            ]
+        )
+
+    @staticmethod
+    def _coerce_float(value: Any) -> float:
+        try:
+            if value in (None, ""):
+                return 0.0
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
     @staticmethod
     def _parse_runtime_state_timestamp(value: str) -> datetime | None:
         try:
@@ -2285,6 +2429,25 @@ class BotRuntimeWorker:
             "request_payload": event.get("request_payload") or {},
             "result_payload": event.get("result_payload") or {},
         }
+
+    def _queue_copy_source_event(self, *, runtime: dict[str, Any], event: dict[str, Any]) -> None:
+        copy_worker = self.copy_worker
+        if copy_worker is None:
+            return
+        submit_source_event = getattr(copy_worker, "submit_source_event", None)
+        if not callable(submit_source_event):
+            return
+        try:
+            submit_source_event(
+                source_runtime_id=str(runtime.get("id") or ""),
+                source_event=dict(event),
+            )
+        except Exception:
+            logger.exception(
+                "Runtime %s failed to queue source event %s for copy mirroring",
+                runtime.get("id"),
+                event.get("id"),
+            )
 
     @property
     def is_running(self) -> bool:

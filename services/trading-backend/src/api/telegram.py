@@ -22,6 +22,7 @@ class TelegramNotificationPrefsResponse(BaseModel):
     critical_alerts: bool
     execution_failures: bool
     copy_activity: bool
+    trade_activity: bool
 
 
 class TelegramConnectionStatusResponse(BaseModel):
@@ -55,6 +56,7 @@ class TelegramPreferencesRequest(BaseModel):
     critical_alerts: bool | None = None
     execution_failures: bool | None = None
     copy_activity: bool | None = None
+    trade_activity: bool | None = None
 
 
 @router.get("", response_model=TelegramConnectionStatusResponse)
@@ -96,6 +98,7 @@ def patch_telegram_preferences(
                 "critical_alerts": payload.critical_alerts,
                 "execution_failures": payload.execution_failures,
                 "copy_activity": payload.copy_activity,
+                "trade_activity": payload.trade_activity,
             }.items()
             if value is not None
         },

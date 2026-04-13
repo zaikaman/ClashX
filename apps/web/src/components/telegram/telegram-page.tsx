@@ -59,7 +59,8 @@ function preferenceChanged(
   return (
     left.critical_alerts !== right.critical_alerts ||
     left.execution_failures !== right.execution_failures ||
-    left.copy_activity !== right.copy_activity
+    left.copy_activity !== right.copy_activity ||
+    left.trade_activity !== right.trade_activity
   );
 }
 
@@ -194,6 +195,7 @@ export function TelegramPage() {
         critical_alerts: prefs.critical_alerts,
         execution_failures: prefs.execution_failures,
         copy_activity: prefs.copy_activity,
+        trade_activity: prefs.trade_activity,
       });
       setStatus(payload);
       setPrefs(payload.notification_prefs);
@@ -552,6 +554,12 @@ export function TelegramPage() {
                         label: "Copy trading updates",
                         detail: "Relationship status changes and scale updates from the copy desk.",
                         icon: BellRing,
+                      },
+                      {
+                        key: "trade_activity",
+                        label: "Trade activity",
+                        detail: "Successful entries, TP/SL order placement, manual closes, and actual TP/SL hits.",
+                        icon: Send,
                       },
                     ].map((item) => {
                       const Icon = item.icon;

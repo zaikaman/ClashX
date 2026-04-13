@@ -9,6 +9,7 @@ export type TelegramNotificationPrefs = {
   critical_alerts: boolean;
   execution_failures: boolean;
   copy_activity: boolean;
+  trade_activity: boolean;
 };
 
 export type TelegramConnectionStatus = {
@@ -39,6 +40,7 @@ type TelegramPreferencesPayload = {
   critical_alerts?: boolean;
   execution_failures?: boolean;
   copy_activity?: boolean;
+  trade_activity?: boolean;
 };
 
 async function parseResponse<T>(response: Response): Promise<T> {

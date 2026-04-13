@@ -34,6 +34,7 @@ class BotCopyWorker:
         self._coordination = WorkerCoordinationService(self._supabase)
         self._metrics = get_performance_metrics_store()
         self._held_leases: dict[str, float] = {}
+        self._source_event_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
         self.last_iteration_at: str | None = None
         self.last_error: str | None = None
 
@@ -52,48 +53,147 @@ class BotCopyWorker:
                 await self._task
         self._release_held_leases()
 
+    def submit_source_event(self, *, source_runtime_id: str, source_event: dict[str, Any]) -> None:
+        self._source_event_queue.put_nowait((source_runtime_id, dict(source_event)))
+
     async def run_forever(self) -> None:
+        next_poll_at = monotonic()
         while self._running:
-            iteration_started = perf_counter()
             try:
-                active = await asyncio.to_thread(
-                    self._supabase.select,
-                    "bot_copy_relationships",
-                    columns="id,source_runtime_id,follower_user_id,follower_wallet_address,scale_bps,updated_at",
-                    filters={"status": "active", "mode": "mirror"},
+                timeout_seconds = max(0.0, next_poll_at - monotonic())
+                source_runtime_id, source_event = await asyncio.wait_for(
+                    self._source_event_queue.get(),
+                    timeout=timeout_seconds,
                 )
-                for relationship in active:
-                    lease_key = f"bot-copy:{relationship['id']}"
-                    if not self._claim_local_lease(
-                        lease_key,
-                        ttl_seconds=max(20, int(self.poll_interval_seconds * 3)),
-                    ):
-                        continue
-                    await self._process_relationship(relationship)
+            except TimeoutError:
+                await self._run_poll_iteration()
+                next_poll_at = monotonic() + self.poll_interval_seconds
+                continue
+
+            event_started = perf_counter()
+            try:
+                await self._process_source_runtime_event(
+                    source_runtime_id=source_runtime_id,
+                    source_event=source_event,
+                )
                 self.last_iteration_at = datetime.now(tz=UTC).isoformat()
                 self.last_error = None
             except SupabaseRestError as exc:
                 self.last_error = str(exc)
                 if exc.is_retryable:
-                    logger.warning("Bot copy worker iteration deferred because Supabase is temporarily unavailable: %s", exc)
+                    logger.warning(
+                        "Bot copy worker source event deferred because Supabase is temporarily unavailable: %s",
+                        exc,
+                    )
                 else:
-                    logger.exception("Bot copy worker iteration failed")
+                    logger.exception("Bot copy worker source event failed")
             except Exception as exc:
                 self.last_error = str(exc)
-                logger.exception("Bot copy worker iteration failed")
+                logger.exception("Bot copy worker source event failed")
             finally:
-                self._metrics.record("worker:bot_copy:iteration", (perf_counter() - iteration_started) * 1000.0)
-            await asyncio.sleep(self.poll_interval_seconds)
+                self._metrics.record("worker:bot_copy:source_event", (perf_counter() - event_started) * 1000.0)
+
+            if monotonic() >= next_poll_at:
+                await self._run_poll_iteration()
+                next_poll_at = monotonic() + self.poll_interval_seconds
+
+    async def _run_poll_iteration(self) -> None:
+        iteration_started = perf_counter()
+        try:
+            active = await asyncio.to_thread(
+                self._supabase.select,
+                "bot_copy_relationships",
+                columns="id,source_runtime_id,follower_user_id,follower_wallet_address,scale_bps,updated_at",
+                filters={"status": "active", "mode": "mirror"},
+            )
+            for relationship in active:
+                lease_key = f"bot-copy:{relationship['id']}"
+                if not self._claim_local_lease(
+                    lease_key,
+                    ttl_seconds=max(20, int(self.poll_interval_seconds * 3)),
+                ):
+                    continue
+                await self._process_relationship(relationship)
+            self.last_iteration_at = datetime.now(tz=UTC).isoformat()
+            self.last_error = None
+        except SupabaseRestError as exc:
+            self.last_error = str(exc)
+            if exc.is_retryable:
+                logger.warning("Bot copy worker iteration deferred because Supabase is temporarily unavailable: %s", exc)
+            else:
+                logger.exception("Bot copy worker iteration failed")
+        except Exception as exc:
+            self.last_error = str(exc)
+            logger.exception("Bot copy worker iteration failed")
+        finally:
+            self._metrics.record("worker:bot_copy:iteration", (perf_counter() - iteration_started) * 1000.0)
+
+    async def _process_source_runtime_event(self, *, source_runtime_id: str, source_event: dict[str, Any]) -> None:
+        relationships = await asyncio.to_thread(
+            self._supabase.select,
+            "bot_copy_relationships",
+            columns="id,source_runtime_id,follower_user_id,follower_wallet_address,scale_bps,updated_at",
+            filters={
+                "status": "active",
+                "mode": "mirror",
+                "source_runtime_id": source_runtime_id,
+            },
+        )
+        for relationship in relationships:
+            lease_key = f"bot-copy:{relationship['id']}"
+            if not self._claim_local_lease(
+                lease_key,
+                ttl_seconds=max(20, int(self.poll_interval_seconds * 3)),
+            ):
+                continue
+            await self._process_relationship_source_events(
+                relationship,
+                [source_event],
+                verify_source_runtime_active=False,
+            )
 
     async def _process_relationship(self, relationship: dict[str, Any]) -> None:
-        runtime = await asyncio.to_thread(
-            self._supabase.maybe_one,
-            "bot_runtimes",
-            columns="id,status",
-            filters={"id": relationship["source_runtime_id"]},
-            cache_ttl_seconds=30,
+        await self._process_relationship_source_events(
+            relationship,
+            verify_source_runtime_active=True,
         )
-        if runtime is None or runtime["status"] != "active":
+
+    async def _process_relationship_source_events(
+        self,
+        relationship: dict[str, Any],
+        source_events: list[dict[str, Any]] | None = None,
+        *,
+        verify_source_runtime_active: bool,
+    ) -> None:
+        if verify_source_runtime_active:
+            runtime = await asyncio.to_thread(
+                self._supabase.maybe_one,
+                "bot_runtimes",
+                columns="id,status",
+                filters={"id": relationship["source_runtime_id"]},
+                cache_ttl_seconds=30,
+            )
+            if runtime is None or runtime["status"] != "active":
+                return
+
+        resolved_source_events = source_events
+        if resolved_source_events is None:
+            resolved_source_events = list(
+                reversed(
+                    await asyncio.to_thread(
+                        self._supabase.select,
+                        "bot_execution_events",
+                        filters={
+                            "runtime_id": relationship["source_runtime_id"],
+                            "event_type": "action.executed",
+                            "created_at": ("gt", relationship["updated_at"]),
+                        },
+                        order="created_at.desc",
+                        limit=50,
+                    )
+                )
+            )
+        if not resolved_source_events:
             return
 
         credentials = self._auth.get_trading_credentials(None, relationship["follower_wallet_address"])
@@ -106,32 +206,20 @@ class BotCopyWorker:
             )
             return
 
-        source_events = list(
-            reversed(
-                await asyncio.to_thread(
-                    self._supabase.select,
-                    "bot_execution_events",
-                    filters={
-                        "runtime_id": relationship["source_runtime_id"],
-                        "event_type": "action.executed",
-                        "created_at": ("gt", relationship["updated_at"]),
-                    },
-                    order="created_at.desc",
-                    limit=50,
-                )
-            )
-        )
-        if not source_events:
-            return
-
         markets, follower_positions = await asyncio.gather(
             self._safe_load(self._pacifica.get_markets, []),
             self._safe_load(lambda: self._pacifica.get_positions(relationship["follower_wallet_address"]), []),
         )
         market_lookup = self._build_symbol_lookup(markets)
         position_lookup = self._build_symbol_lookup(follower_positions)
+        latest_processed_at = self._parse_timestamp(relationship.get("updated_at"))
 
-        for source_event in source_events:
+        for source_event in resolved_source_events:
+            source_event_created_at = self._parse_timestamp(source_event.get("created_at"))
+            if source_event_created_at is not None and (
+                latest_processed_at is None or source_event_created_at > latest_processed_at
+            ):
+                latest_processed_at = source_event_created_at
             marker = f"bot_copy.mirror:{relationship['id']}:{source_event['id']}"
             seen = await asyncio.to_thread(
                 self._supabase.maybe_one,
@@ -223,10 +311,11 @@ class BotCopyWorker:
                 },
             )
 
+        updated_at = latest_processed_at.isoformat() if latest_processed_at is not None else datetime.now(tz=UTC).isoformat()
         await asyncio.to_thread(
             self._supabase.update,
             "bot_copy_relationships",
-            {"updated_at": datetime.now(tz=UTC).isoformat()},
+            {"updated_at": updated_at},
             filters={"id": relationship["id"]},
         )
 
@@ -805,6 +894,18 @@ class BotCopyWorker:
     @staticmethod
     def _normalize_symbol(value: Any) -> str:
         return str(value or "").upper().replace("-PERP", "").strip()
+
+    @staticmethod
+    def _parse_timestamp(value: Any) -> datetime | None:
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
     @staticmethod
     def _extract_source_tpsl_orders(source_event: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
