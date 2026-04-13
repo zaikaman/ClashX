@@ -52,12 +52,12 @@ class PacificaClientError(RuntimeError):
 
 
 class PacificaClient:
-    def __init__(self) -> None:
+    def __init__(self, *, rate_limiter: Any | None = None) -> None:
         self.settings = get_settings()
         self._lock = asyncio.Lock()
         self._connected = False
         self._rate_limit_interval = 0.05
-        self._rate_limiter = get_pacifica_rate_limiter()
+        self._rate_limiter = rate_limiter or get_pacifica_rate_limiter()
         default_headers: dict[str, str] = {}
         if self.settings.pacifica_api_key:
             default_headers["PF-API-KEY"] = self.settings.pacifica_api_key

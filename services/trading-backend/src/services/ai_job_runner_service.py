@@ -10,6 +10,8 @@ from src.services.ai_job_service import AiJobService
 from src.services.bot_backtest_service import BotBacktestService
 from src.services.builder_ai_service import BuilderAiService
 from src.services.copilot_conversation_service import CopilotConversationService
+from src.services.pacifica_client import PacificaClient
+from src.services.pacifica_rate_limiter import PacificaRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +169,16 @@ class AiJobRunnerService:
     ) -> None:
         self._job_service.mark_running(job_id=job_id)
 
+        background_backtest_service = self._bot_backtests
+        background_pacifica_client: PacificaClient | None = None
+        if isinstance(self._bot_backtests, BotBacktestService):
+            background_pacifica_client = PacificaClient(rate_limiter=PacificaRateLimiter())
+            background_backtest_service = BotBacktestService(
+                pacifica_client=background_pacifica_client,
+                supabase=self._bot_backtests._supabase,
+                rules_engine=self._bot_backtests._rules,
+            )
+
         async def progress_callback(payload: dict[str, Any]) -> None:
             self._job_service.update_progress(
                 job_id=job_id,
@@ -178,18 +190,22 @@ class AiJobRunnerService:
 
         def run_backtest_in_thread() -> dict[str, Any]:
             async def execute() -> dict[str, Any]:
-                return await self._bot_backtests.run_backtest(
-                    None,
-                    bot_id=bot_id,
-                    wallet_address=wallet_address,
-                    user_id=user_id,
-                    interval=interval,
-                    start_time=start_time,
-                    end_time=end_time,
-                    initial_capital_usd=initial_capital_usd,
-                    assumptions=assumptions,
-                    progress=progress_callback,
-                )
+                try:
+                    return await background_backtest_service.run_backtest(
+                        None,
+                        bot_id=bot_id,
+                        wallet_address=wallet_address,
+                        user_id=user_id,
+                        interval=interval,
+                        start_time=start_time,
+                        end_time=end_time,
+                        initial_capital_usd=initial_capital_usd,
+                        assumptions=assumptions,
+                        progress=progress_callback,
+                    )
+                finally:
+                    if background_pacifica_client is not None:
+                        await background_pacifica_client.close_ws()
 
             return asyncio.run(execute())
 
