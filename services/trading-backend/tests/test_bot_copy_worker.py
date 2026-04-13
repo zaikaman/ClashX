@@ -8,16 +8,29 @@ from src.workers import bot_copy_worker as bot_copy_worker_module
 class FakePacificaClient:
     def __init__(self) -> None:
         self.orders: list[dict] = []
+        self._positions: dict[str, list[dict]] = {}
 
     async def get_markets(self) -> list[dict]:
-        return [{"symbol": "BTC", "mark_price": 105000, "lot_size": 0.001, "min_order_size": 0.001}]
+        return [{"symbol": "BTC", "mark_price": 105000, "lot_size": 0.001, "min_order_size": 10.0}]
 
     async def get_positions(self, wallet_address: str) -> list[dict]:
-        del wallet_address
-        return []
+        return [dict(position) for position in self._positions.get(wallet_address, [])]
 
     async def place_order(self, payload: dict) -> dict:
         self.orders.append(dict(payload))
+        if payload["type"] == "create_market_order" and not payload.get("reduce_only"):
+            wallet_positions = self._positions.setdefault(payload["account"], [])
+            wallet_positions[:] = [
+                {
+                    "symbol": payload["symbol"],
+                    "side": payload["side"],
+                    "amount": payload["amount"],
+                    "entry_price": 105000.0,
+                    "mark_price": 105000.0,
+                }
+            ]
+        if payload["type"] == "create_market_order" and payload.get("reduce_only"):
+            self._positions[payload["account"]] = []
         return {
             "status": "submitted",
             "request_id": f"req-{len(self.orders)}",
@@ -160,10 +173,41 @@ def test_copy_worker_executes_market_twap_and_cancel_all_actions() -> None:
     assert fake_pacifica.orders[4]["all_symbols"] is True
 
 
+def test_copy_worker_allows_small_mirrored_market_sizes() -> None:
+    worker = BotCopyWorker(poll_interval_seconds=0.01)
+    fake_pacifica = FakePacificaClient()
+    worker._pacifica = fake_pacifica
+
+    asyncio.run(
+        worker._execute_action(
+            relationship={"id": "rel-small"},
+            source_event={"id": "evt-small", "request_payload": {}, "result_payload": {}},
+            action={
+                "type": "open_long",
+                "symbol": "BTC",
+                "size_usd": 75,
+                "leverage": 8,
+            },
+            scale_bps=10_000,
+            credentials={
+                "account_address": "wallet-1",
+                "agent_wallet_address": "agent-1",
+                "agent_private_key": "secret",
+            },
+            market_lookup={"BTC": {"mark_price": 105000, "lot_size": 0.001, "min_order_size": 10.0}},
+            position_lookup={},
+        )
+    )
+
+    assert [order["type"] for order in fake_pacifica.orders] == ["update_leverage", "create_market_order"]
+    assert fake_pacifica.orders[1]["amount"] == 0.005
+
+
 class FakeSupabaseForProcessRelationship:
-    def __init__(self) -> None:
+    def __init__(self, source_events: list[dict] | None = None) -> None:
         self.insert_calls: list[tuple[str, dict, str]] = []
         self.update_calls: list[tuple[str, dict, dict]] = []
+        self.source_events = list(source_events or [])
 
     def maybe_one(self, table: str, **kwargs):
         filters = kwargs.get("filters") or {}
@@ -175,6 +219,8 @@ class FakeSupabaseForProcessRelationship:
 
     def select(self, table: str, **kwargs):
         if table == "bot_execution_events":
+            if self.source_events:
+                return sorted(self.source_events, key=lambda item: item.get("created_at") or "", reverse=True)
             return [
                 {
                     "id": "source-event-1",
@@ -240,3 +286,59 @@ def test_copy_worker_records_uuid_audit_event_ids_when_processing_relationship(m
     assert audit_insert["action"] == "bot_copy.mirror:046b4691-80dc-4eda-8171-73753f6f7606:source-event-1"
     assert fake_pacifica.orders[1]["type"] == "create_market_order"
     assert any(table == "bot_copy_relationships" for table, _, _ in fake_supabase.update_calls)
+
+
+def test_copy_worker_refreshes_positions_before_mirroring_tpsl(monkeypatch) -> None:
+    worker = BotCopyWorker(poll_interval_seconds=0.01)
+    fake_pacifica = FakePacificaClient()
+    fake_supabase = FakeSupabaseForProcessRelationship(
+        source_events=[
+            {
+                "id": "source-event-open",
+                "request_payload": {
+                    "type": "open_long",
+                    "symbol": "BTC",
+                    "size_usd": 75,
+                    "leverage": 8,
+                },
+                "result_payload": {},
+                "created_at": "2026-04-12T22:03:08.487066+00:00",
+            },
+            {
+                "id": "source-event-tpsl",
+                "request_payload": {
+                    "type": "set_tpsl",
+                    "symbol": "BTC",
+                    "stop_loss_pct": 1.0,
+                    "take_profit_pct": 2.0,
+                },
+                "result_payload": {},
+                "created_at": "2026-04-12T22:03:09.943265+00:00",
+            },
+        ]
+    )
+    worker._pacifica = fake_pacifica
+    worker._auth = FakeAuthService()
+    worker._supabase = fake_supabase
+    monkeypatch.setattr(bot_copy_worker_module.broadcaster, "publish", _noop_publish)
+
+    asyncio.run(
+        worker._process_relationship(
+            {
+                "id": "046b4691-80dc-4eda-8171-73753f6f7606",
+                "source_runtime_id": "runtime-1",
+                "follower_user_id": "user-1",
+                "follower_wallet_address": "wallet-1",
+                "scale_bps": 10_000,
+                "updated_at": "2026-04-12T07:14:16.66341+00:00",
+            }
+        )
+    )
+
+    assert [order["type"] for order in fake_pacifica.orders] == [
+        "update_leverage",
+        "create_market_order",
+        "set_position_tpsl",
+    ]
+    mirrored_execution_rows = [payload for table, payload, _ in fake_supabase.insert_calls if table == "bot_copy_execution_events"]
+    assert [row["status"] for row in mirrored_execution_rows] == ["mirrored", "mirrored"]

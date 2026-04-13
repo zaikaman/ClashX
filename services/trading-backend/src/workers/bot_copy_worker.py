@@ -19,6 +19,8 @@ from src.services.worker_coordination_service import WorkerCoordinationService
 
 
 logger = logging.getLogger(__name__)
+POSITION_MUTATING_ACTION_TYPES = {"open_long", "open_short", "place_market_order", "close_position"}
+POSITION_REQUIRED_ACTION_TYPES = {"close_position", "set_tpsl"}
 
 
 class BotCopyWorker:
@@ -126,8 +128,8 @@ class BotCopyWorker:
             self._safe_load(self._pacifica.get_markets, []),
             self._safe_load(lambda: self._pacifica.get_positions(relationship["follower_wallet_address"]), []),
         )
-        market_lookup = {str(item.get("symbol") or "").upper(): item for item in markets if isinstance(item, dict)}
-        position_lookup = {str(item.get("symbol") or "").upper(): item for item in follower_positions if isinstance(item, dict)}
+        market_lookup = self._build_symbol_lookup(markets)
+        position_lookup = self._build_symbol_lookup(follower_positions)
 
         for source_event in source_events:
             marker = f"bot_copy.mirror:{relationship['id']}:{source_event['id']}"
@@ -140,6 +142,16 @@ class BotCopyWorker:
                 continue
 
             action = source_event["request_payload"] if isinstance(source_event.get("request_payload"), dict) else {}
+            action_type = str(action.get("type") or "")
+            symbol = self._normalize_symbol(action.get("symbol"))
+            if action_type in POSITION_REQUIRED_ACTION_TYPES:
+                position_lookup = await self._refresh_position_lookup(
+                    relationship["follower_wallet_address"],
+                    current_lookup=position_lookup,
+                    symbol=symbol or None,
+                    attempts=4 if action_type == "set_tpsl" else 1,
+                    delay_seconds=0.5 if action_type == "set_tpsl" else 0.0,
+                )
             try:
                 result = await self._execute_action(
                     relationship=relationship,
@@ -156,6 +168,15 @@ class BotCopyWorker:
                 result = {}
                 status = "error"
                 error_reason = str(exc)
+
+            if status == "mirrored" and action_type in POSITION_MUTATING_ACTION_TYPES:
+                position_lookup = await self._refresh_position_lookup(
+                    relationship["follower_wallet_address"],
+                    current_lookup=position_lookup,
+                    symbol=symbol or None,
+                    attempts=4 if action_type != "close_position" else 1,
+                    delay_seconds=0.5 if action_type != "close_position" else 0.0,
+                )
 
             execution_record = self._build_execution_record(
                 relationship=relationship,
@@ -514,6 +535,34 @@ class BotCopyWorker:
         except PacificaClientError:
             return fallback
 
+    @classmethod
+    def _build_symbol_lookup(cls, rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        return {
+            cls._normalize_symbol(item.get("symbol")): item
+            for item in rows
+            if isinstance(item, dict) and cls._normalize_symbol(item.get("symbol"))
+        }
+
+    async def _refresh_position_lookup(
+        self,
+        wallet_address: str,
+        *,
+        current_lookup: dict[str, dict[str, Any]],
+        symbol: str | None,
+        attempts: int,
+        delay_seconds: float,
+    ) -> dict[str, dict[str, Any]]:
+        refreshed_lookup = current_lookup
+        for attempt in range(max(1, attempts)):
+            positions = await self._safe_load(lambda: self._pacifica.get_positions(wallet_address), None)
+            if isinstance(positions, list):
+                refreshed_lookup = self._build_symbol_lookup(positions)
+            if not symbol or symbol in refreshed_lookup:
+                return refreshed_lookup
+            if delay_seconds > 0 and attempt + 1 < max(1, attempts):
+                await asyncio.sleep(delay_seconds)
+        return refreshed_lookup
+
     @staticmethod
     def _to_bool(value: Any, default: bool) -> bool:
         if value is None:
@@ -544,7 +593,6 @@ class BotCopyWorker:
             return self._normalize_order_quantity(
                 scaled_quantity,
                 lot_size=float(market.get("lot_size") or 0),
-                min_order_size=float(market.get("min_order_size") or 0),
                 symbol=symbol,
             )
 
@@ -559,12 +607,11 @@ class BotCopyWorker:
         return self._normalize_order_quantity(
             (mirrored_size_usd * leverage) / resolved_price,
             lot_size=float(market.get("lot_size") or 0),
-            min_order_size=float(market.get("min_order_size") or 0),
             symbol=symbol,
         )
 
     @staticmethod
-    def _normalize_order_quantity(quantity: float, *, lot_size: float, min_order_size: float, symbol: str) -> float:
+    def _normalize_order_quantity(quantity: float, *, lot_size: float, symbol: str) -> float:
         normalized = Decimal(str(quantity))
         if lot_size > 0:
             step = Decimal(str(lot_size))
@@ -572,9 +619,11 @@ class BotCopyWorker:
         normalized_float = float(normalized)
         if normalized_float <= 0:
             raise ValueError(f"Order size is below the minimum tradable increment for {symbol}.")
-        if min_order_size > 0 and normalized_float < min_order_size:
-            raise ValueError(f"Order size for {symbol} must be at least {min_order_size:g}. Adjust the copied size.")
         return normalized_float
+
+    @staticmethod
+    def _normalize_symbol(value: Any) -> str:
+        return str(value or "").upper().replace("-PERP", "").strip()
 
     def _extract_mirrored_order_identifier(
         self,
