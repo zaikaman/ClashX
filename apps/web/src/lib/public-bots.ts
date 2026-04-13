@@ -269,6 +269,8 @@ export type RuntimeProfile = {
   drift: DriftMetrics;
   passport: StrategyPassport;
   creator: CreatorProfile;
+  visibility?: string;
+  access_note?: string;
 };
 
 async function fetchJson<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -314,6 +316,30 @@ export async function fetchLeaderboardCandidates(limit = 24, signal?: AbortSigna
 
 export function fetchRuntimeProfile(runtimeId: string, signal?: AbortSignal) {
   return fetchJson<RuntimeProfile>(`/api/bot-copy/leaderboard/${runtimeId}`, signal);
+}
+
+export async function fetchAccessibleRuntimeProfile(
+  runtimeId: string,
+  walletAddress: string,
+  headers: HeadersInit,
+  signal?: AbortSignal,
+) {
+  const response = await fetch(
+    `${API_BASE_URL}/api/bot-copy/runtime/${runtimeId}/access?wallet_address=${encodeURIComponent(walletAddress)}`,
+    {
+      headers,
+      signal,
+    },
+  );
+  const payload = (await response.json()) as unknown;
+  if (!response.ok) {
+    const detail =
+      typeof payload === "object" && payload !== null && "detail" in payload && typeof payload.detail === "string"
+        ? payload.detail
+        : undefined;
+    throw new Error(detail ?? "Request failed");
+  }
+  return payload as RuntimeProfile;
 }
 
 export function fetchCreatorProfile(creatorId: string, signal?: AbortSignal) {

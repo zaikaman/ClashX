@@ -769,6 +769,7 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
                       <BotPublishingPanel
                         key={visibleBot.id}
                         botId={visibleBot.id}
+                        runtimeId={activeRuntimeId}
                         walletAddress={walletAddress}
                         getAuthHeaders={getAuthHeaders}
                         initialSettings={initialPublishingSettings}

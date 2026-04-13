@@ -9,14 +9,36 @@ import { CreatorReputationCard } from "@/components/leaderboard/creator-reputati
 import { DriftVisual } from "@/components/leaderboard/drift-visual";
 import { StrategyPassportPanel } from "@/components/leaderboard/strategy-passport-panel";
 import { TrustBadgeStrip } from "@/components/leaderboard/trust-badge-strip";
-import { fetchRuntimeProfile, type RuntimeProfile } from "@/lib/public-bots";
+import { useClashxAuth } from "@/lib/clashx-auth";
+import { fetchAccessibleRuntimeProfile, fetchRuntimeProfile, type RuntimeProfile } from "@/lib/public-bots";
 
 function formatSigned(value: number) {
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
 }
 
+function formatVisibilityLabel(visibility?: string) {
+  if (visibility === "invite_only") {
+    return "Invite-only";
+  }
+  if (visibility === "unlisted") {
+    return "Unlisted";
+  }
+  if (visibility === "private") {
+    return "Private";
+  }
+  return "Public";
+}
+
+function shortAddress(value?: string | null) {
+  if (!value) {
+    return "Unknown wallet";
+  }
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
 export default function MarketplaceRuntimePage({ params: paramsPromise }: { params: Promise<{ runtimeId: string }> }) {
   const params = use(paramsPromise);
+  const { authenticated, login, walletAddress, getAuthHeaders } = useClashxAuth();
   const [profile, setProfile] = useState<RuntimeProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -28,12 +50,41 @@ export default function MarketplaceRuntimePage({ params: paramsPromise }: { para
 
     async function loadProfile() {
       try {
-        setProfile(await fetchRuntimeProfile(params.runtimeId, controller.signal));
-      } catch (loadError) {
+        const publicProfile = await fetchRuntimeProfile(params.runtimeId, controller.signal);
         if (controller.signal.aborted) {
           return;
         }
-        setError(loadError instanceof Error ? loadError.message : "Could not load runtime profile");
+        setProfile(publicProfile);
+        setError(null);
+      } catch (publicLoadError) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        if (!authenticated || !walletAddress) {
+          setProfile(null);
+          setError(publicLoadError instanceof Error ? publicLoadError.message : "Could not load runtime profile");
+          return;
+        }
+        try {
+          const headers = await getAuthHeaders();
+          const gatedProfile = await fetchAccessibleRuntimeProfile(
+            params.runtimeId,
+            walletAddress,
+            headers,
+            controller.signal,
+          );
+          if (controller.signal.aborted) {
+            return;
+          }
+          setProfile(gatedProfile);
+          setError(null);
+        } catch (gatedLoadError) {
+          if (controller.signal.aborted) {
+            return;
+          }
+          setProfile(null);
+          setError(gatedLoadError instanceof Error ? gatedLoadError.message : "Could not load runtime profile");
+        }
       } finally {
         if (!controller.signal.aborted) {
           setLoading(false);
@@ -43,11 +94,25 @@ export default function MarketplaceRuntimePage({ params: paramsPromise }: { para
 
     void loadProfile();
     return () => controller.abort();
-  }, [params.runtimeId]);
+  }, [authenticated, getAuthHeaders, params.runtimeId, walletAddress]);
+
+  if (!profile && !loading) {
+    return (
+      <main className="shell grid gap-8 pb-10 md:pb-12">
+        <AccessGate
+          runtimeId={params.runtimeId}
+          authenticated={authenticated}
+          walletAddress={walletAddress}
+          error={error}
+          onLogin={login}
+        />
+      </main>
+    );
+  }
 
   return (
     <main className="shell grid gap-8 pb-10 md:pb-12">
-      {error ? (
+      {error && profile ? (
         <article className="rounded-2xl border border-[#ff8a9b]/30 bg-[#ff8a9b]/10 px-5 py-4 text-sm text-neutral-50">
           {error}
         </article>
@@ -96,8 +161,11 @@ export default function MarketplaceRuntimePage({ params: paramsPromise }: { para
               ) : null}
             </div>
 
-            {profile ? <TrustBadgeStrip trust={profile.trust} /> : null}
-          </div>
+              {profile ? <TrustBadgeStrip trust={profile.trust} /> : null}
+              {profile && profile.visibility !== "public" ? (
+                <AccessRibbon visibility={profile.visibility} accessNote={profile.access_note} />
+              ) : null}
+            </div>
 
           <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
             <HeroStat
@@ -253,6 +321,115 @@ function SignalBoard({ profile, loading }: { profile: RuntimeProfile | null; loa
         <p className="text-sm leading-7 text-neutral-400">{profile.trust.summary}</p>
       </div>
     </article>
+  );
+}
+
+function AccessRibbon({ visibility, accessNote }: { visibility?: string; accessNote?: string }) {
+  return (
+    <article className="grid gap-3 rounded-[1.4rem] border border-[rgba(220,232,93,0.16)] bg-[linear-gradient(135deg,rgba(220,232,93,0.1),rgba(116,185,127,0.06),rgba(13,15,16,0.2))] px-4 py-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="rounded-full border border-[rgba(220,232,93,0.26)] bg-[#dce85d]/10 px-3 py-1 text-[0.56rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]">
+          {formatVisibilityLabel(visibility)} lane
+        </span>
+        <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300">
+          Shared by direct link
+        </span>
+      </div>
+      <p className="max-w-3xl text-sm leading-7 text-neutral-300">
+        {accessNote?.trim()
+          ? accessNote
+          : "This strategy stays off the public board. Access follows the creator's invite settings, then opens clone and follow actions from the same page."}
+      </p>
+    </article>
+  );
+}
+
+function AccessGate({
+  runtimeId,
+  authenticated,
+  walletAddress,
+  error,
+  onLogin,
+}: {
+  runtimeId: string;
+  authenticated: boolean;
+  walletAddress?: string | null;
+  error: string | null;
+  onLogin: () => void;
+}) {
+  const title = authenticated
+    ? "This wallet is not cleared for this runtime"
+    : "This runtime is not on the public board";
+  const copy = authenticated
+    ? `Connected wallet ${shortAddress(walletAddress)} could not unlock this shared strategy. Ask the creator to add this wallet to the invite list, or switch to the wallet they invited.`
+    : "If a creator shared this strategy with you, connect the invited wallet first. The same link will unlock the runtime, live follow controls, and clone actions.";
+
+  return (
+    <section className="grid gap-6 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[radial-gradient(circle_at_top_left,rgba(220,232,93,0.12),transparent_22%),radial-gradient(circle_at_82%_18%,rgba(116,185,127,0.14),transparent_28%),linear-gradient(135deg,#171919,#0d0f10)] p-6 md:p-8 xl:grid-cols-[minmax(0,1.1fr)_22rem]">
+      <div className="grid gap-5">
+        <div className="flex flex-wrap items-center gap-3">
+          <Link
+            href="/marketplace"
+            className="rounded-full border border-[rgba(255,255,255,0.12)] px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-400 transition hover:border-neutral-50 hover:text-neutral-50"
+          >
+            Back to board
+          </Link>
+          <span className="rounded-full border border-[rgba(220,232,93,0.24)] bg-[#dce85d]/10 px-3 py-1 text-[0.56rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]">
+            Shared runtime
+          </span>
+        </div>
+
+        <div className="grid gap-3">
+          <div className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">
+            Runtime ID / {runtimeId.slice(0, 12)}...
+          </div>
+          <h1 className="max-w-4xl font-mono text-[clamp(2.1rem,5vw,4rem)] font-extrabold uppercase leading-[0.9] tracking-[-0.05em] text-neutral-50">
+            {title}
+          </h1>
+          <p className="max-w-3xl text-sm leading-7 text-neutral-300 md:text-base">
+            {copy}
+          </p>
+        </div>
+
+        {error ? (
+          <article className="rounded-[1.45rem] border border-[rgba(255,138,155,0.24)] bg-[#ff8a9b]/10 px-4 py-4 text-sm leading-7 text-neutral-100">
+            {error}
+          </article>
+        ) : null}
+      </div>
+
+      <aside className="grid gap-4 rounded-[1.6rem] border border-[rgba(255,255,255,0.06)] bg-[#101213] p-5">
+        <div className="grid gap-1">
+          <div className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#74b97f]">Invite access</div>
+          <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
+            Unlock the shared lane
+          </h2>
+          <p className="text-sm leading-7 text-neutral-400">
+            Owners now share the runtime link directly. Access is checked against the invited wallet after sign-in.
+          </p>
+        </div>
+
+        {!authenticated ? (
+          <button
+            type="button"
+            onClick={onLogin}
+            className="rounded-full bg-[#dce85d] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d]"
+          >
+            Connect invited wallet
+          </button>
+        ) : (
+          <div className="rounded-[1.2rem] border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] px-4 py-4 text-sm leading-7 text-neutral-300">
+            Signed in as {shortAddress(walletAddress)}.
+          </div>
+        )}
+
+        <div className="grid gap-3 border-t border-white/6 pt-4">
+          <MiniStat label="Access type" value={authenticated ? "Invite-aware" : "Sign in required"} tone="lime" />
+          <MiniStat label="Board status" value="Off public board" tone="neutral" />
+          <MiniStat label="Runtime link" value="Shared directly" />
+        </div>
+      </aside>
+    </section>
   );
 }
 

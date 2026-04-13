@@ -328,6 +328,21 @@ class CreatorMarketplaceService:
             return self._normalize_runtime_profile_payload(payload)
         return await self._build_runtime_profile_live(runtime_id=runtime_id)
 
+    async def get_runtime_profile_for_viewer(self, *, runtime_id: str, wallet_address: str) -> dict[str, Any]:
+        runtime = self.supabase.maybe_one("bot_runtimes", filters={"id": runtime_id})
+        if runtime is None:
+            raise ValueError("Runtime not found")
+        definition = self.supabase.maybe_one("bot_definitions", filters={"id": runtime["bot_definition_id"]})
+        if definition is None:
+            raise ValueError("Runtime not found")
+        if not self._viewer_can_access_definition(definition=definition, viewer_wallet_address=wallet_address):
+            raise ValueError("This runtime is not available to the connected wallet")
+        return await self._build_runtime_profile_payload(
+            runtime=runtime,
+            definition=definition,
+            allow_public_refresh=str(definition.get("visibility") or "private") == "public",
+        )
+
     def _list_runtime_snapshot_rows(
         self,
         *,
@@ -427,13 +442,25 @@ class CreatorMarketplaceService:
         definition = self.supabase.maybe_one("bot_definitions", filters={"id": runtime["bot_definition_id"]})
         if definition is None or str(definition.get("visibility") or "private") != "public":
             raise ValueError("Runtime not found")
+        return await self._build_runtime_profile_payload(runtime=runtime, definition=definition, allow_public_refresh=True)
+
+    async def _build_runtime_profile_payload(
+        self,
+        *,
+        runtime: dict[str, Any],
+        definition: dict[str, Any],
+        allow_public_refresh: bool,
+    ) -> dict[str, Any]:
+        runtime_id = str(runtime["id"])
+        definition_id = str(definition["id"])
+        visibility = str(definition.get("visibility") or "private")
 
         latest_snapshot = self.supabase.maybe_one(
             "bot_leaderboard_snapshots",
             filters={"runtime_id": runtime_id},
             order="captured_at.desc",
         )
-        if latest_snapshot is None or self._snapshot_is_stale(latest_snapshot.get("captured_at")):
+        if allow_public_refresh and (latest_snapshot is None or self._snapshot_is_stale(latest_snapshot.get("captured_at"))):
             await self.leaderboard_engine.refresh_public_leaderboard(None, limit=100)
             latest_snapshot = self.supabase.maybe_one(
                 "bot_leaderboard_snapshots",
@@ -448,27 +475,30 @@ class CreatorMarketplaceService:
         )
         creator = await self._build_creator_profile_live(creator_id=str(definition["user_id"]))
         recent_events = self._load_recent_runtime_events_map([runtime_id]).get(runtime_id, [])
+        publishing = self._read_publishing_settings_row(bot_definition_id=definition_id) or {}
         return self._normalize_runtime_profile_payload(
             {
-            "runtime_id": runtime["id"],
-            "bot_definition_id": definition["id"],
-            "bot_name": definition["name"],
-            "description": definition["description"],
-            "strategy_type": definition["strategy_type"],
-            "authoring_mode": definition["authoring_mode"],
-            "status": runtime["status"],
-            "mode": runtime["mode"],
-            "risk_policy_json": runtime["risk_policy_json"] if isinstance(runtime.get("risk_policy_json"), dict) else {},
-            "rank": latest_snapshot["rank"] if latest_snapshot else None,
-            "pnl_total": latest_snapshot["pnl_total"] if latest_snapshot else 0.0,
-            "pnl_unrealized": latest_snapshot["pnl_unrealized"] if latest_snapshot else 0.0,
-            "win_streak": latest_snapshot["win_streak"] if latest_snapshot else 0,
-            "drawdown": latest_snapshot["drawdown"] if latest_snapshot else 0.0,
-            "recent_events": recent_events,
-            "trust": public_context["trust"],
-            "drift": public_context["drift"],
-            "passport": public_context["passport"],
-            "creator": creator,
+                "runtime_id": runtime_id,
+                "bot_definition_id": definition_id,
+                "bot_name": definition["name"],
+                "description": definition["description"],
+                "strategy_type": definition["strategy_type"],
+                "authoring_mode": definition["authoring_mode"],
+                "status": runtime["status"],
+                "mode": runtime["mode"],
+                "risk_policy_json": runtime["risk_policy_json"] if isinstance(runtime.get("risk_policy_json"), dict) else {},
+                "rank": latest_snapshot["rank"] if latest_snapshot else None,
+                "pnl_total": latest_snapshot["pnl_total"] if latest_snapshot else 0.0,
+                "pnl_unrealized": latest_snapshot["pnl_unrealized"] if latest_snapshot else 0.0,
+                "win_streak": latest_snapshot["win_streak"] if latest_snapshot else 0,
+                "drawdown": latest_snapshot["drawdown"] if latest_snapshot else 0.0,
+                "recent_events": recent_events,
+                "trust": public_context["trust"],
+                "drift": public_context["drift"],
+                "passport": public_context["passport"],
+                "creator": creator,
+                "visibility": visibility,
+                "access_note": str(publishing.get("access_note") or ""),
             }
         )
 
@@ -539,6 +569,8 @@ class CreatorMarketplaceService:
         creator = normalized.get("creator")
         if isinstance(creator, dict):
             normalized["creator"] = self._normalize_runtime_creator_profile_payload(creator)
+        normalized["visibility"] = str(normalized.get("visibility") or "public")
+        normalized["access_note"] = str(normalized.get("access_note") or "")
         return normalized
 
     def _normalize_creator_profile_payload(self, creator: dict[str, Any]) -> dict[str, Any]:
@@ -1779,6 +1811,28 @@ class CreatorMarketplaceService:
         if bot is None:
             raise ValueError("Bot not found")
         return bot
+
+    def _viewer_can_access_definition(self, *, definition: dict[str, Any], viewer_wallet_address: str) -> bool:
+        owner_wallet_address = str(definition.get("wallet_address") or "").strip()
+        resolved_viewer_wallet = viewer_wallet_address.strip()
+        if owner_wallet_address and owner_wallet_address == resolved_viewer_wallet:
+            return True
+        visibility = str(definition.get("visibility") or "private")
+        if visibility == "public":
+            return True
+        if visibility == "unlisted":
+            return True
+        if visibility != "invite_only":
+            return False
+        invite = self.supabase.maybe_one(
+            "bot_invite_access",
+            filters={
+                "bot_definition_id": definition["id"],
+                "invited_wallet_address": resolved_viewer_wallet,
+                "status": "active",
+            },
+        )
+        return invite is not None
 
     @staticmethod
     def _publish_state(visibility: str) -> str:

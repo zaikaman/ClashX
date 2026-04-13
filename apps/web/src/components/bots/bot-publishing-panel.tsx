@@ -52,6 +52,7 @@ function parseInviteWallets(value: string) {
 
 export function BotPublishingPanel({
   botId,
+  runtimeId,
   walletAddress,
   getAuthHeaders,
   onSaved,
@@ -59,6 +60,7 @@ export function BotPublishingPanel({
   initialSettings = null,
 }: {
   botId: string;
+  runtimeId?: string | null;
   walletAddress: string;
   getAuthHeaders: (headersInit?: HeadersInit) => Promise<Headers>;
   onSaved?: (settings: PublishingSettings) => void;
@@ -75,6 +77,7 @@ export function BotPublishingPanel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [inviteLinkStatus, setInviteLinkStatus] = useState<"idle" | "copied" | "failed">("idle");
   const [refreshing, setRefreshing] = useState(Boolean(seededSettings));
   const hasSeededSettings = Boolean(seededSettings);
 
@@ -113,6 +116,22 @@ export function BotPublishingPanel({
   }, [botId, walletAddress, getAuthHeaders, hasSeededSettings]);
 
   const inviteCount = useMemo(() => parseInviteWallets(form?.inviteWalletsText ?? "").length, [form?.inviteWalletsText]);
+  const inviteLink =
+    runtimeId && typeof window !== "undefined"
+      ? `${window.location.origin}/marketplace/${encodeURIComponent(runtimeId)}`
+      : null;
+
+  async function handleCopyInviteLink() {
+    if (!inviteLink) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(inviteLink);
+      setInviteLinkStatus("copied");
+    } catch {
+      setInviteLinkStatus("failed");
+    }
+  }
 
   async function handleSave() {
     if (!form) {
@@ -235,19 +254,57 @@ export function BotPublishingPanel({
           </label>
 
           {form.visibility === "invite_only" ? (
-            <label className={FIELD_WRAPPER_CLASS}>
-              <span className={`flex items-center justify-between gap-3 ${FIELD_LABEL_CLASS}`}>
-                <span>Invite wallets</span>
-                <span className="text-neutral-500">{inviteCount} added</span>
-              </span>
-              <textarea
-                value={form.inviteWalletsText}
-                onChange={(event) => setForm((current) => (current ? { ...current, inviteWalletsText: event.target.value } : current))}
-                rows={Math.max(4, inviteCount || 3)}
-                placeholder={"WalletA\nWalletB"}
-                className={`min-h-[8rem] ${FIELD_CLASS}`}
-              />
-            </label>
+            <div className="grid gap-4 rounded-[1.55rem] border border-[rgba(220,232,93,0.14)] bg-[linear-gradient(180deg,rgba(220,232,93,0.08),rgba(13,15,16,0.18))] p-4">
+              <div className="grid gap-1">
+                <span className="text-[0.58rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]">
+                  Invite lane
+                </span>
+                <h4 className="font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">
+                  Share one link, gate it by wallet
+                </h4>
+                <p className="text-sm leading-6 text-neutral-400">
+                  Allowlisted wallets can open this runtime page, then follow live or fork a clone from the same link.
+                </p>
+              </div>
+
+              <label className={FIELD_WRAPPER_CLASS}>
+                <span className={`flex items-center justify-between gap-3 ${FIELD_LABEL_CLASS}`}>
+                  <span>Invite wallets</span>
+                  <span className="text-neutral-500">{inviteCount} added</span>
+                </span>
+                <textarea
+                  value={form.inviteWalletsText}
+                  onChange={(event) => setForm((current) => (current ? { ...current, inviteWalletsText: event.target.value } : current))}
+                  rows={Math.max(4, inviteCount || 3)}
+                  placeholder={"WalletA\nWalletB"}
+                  className={`min-h-[8rem] ${FIELD_CLASS}`}
+                />
+              </label>
+
+              <div className="grid gap-3 rounded-[1.35rem] border border-[rgba(255,255,255,0.08)] bg-[#0d0f10] p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="grid gap-1">
+                    <span className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                      Shareable invite
+                    </span>
+                    <p className="text-sm leading-6 text-neutral-400">
+                      The recipient still has to sign in with an invited wallet before the page unlocks.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyInviteLink()}
+                    disabled={!inviteLink}
+                    className="rounded-full border border-[rgba(220,232,93,0.22)] px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-[#dce85d] transition hover:border-[#dce85d] hover:bg-[#dce85d]/8 disabled:cursor-not-allowed disabled:border-[rgba(255,255,255,0.08)] disabled:text-neutral-500"
+                  >
+                    {inviteLinkStatus === "copied" ? "Copied" : inviteLinkStatus === "failed" ? "Copy failed" : "Copy link"}
+                  </button>
+                </div>
+                <div className="rounded-[1.1rem] border border-[rgba(255,255,255,0.08)] bg-[#090a0a] px-4 py-3 text-sm text-neutral-300">
+                  {inviteLink ?? "Deploy this bot once to mint a runtime link for invites."}
+                </div>
+              </div>
+            </div>
           ) : null}
         </div>
 

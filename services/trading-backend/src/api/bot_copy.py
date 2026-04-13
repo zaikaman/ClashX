@@ -82,6 +82,8 @@ class BotRuntimeProfileResponse(BaseModel):
     drift: "DriftMetricsResponse"
     passport: "StrategyPassportResponse"
     creator: "CreatorProfileResponse"
+    visibility: str = "public"
+    access_note: str = ""
 
 
 class TrustBadgeResponse(BaseModel):
@@ -434,6 +436,27 @@ async def get_runtime_profile(
     del db
     try:
         profile = await marketplace_service.get_runtime_profile(runtime_id=runtime_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return BotRuntimeProfileResponse.model_validate(profile)
+
+
+@router.get("/runtime/{runtime_id}/access", response_model=BotRuntimeProfileResponse)
+async def get_accessible_runtime_profile(
+    runtime_id: str,
+    response: Response,
+    wallet_address: str = Query(min_length=8),
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> BotRuntimeProfileResponse:
+    del db
+    response.headers["Cache-Control"] = "private, max-age=5, stale-while-revalidate=15"
+    ensure_wallet_owned(user, wallet_address)
+    try:
+        profile = await marketplace_service.get_runtime_profile_for_viewer(
+            runtime_id=runtime_id,
+            wallet_address=wallet_address,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return BotRuntimeProfileResponse.model_validate(profile)
