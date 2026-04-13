@@ -42,6 +42,15 @@ BOT_COMMANDS = [
 ]
 
 
+class TelegramRateLimitError(RuntimeError):
+    def __init__(self, *, method: str, retry_after_seconds: int | None, description: str | None = None) -> None:
+        retry_hint = f" retry_after={retry_after_seconds}s" if retry_after_seconds is not None else ""
+        super().__init__(f"Telegram API rate limited for {method}.{retry_hint}".rstrip())
+        self.method = method
+        self.retry_after_seconds = retry_after_seconds
+        self.description = description or "Too Many Requests"
+
+
 class TelegramService:
     def __init__(
         self,
@@ -185,13 +194,24 @@ class TelegramService:
         try:
             await self._telegram_request("setMyCommands", {"commands": BOT_COMMANDS}, settings=resolved_settings)
             if resolved_settings.telegram_webhook_url:
-                payload: dict[str, Any] = {
-                    "url": resolved_settings.telegram_webhook_url,
-                    "allowed_updates": ["message"],
-                }
-                if resolved_settings.telegram_webhook_secret:
-                    payload["secret_token"] = resolved_settings.telegram_webhook_secret
-                await self._telegram_request("setWebhook", payload, settings=resolved_settings)
+                webhook_info = await self._telegram_request("getWebhookInfo", {}, settings=resolved_settings)
+                configured_url = str(webhook_info.get("url") or "").strip()
+                desired_url = str(resolved_settings.telegram_webhook_url).strip()
+                if configured_url != desired_url:
+                    payload: dict[str, Any] = {
+                        "url": desired_url,
+                        "allowed_updates": ["message"],
+                    }
+                    if resolved_settings.telegram_webhook_secret:
+                        payload["secret_token"] = resolved_settings.telegram_webhook_secret
+                    await self._telegram_request("setWebhook", payload, settings=resolved_settings)
+        except TelegramRateLimitError as exc:
+            logger.warning(
+                "Telegram bot configuration rate limited for %s; retry_after=%s description=%s",
+                exc.method,
+                exc.retry_after_seconds,
+                exc.description,
+            )
         except Exception:
             logger.exception("Telegram bot configuration failed")
 
@@ -597,8 +617,22 @@ class TelegramService:
                 f"/bot{settings.telegram_bot_token}/{method}",
                 json=payload,
             )
-        response.raise_for_status()
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if response.status_code == 429:
+                parameters = data.get("parameters") if isinstance(data, dict) and isinstance(data.get("parameters"), dict) else {}
+                retry_after = parameters.get("retry_after")
+                raise TelegramRateLimitError(
+                    method=method,
+                    retry_after_seconds=int(retry_after) if retry_after not in (None, "") else None,
+                    description=(data.get("description") if isinstance(data, dict) else None),
+                ) from exc
+            raise
         if not isinstance(data, dict) or not data.get("ok"):
             description = (data or {}).get("description") if isinstance(data, dict) else None
             raise RuntimeError(f"Telegram API request failed: {description or 'unknown error'}")

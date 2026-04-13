@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 import src.services.telegram_service as telegram_module
-from src.services.telegram_service import TelegramService
+from src.services.telegram_service import TelegramRateLimitError, TelegramService
 
 
 class _FakeSupabase:
@@ -179,3 +180,44 @@ def test_notify_user_respects_disabled_preference(monkeypatch: pytest.MonkeyPatc
 
     assert delivered is False
     assert sent_messages == []
+
+
+def test_configure_bot_skips_set_webhook_when_url_matches(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = TelegramService(supabase=_FakeSupabase())
+    requests: list[tuple[str, dict[str, Any]]] = []
+
+    async def fake_telegram_request(method: str, payload: dict[str, Any], *, settings) -> dict[str, Any]:
+        del settings
+        requests.append((method, dict(payload)))
+        if method == "getWebhookInfo":
+            return {"url": "https://api.example.com/api/telegram/webhook"}
+        return {}
+
+    monkeypatch.setattr(service, "_telegram_request", fake_telegram_request)
+
+    asyncio.run(service.configure_bot(settings=_fake_settings()))
+
+    assert requests == [
+        ("setMyCommands", {"commands": telegram_module.BOT_COMMANDS}),
+        ("getWebhookInfo", {}),
+    ]
+
+
+def test_configure_bot_logs_warning_on_rate_limit(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    service = TelegramService(supabase=_FakeSupabase())
+
+    async def fake_telegram_request(method: str, payload: dict[str, Any], *, settings) -> dict[str, Any]:
+        del payload, settings
+        if method == "setWebhook":
+            raise TelegramRateLimitError(method=method, retry_after_seconds=30, description="Too Many Requests: retry later")
+        if method == "getWebhookInfo":
+            return {"url": ""}
+        return {}
+
+    monkeypatch.setattr(service, "_telegram_request", fake_telegram_request)
+
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(service.configure_bot(settings=_fake_settings()))
+
+    assert "Telegram bot configuration rate limited" in caplog.text
+    assert "setWebhook" in caplog.text
