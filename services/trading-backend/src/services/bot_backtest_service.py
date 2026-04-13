@@ -238,6 +238,7 @@ class BotBacktestService:
         wallet_address: str,
         user_id: str,
         bot_id: str | None = None,
+        limit: int | None = None,
     ) -> list[dict[str, Any]]:
         del db, user_id
         filters: dict[str, Any] = {"wallet_address": wallet_address}
@@ -248,6 +249,7 @@ class BotBacktestService:
             columns=BACKTEST_RUN_SUMMARY_COLUMNS,
             filters=filters,
             order="completed_at.desc",
+            limit=limit,
         )
         return [self.serialize_run_summary(row) for row in rows]
 

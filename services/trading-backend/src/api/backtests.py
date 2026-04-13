@@ -16,6 +16,9 @@ router = APIRouter(prefix="/api/backtests", tags=["backtests"])
 bot_backtest_service = BotBacktestService()
 bot_builder_service = BotBuilderService()
 ai_job_service = AiJobService()
+ACTIVE_BACKTEST_JOB_STATUSES: list[AiJobStatus] = ["queued", "running", "failed"]
+DEFAULT_BACKTEST_RUN_HISTORY_LIMIT = 50
+BOOTSTRAP_BACKTEST_RUN_HISTORY_LIMIT = 40
 
 
 class BacktestAssumptionConfigRequest(BaseModel):
@@ -195,6 +198,7 @@ async def list_backtest_run_jobs(
     resolved_wallet = _resolve_wallet(user, wallet_address)
     jobs = ai_job_service.list_jobs(
         job_type="backtest_run",
+        statuses=ACTIVE_BACKTEST_JOB_STATUSES,
         wallet_addresses=[resolved_wallet],
         order="created_at.desc",
         limit=limit,
@@ -239,6 +243,7 @@ async def get_backtest_run_job(
 def list_backtest_runs(
     wallet_address: str | None = Query(default=None, min_length=8),
     bot_id: str | None = Query(default=None),
+    limit: int = Query(default=DEFAULT_BACKTEST_RUN_HISTORY_LIMIT, ge=1, le=200),
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> list[BacktestRunSummaryResponse]:
@@ -250,6 +255,7 @@ def list_backtest_runs(
             wallet_address=resolved_wallet,
             user_id=resolved_user_id,
             bot_id=bot_id,
+            limit=limit,
         )
     ]
 
@@ -268,9 +274,11 @@ def get_backtests_bootstrap(
         wallet_address=resolved_wallet,
         user_id=resolved_user_id,
         bot_id=bot_id,
+        limit=BOOTSTRAP_BACKTEST_RUN_HISTORY_LIMIT,
     )
     jobs = ai_job_service.list_jobs(
         job_type="backtest_run",
+        statuses=ACTIVE_BACKTEST_JOB_STATUSES,
         wallet_addresses=[resolved_wallet],
         order="created_at.desc",
         limit=10,

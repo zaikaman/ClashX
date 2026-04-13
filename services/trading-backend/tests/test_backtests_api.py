@@ -106,9 +106,11 @@ def test_create_backtest_run_job_returns_queued_job(monkeypatch) -> None:
 
 
 def test_list_backtest_run_jobs_returns_recent_wallet_jobs(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "src.api.backtests.ai_job_service.list_jobs",
-        lambda **kwargs: [
+    captured: dict[str, object] = {}
+
+    def fake_list_jobs(**kwargs):
+        captured["kwargs"] = kwargs
+        return [
             {
                 "id": "job-2",
                 "job_type": "backtest_run",
@@ -119,11 +121,16 @@ def test_list_backtest_run_jobs_returns_recent_wallet_jobs(monkeypatch) -> None:
                 "updated_at": "2026-04-10T00:00:00+00:00",
                 "completed_at": None,
             }
-        ],
+        ]
+
+    monkeypatch.setattr(
+        "src.api.backtests.ai_job_service.list_jobs",
+        fake_list_jobs,
     )
 
     response = asyncio.run(list_backtest_run_jobs(wallet_address="wallet-abc", limit=10, user=_job_user()))
 
+    assert captured["kwargs"]["statuses"] == ["queued", "running", "failed"]
     assert len(response) == 1
     assert response[0].id == "job-2"
     assert response[0].status == "queued"
@@ -198,13 +205,21 @@ def test_get_backtest_run_job_returns_completed_result(monkeypatch) -> None:
 
 def test_get_backtests_bootstrap_includes_recent_backtest_jobs(monkeypatch) -> None:
     monkeypatch.setattr("src.api.backtests.bot_builder_service.list_bots", lambda db, wallet_address: [])
-    monkeypatch.setattr(
-        "src.api.backtests.bot_backtest_service.list_runs",
-        lambda db, wallet_address, user_id, bot_id: [],
-    )
-    monkeypatch.setattr(
-        "src.api.backtests.ai_job_service.list_jobs",
-        lambda **kwargs: [
+    captured_runs: dict[str, object] = {}
+    captured_jobs: dict[str, object] = {}
+
+    def fake_list_runs(db, wallet_address, user_id, bot_id, limit):
+        captured_runs["kwargs"] = {
+            "wallet_address": wallet_address,
+            "user_id": user_id,
+            "bot_id": bot_id,
+            "limit": limit,
+        }
+        return []
+
+    def fake_list_jobs(**kwargs):
+        captured_jobs["kwargs"] = kwargs
+        return [
             {
                 "id": "job-3",
                 "job_type": "backtest_run",
@@ -221,11 +236,21 @@ def test_get_backtests_bootstrap_includes_recent_backtest_jobs(monkeypatch) -> N
                 "updated_at": "2026-04-10T00:00:02+00:00",
                 "completed_at": None,
             }
-        ],
+        ]
+
+    monkeypatch.setattr(
+        "src.api.backtests.bot_backtest_service.list_runs",
+        fake_list_runs,
+    )
+    monkeypatch.setattr(
+        "src.api.backtests.ai_job_service.list_jobs",
+        fake_list_jobs,
     )
 
     response = get_backtests_bootstrap(wallet_address="wallet-abc", bot_id=None, db=None, user=_job_user())
 
+    assert captured_runs["kwargs"]["limit"] == 40
+    assert captured_jobs["kwargs"]["statuses"] == ["queued", "running", "failed"]
     assert response.jobs[0].id == "job-3"
     assert response.jobs[0].status == "running"
     assert response.jobs[0].progress["progress"] == 22
