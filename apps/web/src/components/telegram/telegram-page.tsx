@@ -2,13 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { motion } from "framer-motion";
 import {
   AlertTriangle,
   BellRing,
   CheckCircle2,
   ExternalLink,
-  RadioTower,
   RefreshCcw,
   Send,
   ShieldCheck,
@@ -248,20 +246,56 @@ export function TelegramPage() {
 
   return (
     <main className="shell grid gap-6 pb-10 md:gap-8 md:pb-12">
-      <section className="grid gap-6 overflow-hidden rounded-[2.4rem] border border-[rgba(255,255,255,0.06)] bg-[radial-gradient(circle_at_top_left,rgba(54,167,255,0.16),transparent_32%),linear-gradient(180deg,#171a1d_0%,#0f1113_100%)] p-6 md:p-8 xl:grid-cols-[1.15fr_0.85fr]">
-        <div className="grid gap-5">
-          <div className="inline-flex w-fit items-center gap-2 rounded-full border border-[rgba(84,180,255,0.28)] bg-[rgba(48,125,184,0.16)] px-4 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#9fd3ff]">
-            <RadioTower className="h-3.5 w-3.5" />
-            Telegram Relay
+      <section className="flex flex-wrap items-end justify-between gap-4 border-b border-[rgba(255,255,255,0.08)] pb-6 md:pb-8">
+        <div className="grid gap-2">
+          <h1 className="font-mono text-[clamp(2rem,4vw,2.8rem)] font-bold uppercase tracking-tight text-neutral-50">
+            Telegram
+          </h1>
+          <p className="max-w-2xl text-sm leading-7 text-neutral-400">
+            Link one wallet, send runtime alerts there, and keep Telegram ready for fast checks.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={handleGenerateLink}
+            disabled={!authenticated || !walletAddress || actionLoading !== null}
+            className="rounded-full bg-[#dce85d] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {actionLoading === "link" ? "Refreshing link..." : "Generate secure link"}
+          </button>
+          <Link
+            href={secureLinkHref ?? "#"}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-2 rounded-full border border-[rgba(84,180,255,0.28)] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#9fd3ff] transition hover:border-[#54b4ff] hover:bg-[rgba(48,125,184,0.14)]"
+          >
+            Open bot
+            <ExternalLink className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
+        <article className="grid gap-5 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div className="grid gap-1">
+              <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#9fd3ff]">
+                Setup path
+              </span>
+              <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
+                Link the wallet once, then let the bot do the chasing
+              </h2>
+            </div>
+            <span className="text-xs uppercase tracking-[0.16em] text-neutral-500">
+              Secure link: {formatTimeUntil(status?.link_expires_at ?? null)}
+            </span>
           </div>
-          <div className="grid gap-3">
-            <h1 className="max-w-3xl font-mono text-[clamp(2.4rem,5vw,4.2rem)] font-bold uppercase tracking-[-0.05em] text-neutral-50">
-              Pipe runtime pressure straight into the chat you actually watch.
-            </h1>
-            <p className="max-w-2xl text-sm leading-7 text-neutral-300">
-              Link one wallet to the bot, route critical runtime alerts there, and use Telegram as a fast command desk for fleet status, positions, and copy-trading context.
-            </p>
-          </div>
+
+          <p className="max-w-3xl text-sm leading-7 text-neutral-400">
+            Keep the chat link healthy, make sure the webhook is live, and decide which notifications are worth an interruption.
+          </p>
+
           <div className="flex flex-wrap gap-3">
             <button
               type="button"
@@ -269,26 +303,21 @@ export function TelegramPage() {
               disabled={!authenticated || !walletAddress || actionLoading !== null}
               className="rounded-full bg-[#dce85d] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {actionLoading === "link" ? "Refreshing link..." : "Generate secure link"}
+              {actionLoading === "link" ? "Refreshing link..." : "Refresh secure link"}
             </button>
             <Link
-              href={secureLinkHref ?? "#"}
+              href={secureLinkHref ?? status?.bot_link ?? "#"}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-2 rounded-full border border-[rgba(84,180,255,0.28)] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#9fd3ff] transition hover:border-[#54b4ff] hover:bg-[rgba(48,125,184,0.14)]"
             >
-              Open bot
-              <ExternalLink className="h-3.5 w-3.5" />
+              Open Telegram bot
+              <Send className="h-3.5 w-3.5" />
             </Link>
           </div>
-        </div>
+        </article>
 
-        <motion.aside
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
-          className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.08)] bg-[rgba(8,10,12,0.7)] p-5"
-        >
+        <aside className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.08)] bg-[#141618] p-5 md:p-6">
           <div className="flex items-center justify-between gap-3">
             <div className="grid gap-1">
               <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#9fd3ff]">
@@ -311,10 +340,8 @@ export function TelegramPage() {
 
           <div className="grid grid-cols-3 gap-3">
             {[0, 1, 2].map((index) => (
-              <motion.div
+              <div
                 key={index}
-                animate={{ opacity: status?.connected ? [0.35, 1, 0.35] : [0.2, 0.45, 0.2] }}
-                transition={{ duration: 1.8, delay: index * 0.12, repeat: Infinity, ease: "easeInOut" }}
                 className={`h-24 rounded-[1.2rem] border ${
                   status?.connected
                     ? "border-[rgba(84,180,255,0.24)] bg-[linear-gradient(180deg,rgba(84,180,255,0.28),rgba(84,180,255,0.06))]"
@@ -350,7 +377,7 @@ export function TelegramPage() {
                 : "Generate a secure link, open the bot, and press Start from Telegram to bind this wallet."}
             </p>
           </div>
-        </motion.aside>
+        </aside>
       </section>
 
       {ready && !authenticated ? (
@@ -410,12 +437,12 @@ export function TelegramPage() {
             <article className="grid gap-5 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
               <div className="flex flex-wrap items-end justify-between gap-3">
                 <div className="grid gap-1">
-                  <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#9fd3ff]">
-                    Setup path
-                  </span>
-                  <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
-                    Link the wallet once, then let the bot do the chasing
-                  </h2>
+                <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#9fd3ff]">
+                  Delivery checks
+                </span>
+                <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
+                  Keep the route healthy
+                </h2>
                 </div>
                 <span className="text-xs uppercase tracking-[0.16em] text-neutral-500">
                   Secure link: {formatTimeUntil(status.link_expires_at)}
