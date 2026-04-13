@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   BellRing,
   CheckCircle2,
+  ChevronRight,
   ExternalLink,
   RefreshCcw,
   Send,
@@ -61,6 +62,41 @@ function preferenceChanged(
     left.execution_failures !== right.execution_failures ||
     left.copy_activity !== right.copy_activity ||
     left.trade_activity !== right.trade_activity
+  );
+}
+
+/* ─── Toggle Switch ──────────────────────────────────────────── */
+function Toggle({
+  checked,
+  onChange,
+  id,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  id?: string;
+}) {
+  return (
+    <button
+      id={id}
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className="relative inline-flex h-[22px] w-[40px] shrink-0 cursor-pointer items-center rounded-full transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#dce85d]/40"
+      style={{
+        background: checked
+          ? "linear-gradient(135deg, #dce85d 0%, #c5d048 100%)"
+          : "rgba(255,255,255,0.08)",
+      }}
+    >
+      <span
+        className="pointer-events-none block h-[16px] w-[16px] rounded-full shadow-sm transition-transform duration-200"
+        style={{
+          transform: checked ? "translateX(20px)" : "translateX(3px)",
+          background: checked ? "#090a0a" : "rgba(255,255,255,0.4)",
+        }}
+      />
+    </button>
   );
 }
 
@@ -252,249 +288,289 @@ export function TelegramPage() {
     }
   }
 
-  return (
-    <main className="shell grid gap-6 pb-10 md:gap-8 md:pb-12">
-      <section className="flex flex-wrap items-end justify-between gap-4 border-b border-[rgba(255,255,255,0.08)] pb-6 md:pb-8">
-        <div className="grid gap-2">
-          <h1 className="font-mono text-[clamp(2rem,4vw,2.8rem)] font-bold uppercase tracking-tight text-neutral-50">
-            Telegram
-          </h1>
-          <p className="max-w-2xl text-sm leading-7 text-neutral-400">
-            Link one wallet, send runtime alerts there, and keep Telegram ready for fast checks.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-3">
-          <button
-            type="button"
-            onClick={handleGenerateLink}
-            disabled={!authenticated || !walletAddress || actionLoading !== null}
-            className="rounded-full bg-[#dce85d] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {actionLoading === "link" ? "Refreshing link..." : "Generate secure link"}
-          </button>
-          <Link
-            href={secureLinkHref ?? "#"}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-2 rounded-full border border-[rgba(84,180,255,0.28)] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#9fd3ff] transition hover:border-[#54b4ff] hover:bg-[rgba(48,125,184,0.14)]"
-          >
-            Open bot
-            <ExternalLink className="h-3.5 w-3.5" />
-          </Link>
-        </div>
-      </section>
+  /* ─── Notification items ────────────────────────────────────── */
+  const notifItems = [
+    {
+      key: "critical_alerts",
+      label: "Critical alerts",
+      detail: "Runtime stops, authorization, kill switches",
+      icon: ShieldCheck,
+      accent: "#f3b86b",
+    },
+    {
+      key: "execution_failures",
+      label: "Execution failures",
+      detail: "Failed actions with error context",
+      icon: Zap,
+      accent: "#9fd3ff",
+    },
+    {
+      key: "copy_activity",
+      label: "Copy trading",
+      detail: "Relationship and scale updates",
+      icon: BellRing,
+      accent: "#dce85d",
+    },
+    {
+      key: "trade_activity",
+      label: "Trade activity",
+      detail: "Entries, TP/SL, manual closes, hits",
+      icon: Send,
+      accent: "#74b97f",
+    },
+  ];
 
-      <section className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
-        <article className="grid gap-5 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div className="grid gap-1">
-              <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#9fd3ff]">
-                Setup path
-              </span>
-              <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
-                Link the wallet once, then let the bot do the chasing
-              </h2>
+  /* ─── Message preview data ──────────────────────────────────── */
+  const messagePreviews = [
+    {
+      title: "Critical runtime alert",
+      body: "Alpha Trend stopped. Reason: allocated drawdown budget breached.",
+      accent: "#f3b86b",
+    },
+    {
+      title: "Execution failure",
+      body: "Mean Revert failed place market order on BTC. Reason: Pacifica rejected the order.",
+      accent: "#9fd3ff",
+    },
+    {
+      title: "Copy trading update",
+      body: "Relationship status: paused. Scale: 2000 bps.",
+      accent: "#74b97f",
+    },
+  ];
+
+  return (
+    <main className="shell grid gap-0 pb-10 md:pb-16">
+
+      {/* ── Hero banner ───────────────────────────────────────── */}
+      <section className="relative overflow-hidden rounded-b-[2.4rem] pb-10 pt-2 md:pb-14">
+        {/* Ambient glow */}
+        <div
+          className="pointer-events-none absolute -right-20 -top-20 h-[360px] w-[360px] rounded-full opacity-20 blur-[100px]"
+          style={{ background: "radial-gradient(circle, #dce85d 0%, transparent 70%)" }}
+        />
+
+        <div className="relative z-10 flex flex-col gap-8 md:flex-row md:items-end md:justify-between">
+          {/* Left: icon + text */}
+          <div className="flex items-start gap-5">
+            {/* Telegram icon bubble */}
+            <div
+              className="flex h-[4.5rem] w-[4.5rem] shrink-0 items-center justify-center rounded-[1.4rem]"
+              style={{
+                background: "linear-gradient(135deg, rgba(84,180,255,0.14) 0%, rgba(84,180,255,0.04) 100%)",
+                border: "1px solid rgba(84,180,255,0.18)",
+              }}
+            >
+              <Send className="h-7 w-7 text-[#9fd3ff]" style={{ transform: "rotate(-12deg)" }} />
             </div>
-            <span className="text-xs uppercase tracking-[0.16em] text-neutral-500">
-              Secure link: {formatTimeUntil(status?.link_expires_at ?? null)}
-            </span>
+            <div className="grid gap-2 pt-1">
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="font-mono text-[clamp(2rem,4vw,2.8rem)] font-bold uppercase tracking-tight text-neutral-50">
+                  Telegram
+                </h1>
+                {/* Inline connection badge */}
+                <span
+                  className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.14em]"
+                  style={{
+                    background: status?.connected
+                      ? "rgba(116,185,127,0.1)"
+                      : "rgba(255,255,255,0.04)",
+                    border: `1px solid ${status?.connected ? "rgba(116,185,127,0.25)" : "rgba(255,255,255,0.08)"}`,
+                    color: status?.connected ? "#9fcca7" : "#71717a",
+                  }}
+                >
+                  <span
+                    className="h-[5px] w-[5px] rounded-full"
+                    style={{
+                      background: status?.connected ? "#74b97f" : "#52525b",
+                      boxShadow: status?.connected ? "0 0 6px #74b97f" : "none",
+                    }}
+                  />
+                  {status?.connected
+                    ? status.telegram_username
+                      ? `@${status.telegram_username}`
+                      : "Connected"
+                    : "Not linked"}
+                </span>
+              </div>
+              <p className="max-w-lg text-sm leading-7 text-neutral-400">
+                Link one wallet, send runtime alerts there, and keep Telegram ready for fast checks.
+              </p>
+            </div>
           </div>
 
-          <p className="max-w-3xl text-sm leading-7 text-neutral-400">
-            Keep the chat link healthy, make sure the webhook is live, and decide which notifications are worth an interruption.
-          </p>
-
-          <div className="flex flex-wrap gap-3">
+          {/* Right: actions */}
+          <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
               onClick={handleGenerateLink}
               disabled={!authenticated || !walletAddress || actionLoading !== null}
               className="rounded-full bg-[#dce85d] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {actionLoading === "link" ? "Refreshing link..." : "Refresh secure link"}
+              {actionLoading === "link" ? "Refreshing…" : "Generate secure link"}
             </button>
             <Link
-              href={secureLinkHref ?? status?.bot_link ?? "#"}
+              href={secureLinkHref ?? "#"}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-2 rounded-full border border-[rgba(84,180,255,0.28)] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#9fd3ff] transition hover:border-[#54b4ff] hover:bg-[rgba(48,125,184,0.14)]"
             >
-              Open Telegram bot
-              <Send className="h-3.5 w-3.5" />
+              Open bot
+              <ExternalLink className="h-3.5 w-3.5" />
             </Link>
-          </div>
-        </article>
-
-        <aside className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.08)] bg-[#141618] p-5 md:p-6">
-          <div className="flex items-center justify-between gap-3">
-            <div className="grid gap-1">
-              <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#9fd3ff]">
-                Delivery line
-              </span>
-              <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
-                {status?.connected ? "Connected" : "Awaiting link"}
-              </h2>
-            </div>
             <button
               type="button"
               onClick={refresh}
               disabled={actionLoading !== null || !authenticated}
-              className="rounded-full border border-[rgba(255,255,255,0.12)] p-2 text-neutral-300 transition hover:border-white hover:text-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-full border border-[rgba(255,255,255,0.1)] p-2.5 text-neutral-400 transition hover:border-white/20 hover:text-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
               aria-label="Refresh Telegram status"
             >
-              <RefreshCcw className={`h-4 w-4 ${actionLoading === "refresh" ? "animate-spin" : ""}`} />
+              <RefreshCcw className={`h-3.5 w-3.5 ${actionLoading === "refresh" ? "animate-spin" : ""}`} />
             </button>
           </div>
+        </div>
 
-          <div className="grid grid-cols-3 gap-3">
-            {[0, 1, 2].map((index) => (
-              <div
-                key={index}
-                className={`h-24 rounded-[1.2rem] border ${
-                  status?.connected
-                    ? "border-[rgba(84,180,255,0.24)] bg-[linear-gradient(180deg,rgba(84,180,255,0.28),rgba(84,180,255,0.06))]"
-                    : "border-[rgba(255,255,255,0.08)] bg-[linear-gradient(180deg,rgba(255,255,255,0.1),rgba(255,255,255,0.02))]"
-                }`}
-              />
-            ))}
-          </div>
-
-          <div className="grid gap-3 rounded-[1.6rem] border border-[rgba(255,255,255,0.06)] bg-[#14171a] p-4">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">
-                Linked chat
-              </span>
-              <span
-                className={`rounded-full px-2.5 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.16em] ${
-                  status?.connected
-                    ? "bg-[rgba(116,185,127,0.12)] text-[#9fcca7]"
-                    : "bg-[rgba(255,255,255,0.06)] text-neutral-400"
-                }`}
-              >
-                {status?.connected ? "Live" : "Not linked"}
-              </span>
-            </div>
-            <div className="font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">
-              {status?.telegram_username
-                ? `@${status.telegram_username}`
-                : status?.telegram_first_name || "No chat linked yet"}
-            </div>
-            <p className="text-sm leading-6 text-neutral-400">
-              {status?.connected
-                ? `${status.chat_label ?? "Private chat"} linked on ${formatDateTime(status.connected_at)}`
-                : "Generate a secure link, open the bot, and press Start from Telegram to bind this wallet."}
-            </p>
-          </div>
-        </aside>
+        {/* Divider */}
+        <div className="mt-8 h-px w-full" style={{ background: "linear-gradient(90deg, rgba(84,180,255,0.2) 0%, rgba(255,255,255,0.06) 50%, transparent 100%)" }} />
       </section>
 
+      {/* ── Notices ───────────────────────────────────────────── */}
+      {error ? (
+        <div className="mx-0 mb-6 rounded-[1.2rem] border border-[#f3b86b]/25 bg-[#f3b86b]/8 px-5 py-3.5 text-sm text-neutral-100">
+          {error}
+        </div>
+      ) : null}
+      {notice ? (
+        <div className="mx-0 mb-6 rounded-[1.2rem] border border-[#74b97f]/20 bg-[#74b97f]/8 px-5 py-3.5 text-sm text-neutral-100">
+          {notice}
+        </div>
+      ) : null}
+
+      {/* ── Auth gate ─────────────────────────────────────────── */}
       {ready && !authenticated ? (
-        <article className="flex flex-wrap items-center justify-between gap-4 rounded-[1.8rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] px-5 py-5">
+        <section className="mb-8 flex flex-col items-start gap-5 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-6 sm:flex-row sm:items-center sm:justify-between">
           <div className="grid gap-1">
-            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-400">
+            <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">
               Sign in required
             </span>
-            <p className="max-w-3xl text-sm leading-7 text-neutral-400">
-              Connect the trading wallet you want Telegram to represent before you generate a secure link or edit delivery rules.
+            <p className="max-w-xl text-sm leading-7 text-neutral-400">
+              Connect the trading wallet you want Telegram to represent before generating a secure link or editing delivery rules.
             </p>
           </div>
           <button
             type="button"
             onClick={login}
-            className="rounded-full bg-[#dce85d] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d]"
+            className="shrink-0 rounded-full bg-[#dce85d] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d]"
           >
             Sign in to link Telegram
           </button>
-        </article>
-      ) : null}
-
-      {loading ? (
-        <section className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-          <div className="skeleton h-[22rem] rounded-[2rem]" />
-          <div className="skeleton h-[22rem] rounded-[2rem]" />
         </section>
       ) : null}
 
-      {error ? (
-        <article className="rounded-[1.6rem] border border-[#f3b86b]/30 bg-[#f3b86b]/10 px-5 py-4 text-sm text-neutral-50">
-          {error}
-        </article>
+      {/* ── Loading skeleton ──────────────────────────────────── */}
+      {loading ? (
+        <div className="grid gap-6">
+          <div className="skeleton h-[14rem] rounded-[2rem]" />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="skeleton h-[10rem] rounded-[1.6rem]" />
+            <div className="skeleton h-[10rem] rounded-[1.6rem]" />
+          </div>
+        </div>
       ) : null}
 
-      {notice ? (
-        <article className="rounded-[1.6rem] border border-[#74b97f]/25 bg-[#74b97f]/10 px-5 py-4 text-sm text-neutral-50">
-          {notice}
-        </article>
+      {/* ── Webhook warning ───────────────────────────────────── */}
+      {status && !status.webhook_ready ? (
+        <section className="mb-8 rounded-[1.6rem] border border-[rgba(84,180,255,0.18)] bg-[rgba(48,125,184,0.08)] px-6 py-5">
+          <div className="mb-2 inline-flex items-center gap-2 text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#9fd3ff]">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            Backend setup still needed
+          </div>
+          <p className="max-w-3xl text-sm leading-7 text-neutral-300">
+            Incoming Telegram messages only reach ClashX after the backend has both <code className="rounded bg-white/5 px-1.5 py-0.5 text-[0.75rem]">TELEGRAM_BOT_TOKEN</code> and <code className="rounded bg-white/5 px-1.5 py-0.5 text-[0.75rem]">TELEGRAM_WEBHOOK_URL</code>. Point the webhook URL at <code className="rounded bg-white/5 px-1.5 py-0.5 text-[0.75rem]">/api/telegram/webhook</code> on the FastAPI server, then restart.
+          </p>
+        </section>
       ) : null}
 
       {status ? (
         <>
-          {!status.webhook_ready ? (
-            <article className="grid gap-2 rounded-[1.8rem] border border-[rgba(84,180,255,0.2)] bg-[rgba(48,125,184,0.12)] px-5 py-5">
-              <div className="inline-flex items-center gap-2 text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#9fd3ff]">
-                <AlertTriangle className="h-3.5 w-3.5" />
-                Backend setup still needed
-              </div>
-              <p className="max-w-3xl text-sm leading-7 text-neutral-200">
-                Incoming Telegram messages only reach ClashX after the backend has both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_URL`. Point the webhook URL at `/api/telegram/webhook` on the FastAPI server, then restart the backend so it can sync the webhook automatically.
-              </p>
-            </article>
-          ) : null}
+          {/* ═══════════════════════════════════════════════════════ */}
+          {/* SETUP TIMELINE + CONNECTION CARD                       */}
+          {/* ═══════════════════════════════════════════════════════ */}
+          <section className="mb-10 grid gap-6 lg:grid-cols-[1fr_340px]">
 
-          <section className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
-            <article className="grid gap-5 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
-              <div className="flex flex-wrap items-end justify-between gap-3">
-                <div className="grid gap-1">
-                <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#9fd3ff]">
-                  Delivery checks
-                </span>
-                <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
-                  Keep the route healthy
-                </h2>
+            {/* ── Vertical timeline ──────────────────────────────── */}
+            <article className="rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-6 md:p-8">
+              <div className="mb-6 flex items-end justify-between gap-4">
+                <div>
+                  <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#9fd3ff]">
+                    Setup path
+                  </span>
+                  <h2 className="mt-1 font-mono text-xl font-bold uppercase tracking-tight text-neutral-50 md:text-2xl">
+                    Integration checklist
+                  </h2>
                 </div>
-                <span className="text-xs uppercase tracking-[0.16em] text-neutral-500">
-                  Secure link: {formatTimeUntil(status.link_expires_at)}
+                <span className="whitespace-nowrap text-[0.6rem] uppercase tracking-[0.14em] text-neutral-500">
+                  Link: {formatTimeUntil(status.link_expires_at)}
                 </span>
               </div>
 
-              <div className="grid gap-3">
-                {setupState.map((step) => (
-                  <article
-                    key={step.label}
-                    className="grid gap-2 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-4"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="inline-flex items-center gap-2 text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-500">
-                        {step.ready ? (
-                          <CheckCircle2 className="h-3.5 w-3.5 text-[#74b97f]" />
-                        ) : (
-                          <AlertTriangle className="h-3.5 w-3.5 text-[#f3b86b]" />
-                        )}
-                        {step.label}
-                      </div>
-                      <span
-                        className={`rounded-full px-2.5 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.16em] ${
-                          step.ready
-                            ? "bg-[rgba(116,185,127,0.12)] text-[#9fcca7]"
-                            : "bg-[rgba(243,184,107,0.12)] text-[#f3b86b]"
-                        }`}
+              {/* Timeline steps */}
+              <div className="relative pl-8">
+                {/* Vertical connector line */}
+                <div
+                  className="absolute bottom-4 left-[11px] top-4 w-px"
+                  style={{ background: "linear-gradient(180deg, rgba(84,180,255,0.3) 0%, rgba(255,255,255,0.06) 100%)" }}
+                />
+
+                <div className="grid gap-0">
+                  {setupState.map((step, i) => (
+                    <div key={step.label} className="relative flex gap-4 pb-6 last:pb-0">
+                      {/* Dot */}
+                      <div
+                        className="absolute -left-8 top-[3px] flex h-[22px] w-[22px] items-center justify-center rounded-full"
+                        style={{
+                          background: step.ready
+                            ? "rgba(116,185,127,0.15)"
+                            : "rgba(243,184,107,0.1)",
+                          border: `1.5px solid ${step.ready ? "rgba(116,185,127,0.4)" : "rgba(243,184,107,0.3)"}`,
+                        }}
                       >
-                        {step.ready ? "Ready" : "Pending"}
-                      </span>
+                        {step.ready ? (
+                          <CheckCircle2 className="h-3 w-3 text-[#74b97f]" />
+                        ) : (
+                          <span className="font-mono text-[0.5rem] font-bold text-[#f3b86b]">{i + 1}</span>
+                        )}
+                      </div>
+                      {/* Content */}
+                      <div className="grid gap-1 pt-px">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-neutral-50">{step.label}</span>
+                          <span
+                            className="rounded-full px-2 py-0.5 text-[0.5rem] font-semibold uppercase tracking-[0.12em]"
+                            style={{
+                              background: step.ready ? "rgba(116,185,127,0.1)" : "rgba(243,184,107,0.08)",
+                              color: step.ready ? "#9fcca7" : "#f3b86b",
+                            }}
+                          >
+                            {step.ready ? "Ready" : "Pending"}
+                          </span>
+                        </div>
+                        <p className="text-[0.78rem] leading-6 text-neutral-500">{step.detail}</p>
+                      </div>
                     </div>
-                    <p className="text-sm leading-6 text-neutral-400">{step.detail}</p>
-                  </article>
-                ))}
+                  ))}
+                </div>
               </div>
 
-              <div className="flex flex-wrap gap-3">
+              {/* Action row */}
+              <div className="mt-6 flex flex-wrap gap-3 border-t border-[rgba(255,255,255,0.05)] pt-6">
                 <button
                   type="button"
                   onClick={handleGenerateLink}
                   disabled={actionLoading !== null}
                   className="rounded-full bg-[#dce85d] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {actionLoading === "link" ? "Refreshing link..." : "Refresh secure link"}
+                  {actionLoading === "link" ? "Refreshing…" : "Refresh secure link"}
                 </button>
                 <Link
                   href={secureLinkHref ?? status.bot_link}
@@ -508,190 +584,225 @@ export function TelegramPage() {
               </div>
             </article>
 
-            <article className="grid gap-5 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
-              <div className="grid gap-1">
-                <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]">
-                  Live controls
+            {/* ── Connection card (sidebar) ──────────────────────── */}
+            <aside className="flex flex-col gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-6">
+              <div>
+                <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#9fd3ff]">
+                  Linked chat
                 </span>
-                <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
-                  Decide what deserves a Telegram interruption
+                <h2 className="mt-1 font-mono text-xl font-bold uppercase tracking-tight text-neutral-50">
+                  {status.connected ? "Connected" : "Awaiting link"}
                 </h2>
               </div>
 
-              <div className="grid gap-4 rounded-[1.6rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-4">
-                <label className="flex items-center justify-between gap-4">
-                  <div className="grid gap-1">
-                    <span className="text-sm font-medium text-neutral-50">Master delivery switch</span>
-                    <span className="text-xs leading-5 text-neutral-500">
-                      Pause every Telegram push without unlinking the chat.
-                    </span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={notificationsEnabled}
-                    onChange={(event) => setNotificationsEnabled(event.target.checked)}
-                    className="h-5 w-5 rounded border-neutral-600 bg-transparent text-[#54b4ff] focus:ring-[#54b4ff]"
-                  />
-                </label>
-
-                {prefs ? (
-                  <div className="grid gap-3">
-                    {[
-                      {
-                        key: "critical_alerts",
-                        label: "Critical alerts",
-                        detail: "Runtime stops, missing Pacifica authorization, and portfolio kill switches.",
-                        icon: ShieldCheck,
-                      },
-                      {
-                        key: "execution_failures",
-                        label: "Execution failures",
-                        detail: "Failed runtime actions with the symbol and error reason attached.",
-                        icon: Zap,
-                      },
-                      {
-                        key: "copy_activity",
-                        label: "Copy trading updates",
-                        detail: "Relationship status changes and scale updates from the copy desk.",
-                        icon: BellRing,
-                      },
-                      {
-                        key: "trade_activity",
-                        label: "Trade activity",
-                        detail: "Successful entries, TP/SL order placement, manual closes, and actual TP/SL hits.",
-                        icon: Send,
-                      },
-                    ].map((item) => {
-                      const Icon = item.icon;
-                      return (
-                        <label
-                          key={item.key}
-                          className="flex items-center justify-between gap-4 rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#14171a] px-4 py-4"
-                        >
-                          <div className="flex items-start gap-3">
-                            <div className="mt-0.5 rounded-full border border-[rgba(84,180,255,0.22)] bg-[rgba(48,125,184,0.12)] p-2 text-[#9fd3ff]">
-                              <Icon className="h-4 w-4" />
-                            </div>
-                            <div className="grid gap-1">
-                              <span className="text-sm font-medium text-neutral-50">{item.label}</span>
-                              <span className="text-xs leading-5 text-neutral-500">{item.detail}</span>
-                            </div>
-                          </div>
-                          <input
-                            type="checkbox"
-                            checked={prefs[item.key as keyof TelegramNotificationPrefs]}
-                            onChange={(event) =>
-                              setPrefs((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      [item.key]: event.target.checked,
-                                    }
-                                  : current,
-                              )
-                            }
-                            className="h-5 w-5 rounded border-neutral-600 bg-transparent text-[#54b4ff] focus:ring-[#54b4ff]"
-                          />
-                        </label>
-                      );
-                    })}
-                  </div>
-                ) : null}
-
-                <div className="flex flex-wrap gap-3 pt-1">
-                  <button
-                    type="button"
-                    onClick={handleSavePreferences}
-                    disabled={!dirty || actionLoading !== null}
-                    className="rounded-full bg-[#dce85d] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d] disabled:cursor-not-allowed disabled:opacity-50"
+              {/* Status display */}
+              <div
+                className="flex-1 rounded-[1.4rem] p-5"
+                style={{
+                  background: status.connected
+                    ? "linear-gradient(135deg, rgba(84,180,255,0.06) 0%, rgba(116,185,127,0.04) 100%)"
+                    : "rgba(255,255,255,0.02)",
+                  border: `1px solid ${status.connected ? "rgba(84,180,255,0.12)" : "rgba(255,255,255,0.05)"}`,
+                }}
+              >
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <span
+                    className="rounded-full px-2.5 py-1 text-[0.52rem] font-bold uppercase tracking-[0.16em]"
+                    style={{
+                      background: status.connected ? "rgba(116,185,127,0.12)" : "rgba(255,255,255,0.04)",
+                      color: status.connected ? "#9fcca7" : "#71717a",
+                    }}
                   >
-                    {actionLoading === "save" ? "Saving..." : "Save preferences"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleTest}
-                    disabled={!status.connected || actionLoading !== null}
-                    className="inline-flex items-center gap-2 rounded-full border border-[rgba(255,255,255,0.12)] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-white hover:text-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <TestTube2 className="h-3.5 w-3.5" />
-                    {actionLoading === "test" ? "Sending..." : "Send test ping"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDisconnect}
-                    disabled={!status.connected || actionLoading !== null}
-                    className="inline-flex items-center gap-2 rounded-full border border-[rgba(243,184,107,0.25)] px-5 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#f3b86b] transition hover:border-[#f3b86b] hover:bg-[#f3b86b]/8 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <Unplug className="h-3.5 w-3.5" />
-                    {actionLoading === "disconnect" ? "Disconnecting..." : "Disconnect chat"}
-                  </button>
+                    {status.connected ? "Live" : "Not linked"}
+                  </span>
+                  <span className="text-[0.5rem] uppercase tracking-[0.12em] text-neutral-600">
+                    {status.connected ? formatDateTime(status.connected_at) : "—"}
+                  </span>
                 </div>
+                <div className="font-mono text-lg font-bold tracking-tight text-neutral-50">
+                  {status.telegram_username
+                    ? `@${status.telegram_username}`
+                    : status.telegram_first_name || "No chat linked yet"}
+                </div>
+                <p className="mt-2 text-[0.78rem] leading-6 text-neutral-500">
+                  {status.connected
+                    ? `${status.chat_label ?? "Private chat"} linked to this wallet.`
+                    : "Generate a secure link, open the bot, and press Start from Telegram to bind this wallet."}
+                </p>
               </div>
-            </article>
+
+              {/* Quick actions */}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleTest}
+                  disabled={!status.connected || actionLoading !== null}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-full border border-[rgba(255,255,255,0.08)] py-2.5 text-[0.58rem] font-semibold uppercase tracking-[0.12em] text-neutral-400 transition hover:border-white/15 hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <TestTube2 className="h-3 w-3" />
+                  {actionLoading === "test" ? "Sending…" : "Test"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDisconnect}
+                  disabled={!status.connected || actionLoading !== null}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-full border border-[rgba(243,184,107,0.15)] py-2.5 text-[0.58rem] font-semibold uppercase tracking-[0.12em] text-[#f3b86b]/70 transition hover:border-[#f3b86b]/30 hover:text-[#f3b86b] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Unplug className="h-3 w-3" />
+                  {actionLoading === "disconnect" ? "…" : "Disconnect"}
+                </button>
+              </div>
+            </aside>
           </section>
 
-          <section className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-            <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
-              <div className="grid gap-1">
+          {/* ═══════════════════════════════════════════════════════ */}
+          {/* NOTIFICATION PREFERENCES                               */}
+          {/* ═══════════════════════════════════════════════════════ */}
+          <section className="mb-10">
+            <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+              <div>
+                <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#dce85d]">
+                  Delivery rules
+                </span>
+                <h2 className="mt-1 font-mono text-xl font-bold uppercase tracking-tight text-neutral-50 md:text-2xl">
+                  What deserves an interruption
+                </h2>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-neutral-500">
+                  Master switch
+                </span>
+                <Toggle
+                  id="toggle-master"
+                  checked={notificationsEnabled}
+                  onChange={setNotificationsEnabled}
+                />
+              </div>
+            </div>
+
+            {/* 2×2 tiles */}
+            {prefs ? (
+              <div className="grid gap-4 sm:grid-cols-2">
+                {notifItems.map((item) => {
+                  const Icon = item.icon;
+                  const checked = prefs[item.key as keyof TelegramNotificationPrefs];
+                  return (
+                    <div
+                      key={item.key}
+                      className="group flex items-start justify-between gap-4 rounded-[1.6rem] border bg-[#141618] px-5 py-5 transition-colors"
+                      style={{
+                        borderColor: checked
+                          ? `${item.accent}18`
+                          : "rgba(255,255,255,0.05)",
+                      }}
+                    >
+                      <div className="flex items-start gap-3.5">
+                        <div
+                          className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
+                          style={{
+                            background: `${item.accent}10`,
+                            border: `1px solid ${item.accent}20`,
+                          }}
+                        >
+                          <Icon className="h-4 w-4" style={{ color: item.accent }} />
+                        </div>
+                        <div className="grid gap-0.5">
+                          <span className="text-sm font-medium text-neutral-50">{item.label}</span>
+                          <span className="text-[0.72rem] leading-5 text-neutral-500">{item.detail}</span>
+                        </div>
+                      </div>
+                      <Toggle
+                        id={`toggle-${item.key}`}
+                        checked={checked}
+                        onChange={(v) =>
+                          setPrefs((c) =>
+                            c ? { ...c, [item.key]: v } : c,
+                          )
+                        }
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+
+            {/* Save */}
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={handleSavePreferences}
+                disabled={!dirty || actionLoading !== null}
+                className="rounded-full bg-[#dce85d] px-6 py-3 text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-[#090a0a] transition hover:bg-[#e8f06d] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {actionLoading === "save" ? "Saving…" : "Save preferences"}
+              </button>
+            </div>
+          </section>
+
+          {/* ═══════════════════════════════════════════════════════ */}
+          {/* BOT COMMANDS + MESSAGE PREVIEWS (side by side)         */}
+          {/* ═══════════════════════════════════════════════════════ */}
+          <section className="grid gap-6 lg:grid-cols-[1fr_1fr]">
+
+            {/* ── Commands strip ─────────────────────────────────── */}
+            <article className="rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-6">
+              <div className="mb-5">
                 <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-neutral-400">
                   Bot menu
                 </span>
-                <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
-                  Telegram commands worth memorizing
+                <h2 className="mt-1 font-mono text-xl font-bold uppercase tracking-tight text-neutral-50">
+                  Commands
                 </h2>
               </div>
-              <div className="grid gap-3">
+
+              <div className="flex flex-wrap gap-2">
                 {status.commands.map((command) => (
-                  <article
+                  <div
                     key={command.command}
-                    className="grid gap-1 rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-4"
+                    className="group relative overflow-hidden rounded-[1rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-3 transition hover:border-[rgba(84,180,255,0.15)]"
                   >
-                    <div className="font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">
-                      /{command.command}
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-sm font-bold text-neutral-50">
+                        /{command.command}
+                      </span>
+                      <ChevronRight className="h-3 w-3 text-neutral-600 transition group-hover:text-neutral-400" />
                     </div>
-                    <p className="text-sm leading-6 text-neutral-400">{command.description}</p>
-                  </article>
+                    <p className="mt-1 text-[0.72rem] leading-5 text-neutral-500">{command.description}</p>
+                  </div>
                 ))}
               </div>
             </article>
 
-            <article className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-5 md:p-6">
-              <div className="grid gap-1">
+            {/* ── Message previews (chat‑bubble) ─────────────────── */}
+            <article className="rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#141618] p-6">
+              <div className="mb-5">
                 <span className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#9fd3ff]">
                   Message shape
                 </span>
-                <h2 className="font-mono text-2xl font-bold uppercase tracking-tight text-neutral-50">
+                <h2 className="mt-1 font-mono text-xl font-bold uppercase tracking-tight text-neutral-50">
                   What lands in chat
                 </h2>
               </div>
 
               <div className="grid gap-3">
-                {[
-                  {
-                    title: "Critical runtime alert",
-                    body: "Alpha Trend stopped. Reason: allocated drawdown budget breached.",
-                    tone: "border-[rgba(243,184,107,0.22)] bg-[rgba(243,184,107,0.08)] text-[#f3b86b]",
-                  },
-                  {
-                    title: "Execution failure",
-                    body: "Mean Revert failed place market order on BTC. Reason: Pacifica rejected the order.",
-                    tone: "border-[rgba(84,180,255,0.24)] bg-[rgba(48,125,184,0.1)] text-[#9fd3ff]",
-                  },
-                  {
-                    title: "Copy trading update",
-                    body: "Relationship status: paused. Scale: 2000 bps.",
-                    tone: "border-[rgba(116,185,127,0.24)] bg-[rgba(116,185,127,0.08)] text-[#9fcca7]",
-                  },
-                ].map((preview) => (
-                  <article
-                    key={preview.title}
-                    className={`grid gap-2 rounded-[1.5rem] border px-4 py-4 ${preview.tone}`}
+                {messagePreviews.map((msg) => (
+                  <div
+                    key={msg.title}
+                    className="flex gap-3 rounded-[1.2rem] bg-[#0d0f10] px-4 py-4"
+                    style={{
+                      borderLeft: `3px solid ${msg.accent}`,
+                    }}
                   >
-                    <div className="text-[0.62rem] font-semibold uppercase tracking-[0.18em]">
-                      {preview.title}
+                    <div className="grid gap-1.5">
+                      <span
+                        className="text-[0.58rem] font-bold uppercase tracking-[0.14em]"
+                        style={{ color: msg.accent }}
+                      >
+                        {msg.title}
+                      </span>
+                      <p className="text-[0.78rem] leading-6 text-neutral-300">{msg.body}</p>
                     </div>
-                    <p className="text-sm leading-6 text-neutral-100">{preview.body}</p>
-                  </article>
+                  </div>
                 ))}
               </div>
             </article>
