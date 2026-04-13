@@ -154,6 +154,9 @@ export type BacktestRunJobStatusResponse = {
   progress?: BacktestRunJobProgress;
   result?: BacktestRunDetail | null;
   errorDetail?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  completedAt?: string | null;
 };
 
 export type BacktestsBootstrapPayload = {
@@ -167,4 +170,5 @@ export type BacktestsBootstrapPayload = {
     updated_at: string;
   }>;
   runs: BacktestRunSummary[];
+  jobs: BacktestRunJobStatusResponse[];
 };

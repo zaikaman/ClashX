@@ -5,6 +5,7 @@ import signal
 
 from src.core.settings import get_settings
 from src.services.pacifica_market_data_service import get_pacifica_market_data_service
+from src.workers.backtest_job_worker import BacktestJobWorker
 from src.workers.bot_copy_worker import BotCopyWorker
 from src.workers.bot_runtime_worker import BotRuntimeWorker
 from src.workers.bot_runtime_snapshot_worker import BotRuntimeSnapshotWorker
@@ -25,6 +26,7 @@ async def run_worker() -> None:
         BotCopyWorker(),
         BotRuntimeSnapshotWorker(),
         PortfolioAllocatorWorker(),
+        BacktestJobWorker(),
     ]
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()

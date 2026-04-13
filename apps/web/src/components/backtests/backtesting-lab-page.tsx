@@ -190,6 +190,48 @@ function summarizeEventGroups(events: BacktestTriggerEvent[]) {
     .map(([label, count]) => ({ label, count }));
 }
 
+function isActiveBacktestJob(job: BacktestRunJobStatusResponse) {
+  return job.status === "queued" || job.status === "running";
+}
+
+function upsertBacktestJob(
+  jobs: BacktestRunJobStatusResponse[],
+  nextJob: BacktestRunJobStatusResponse,
+): BacktestRunJobStatusResponse[] {
+  const deduped = [nextJob, ...jobs.filter((job) => job.id !== nextJob.id)];
+  return deduped.sort((left, right) => {
+    const leftTime = Date.parse(left.updatedAt ?? left.createdAt ?? "") || 0;
+    const rightTime = Date.parse(right.updatedAt ?? right.createdAt ?? "") || 0;
+    return rightTime - leftTime;
+  });
+}
+
+function toResumedRunProgress(
+  job: BacktestRunJobStatusResponse,
+  fallbackInterval: string,
+): RunProgressState {
+  if (job.progress) {
+    return toRunProgressState(job.progress);
+  }
+  return {
+    progress: job.status === "running" ? 12 : 6,
+    stage: job.status === "running" ? "Resuming worker job" : "Queued on worker",
+    detail:
+      job.status === "running"
+        ? "The worker is still replaying this run."
+        : "The worker has the job queued and will start it shortly.",
+    interval: fallbackInterval,
+  };
+}
+
+function formatJobStatusLabel(status: BacktestRunJobStatusResponse["status"]) {
+  return status.replace("_", " ");
+}
+
+function formatJobTimestamp(job: BacktestRunJobStatusResponse) {
+  return job.completedAt ?? job.updatedAt ?? job.createdAt ?? null;
+}
+
 export function BacktestingLabPage() {
   const searchParams = useSearchParams();
   const queryBotId = searchParams.get("botId");
@@ -217,6 +259,7 @@ export function BacktestingLabPage() {
   const [historyScope, setHistoryScope] = useState<HistoryScope>("all");
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
+  const [backtestJobs, setBacktestJobs] = useState<BacktestRunJobStatusResponse[]>([]);
   const [pendingBacktestJobId, setPendingBacktestJobId] = useState<string | null>(null);
   const [runProgress, setRunProgress] = useState<RunProgressState | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -226,6 +269,7 @@ export function BacktestingLabPage() {
   const currentRun = activeRunId ? runCache[activeRunId] ?? null : null;
   const compareRuns = compareIds.map((runId) => runCache[runId]).filter(Boolean) as BacktestRunDetail[];
   const selectedBot = bots.find((bot) => bot.id === selectedBotId) ?? null;
+  const latestBacktestJobs = useMemo(() => backtestJobs.slice(0, 6), [backtestJobs]);
   const pendingWorkload = useMemo(
     () => estimateBacktestWorkload(startDate, endDate, selectedBot?.inferred_backtest_interval),
     [endDate, selectedBot?.inferred_backtest_interval, startDate],
@@ -250,6 +294,7 @@ export function BacktestingLabPage() {
       setBots([]);
       setRuns([]);
       setRunCache({});
+      setBacktestJobs([]);
       setSelectedBotId(queryBotId ?? "");
       setActiveRunId(null);
       setCompareIds([]);
@@ -286,16 +331,32 @@ export function BacktestingLabPage() {
         const bootstrap = payload as BacktestsBootstrapPayload;
         const nextBots = bootstrap.bots as SavedBot[];
         const nextRuns = bootstrap.runs;
+        const nextJobs = bootstrap.jobs ?? [];
         setBots(nextBots);
         setRuns(nextRuns);
+        setBacktestJobs(nextJobs);
         setRunCache({});
         setHistoryError(null);
         const preferredBotId =
           queryBotId && nextBots.some((bot) => bot.id === queryBotId)
             ? queryBotId
             : nextBots[0]?.id ?? "";
+        const resumableJob = nextJobs.find((job) => isActiveBacktestJob(job)) ?? null;
+        const resumableInterval =
+          resumableJob?.progress?.interval ??
+          nextBots.find((bot) => bot.id === preferredBotId)?.inferred_backtest_interval ??
+          "15m";
         setSelectedBotId((current) => current || preferredBotId);
         setActiveRunId(null);
+        if (resumableJob) {
+          setPendingBacktestJobId(resumableJob.id);
+          setRunning(true);
+          setRunProgress(toResumedRunProgress(resumableJob, resumableInterval));
+        } else {
+          setPendingBacktestJobId(null);
+          setRunning(false);
+          setRunProgress(null);
+        }
       } catch (error) {
         if (!cancelled && !(error instanceof DOMException && error.name === "AbortError")) {
           setPageError(error instanceof Error ? error.message : "Could not load the backtesting lab.");
@@ -447,6 +508,7 @@ export function BacktestingLabPage() {
         }
 
         const job = payload as BacktestRunJobStatusResponse;
+        setBacktestJobs((current) => upsertBacktestJob(current, job));
         if (job.progress) {
           setRunProgress(toRunProgressState(job.progress));
         }
@@ -523,18 +585,41 @@ export function BacktestingLabPage() {
     if (!authenticated || !walletAddress) return;
     try {
       const headers = await getAuthHeaders();
-      const response = await fetch(`${API_BASE_URL}/api/backtests/runs?wallet_address=${encodeURIComponent(walletAddress)}`, {
-        cache: "no-store",
-        headers,
-      });
-      const payload = (await response.json()) as BacktestRunSummary[] | { detail?: string };
-      if (!response.ok) {
-        throw new Error("detail" in payload ? payload.detail ?? "Could not refresh backtests." : "Could not refresh backtests.");
+      const walletQuery = encodeURIComponent(walletAddress);
+      const [runsResponse, jobsResponse] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/backtests/runs?wallet_address=${walletQuery}`, {
+          cache: "no-store",
+          headers,
+        }),
+        fetch(`${API_BASE_URL}/api/backtests/runs/jobs?wallet_address=${walletQuery}`, {
+          cache: "no-store",
+          headers,
+        }),
+      ]);
+      const runsPayload = (await runsResponse.json()) as BacktestRunSummary[] | { detail?: string };
+      const jobsPayload = (await jobsResponse.json()) as BacktestRunJobStatusResponse[] | { detail?: string };
+      if (!runsResponse.ok) {
+        throw new Error(
+          "detail" in runsPayload ? runsPayload.detail ?? "Could not refresh backtests." : "Could not refresh backtests.",
+        );
       }
-      setRuns(payload as BacktestRunSummary[]);
+      if (!jobsResponse.ok) {
+        throw new Error(
+          "detail" in jobsPayload ? jobsPayload.detail ?? "Could not refresh backtest jobs." : "Could not refresh backtest jobs.",
+        );
+      }
+      setRuns(runsPayload as BacktestRunSummary[]);
+      setBacktestJobs(jobsPayload as BacktestRunJobStatusResponse[]);
     } catch (error) {
       setHistoryError(error instanceof Error ? error.message : "Could not refresh backtests.");
     }
+  }
+
+  function resumeBacktestJob(job: BacktestRunJobStatusResponse) {
+    setPageError(null);
+    setPendingBacktestJobId(job.id);
+    setRunning(true);
+    setRunProgress(toResumedRunProgress(job, job.progress?.interval ?? selectedBot?.inferred_backtest_interval ?? "15m"));
   }
 
   async function runBacktest() {
@@ -582,6 +667,16 @@ export function BacktestingLabPage() {
       if (!response.ok || !("id" in result)) {
         throw new Error("detail" in result ? result.detail ?? "Backtest failed." : "Backtest failed.");
       }
+      const createdAt = new Date().toISOString();
+      setBacktestJobs((current) =>
+        upsertBacktestJob(current, {
+          id: result.id,
+          jobType: "backtest_run",
+          status: "queued",
+          createdAt,
+          updatedAt: createdAt,
+        }),
+      );
       setPendingBacktestJobId(result.id);
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "Backtest failed.");
@@ -754,7 +849,7 @@ export function BacktestingLabPage() {
             <div className="grid gap-2">
               <span className="label text-[#74b97f]">Run controls</span>
               <p className="text-sm leading-7 text-neutral-400">
-                Pick a saved bot, set the replay window, and launch a synchronous historical run against Pacifica candle data. Replay interval is inferred from the bot rules.
+                Pick a saved bot, set the replay window, and queue a worker-backed historical run against Pacifica candle data. Replay interval is inferred from the bot rules.
               </p>
             </div>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
@@ -1256,6 +1351,78 @@ export function BacktestingLabPage() {
         </div>
 
         <aside className="grid gap-4 self-start xl:sticky xl:top-6">
+          <section className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div className="grid gap-1">
+                <span className="label text-[#8ec5ff]">Worker queue</span>
+                <p className="text-sm text-neutral-500">Recent backtest jobs survive reloads. Reattach to any job that is still queued or running.</p>
+              </div>
+              <LoaderCircle className={`h-4 w-4 ${running ? "animate-spin text-[#8ec5ff]" : "text-neutral-500"}`} />
+            </div>
+            <div className="grid gap-3">
+              {latestBacktestJobs.length ? (
+                latestBacktestJobs.map((job) => {
+                  const watching = pendingBacktestJobId === job.id;
+                  const active = isActiveBacktestJob(job);
+                  const jobTimestamp = formatJobTimestamp(job);
+                  return (
+                    <div
+                      key={job.id}
+                      className={`grid gap-3 rounded-[1.4rem] border p-4 ${
+                        watching
+                          ? "border-[#8ec5ff]/35 bg-[linear-gradient(135deg,rgba(142,197,255,0.08),rgba(9,10,10,0.92))]"
+                          : "border-[rgba(255,255,255,0.06)] bg-[#090a0a]"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-semibold text-neutral-50">{job.progress?.stage ?? (active ? "Backtest worker job" : "Finished worker job")}</div>
+                          <div className="text-xs text-neutral-500">
+                            {jobTimestamp ? formatDateTime(jobTimestamp) : "Waiting for worker timestamps"}
+                          </div>
+                        </div>
+                        <span
+                          className={`rounded-full px-2 py-1 text-[0.55rem] font-semibold uppercase tracking-[0.16em] ${
+                            job.status === "completed"
+                              ? "bg-[#74b97f]/12 text-[#74b97f]"
+                              : job.status === "failed"
+                                ? "bg-[#e06c6e]/12 text-[#f4b0b1]"
+                                : "bg-[#8ec5ff]/12 text-[#8ec5ff]"
+                          }`}
+                        >
+                          {formatJobStatusLabel(job.status)}
+                        </span>
+                      </div>
+                      <div className="grid gap-1 text-sm text-neutral-400">
+                        <div>{job.progress?.detail ?? (job.errorDetail ?? "No live progress snapshot yet.")}</div>
+                        <div className="text-xs uppercase tracking-[0.16em] text-neutral-500">
+                          {Math.round(job.progress?.progress ?? (job.status === "running" ? 12 : job.status === "queued" ? 6 : 100))}% progress
+                        </div>
+                      </div>
+                      {active ? (
+                        <button
+                          type="button"
+                          onClick={() => resumeBacktestJob(job)}
+                          className={`rounded-full border px-3 py-2 text-[0.6rem] font-semibold uppercase tracking-[0.16em] transition ${
+                            watching
+                              ? "border-[#8ec5ff]/40 bg-[#8ec5ff]/10 text-[#8ec5ff]"
+                              : "border-[rgba(255,255,255,0.12)] text-neutral-300 hover:border-[#8ec5ff] hover:text-[#8ec5ff]"
+                          }`}
+                        >
+                          {watching ? "Watching job" : "Reattach"}
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="rounded-[1.4rem] bg-[#090a0a] p-4 text-sm leading-6 text-neutral-500">
+                  Worker jobs will appear here as soon as you queue a backtest.
+                </div>
+              )}
+            </div>
+          </section>
+
           <section className="grid gap-4 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
             <div className="flex items-center justify-between gap-3">
               <div className="grid gap-1">

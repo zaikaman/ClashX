@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -57,6 +58,38 @@ class AiJobService:
                 "id": job_id,
                 "wallet_address": ("in", normalized_wallets),
             },
+        )
+
+    def list_jobs(
+        self,
+        *,
+        job_type: AiJobType | None = None,
+        statuses: Sequence[AiJobStatus] | None = None,
+        wallet_addresses: Sequence[str] | None = None,
+        order: str | None = "created_at.desc",
+        limit: int | None = None,
+        updated_before: str | None = None,
+    ) -> list[dict[str, Any]]:
+        filters: dict[str, Any] = {}
+        if job_type:
+            filters["job_type"] = job_type
+        normalized_statuses = [status for status in (statuses or []) if status]
+        if len(normalized_statuses) == 1:
+            filters["status"] = normalized_statuses[0]
+        elif normalized_statuses:
+            filters["status"] = ("in", normalized_statuses)
+        normalized_wallets = [wallet.strip() for wallet in (wallet_addresses or []) if wallet and wallet.strip()]
+        if len(normalized_wallets) == 1:
+            filters["wallet_address"] = normalized_wallets[0]
+        elif normalized_wallets:
+            filters["wallet_address"] = ("in", normalized_wallets)
+        if updated_before:
+            filters["updated_at"] = ("lt", updated_before)
+        return self._supabase.select(
+            "ai_job_runs",
+            filters=filters,
+            order=order,
+            limit=limit,
         )
 
     def mark_running(self, *, job_id: str) -> dict[str, Any] | None:

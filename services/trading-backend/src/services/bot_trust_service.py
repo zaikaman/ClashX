@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
@@ -30,13 +31,15 @@ class BotTrustService:
         runtime: dict[str, Any],
         definition: dict[str, Any],
         latest_snapshot: dict[str, Any] | None,
+        preloaded_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         overview = self.build_runtime_overview(
             runtime=runtime,
             definition=definition,
             latest_snapshot=latest_snapshot,
+            preloaded_context=preloaded_context,
         )
-        passport = self._build_passport(definition=definition)
+        passport = self._build_passport(definition=definition, preloaded_context=preloaded_context)
         return {
             **overview,
             "passport": passport,
@@ -48,9 +51,15 @@ class BotTrustService:
         runtime: dict[str, Any],
         definition: dict[str, Any],
         latest_snapshot: dict[str, Any] | None,
+        preloaded_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        health_metrics = self._runtime_health_metrics(runtime)
-        drift = self._build_drift(definition=definition, runtime=runtime, latest_snapshot=latest_snapshot)
+        health_metrics = self._runtime_health_metrics(runtime, preloaded_context=preloaded_context)
+        drift = self._build_drift(
+            definition=definition,
+            runtime=runtime,
+            latest_snapshot=latest_snapshot,
+            preloaded_context=preloaded_context,
+        )
         trust = self._build_trust(
             runtime=runtime,
             latest_snapshot=latest_snapshot,
@@ -180,10 +189,57 @@ class BotTrustService:
             )
         return payload
 
-    def _build_passport(self, *, definition: dict[str, Any]) -> dict[str, Any]:
-        version_history = self.builder_service.list_strategy_versions(bot_id=str(definition["id"]), limit=6)
-        publish_history = self.builder_service.list_publish_snapshots(bot_id=str(definition["id"]), limit=6)
-        latest_backtest = self._latest_backtest(str(definition["id"]))
+    def preload_runtime_context_support(
+        self,
+        *,
+        runtimes: list[dict[str, Any]],
+        definitions: list[dict[str, Any]],
+        history_limit: int = 6,
+    ) -> dict[str, Any]:
+        runtime_ids = [str(runtime.get("id") or "").strip() for runtime in runtimes if str(runtime.get("id") or "").strip()]
+        definition_ids = [
+            str(definition.get("id") or "").strip()
+            for definition in definitions
+            if str(definition.get("id") or "").strip()
+        ]
+        runtime_lookup = {
+            str(runtime.get("id") or "").strip(): runtime
+            for runtime in runtimes
+            if str(runtime.get("id") or "").strip()
+        }
+        latest_backtest_by_definition = self._latest_backtest_map(definition_ids)
+        version_history_by_definition = self._strategy_versions_map(definition_ids, limit_per_bot=history_limit)
+        publish_history_by_definition = self._publish_snapshots_map(definition_ids, limit_per_bot=history_limit)
+        health_metrics_by_runtime = self._runtime_health_metrics_map(runtime_lookup)
+        return {
+            "latest_backtest_by_definition": latest_backtest_by_definition,
+            "version_history_by_definition": version_history_by_definition,
+            "publish_history_by_definition": publish_history_by_definition,
+            "health_metrics_by_runtime": health_metrics_by_runtime,
+        }
+
+    def _build_passport(
+        self,
+        *,
+        definition: dict[str, Any],
+        preloaded_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        definition_id = str(definition["id"])
+        version_history = self._preloaded_definition_rows(
+            preloaded_context=preloaded_context,
+            key="version_history_by_definition",
+            definition_id=definition_id,
+        )
+        if version_history is None:
+            version_history = self.builder_service.list_strategy_versions(bot_id=definition_id, limit=6)
+        publish_history = self._preloaded_definition_rows(
+            preloaded_context=preloaded_context,
+            key="publish_history_by_definition",
+            definition_id=definition_id,
+        )
+        if publish_history is None:
+            publish_history = self.builder_service.list_publish_snapshots(bot_id=definition_id, limit=6)
+        latest_backtest = self._latest_backtest(definition_id, preloaded_context=preloaded_context)
         public_since = publish_history[-1]["created_at"] if publish_history else None
         last_published_at = publish_history[0]["created_at"] if publish_history else None
         release_count = len(publish_history)
@@ -257,8 +313,9 @@ class BotTrustService:
         definition: dict[str, Any],
         runtime: dict[str, Any],
         latest_snapshot: dict[str, Any] | None,
+        preloaded_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        benchmark = self._latest_backtest(str(definition["id"]))
+        benchmark = self._latest_backtest(str(definition["id"]), preloaded_context=preloaded_context)
         if benchmark is None:
             return {
                 "status": "unverified",
@@ -304,7 +361,19 @@ class BotTrustService:
             "benchmark_completed_at": benchmark.get("completed_at"),
         }
 
-    def _runtime_health_metrics(self, runtime: dict[str, Any]) -> dict[str, Any]:
+    def _runtime_health_metrics(
+        self,
+        runtime: dict[str, Any],
+        *,
+        preloaded_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        runtime_id = str(runtime.get("id") or "").strip()
+        if preloaded_context is not None:
+            health_metrics_by_runtime = preloaded_context.get("health_metrics_by_runtime")
+            if isinstance(health_metrics_by_runtime, dict):
+                preloaded = health_metrics_by_runtime.get(runtime_id)
+                if isinstance(preloaded, dict):
+                    return dict(preloaded)
         events = self.supabase.select(
             "bot_execution_events",
             columns="id,event_type,status,error_reason,created_at",
@@ -312,6 +381,9 @@ class BotTrustService:
             order="created_at.desc",
             limit=250,
         )
+        return self._runtime_health_metrics_from_events(runtime=runtime, events=events)
+
+    def _runtime_health_metrics_from_events(self, *, runtime: dict[str, Any], events: list[dict[str, Any]]) -> dict[str, Any]:
         latest_event_at = self._as_datetime(events[0]["created_at"]) if events else None
         runtime_updated_at = self._as_datetime(runtime["updated_at"])
         heartbeat_reference = runtime_updated_at if latest_event_at is None or runtime_updated_at > latest_event_at else latest_event_at
@@ -337,7 +409,17 @@ class BotTrustService:
             "uptime_pct": uptime_pct,
         }
 
-    def _latest_backtest(self, bot_definition_id: str) -> dict[str, Any] | None:
+    def _latest_backtest(
+        self,
+        bot_definition_id: str,
+        *,
+        preloaded_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        if preloaded_context is not None:
+            latest_backtest_by_definition = preloaded_context.get("latest_backtest_by_definition")
+            if isinstance(latest_backtest_by_definition, dict) and bot_definition_id in latest_backtest_by_definition:
+                preloaded = latest_backtest_by_definition.get(bot_definition_id)
+                return dict(preloaded) if isinstance(preloaded, dict) else None
         try:
             return self.supabase.maybe_one(
                 "bot_backtest_runs",
@@ -347,6 +429,97 @@ class BotTrustService:
             )
         except SupabaseRestError:
             return None
+
+    def _latest_backtest_map(self, bot_definition_ids: list[str]) -> dict[str, dict[str, Any]]:
+        normalized_ids = [bot_definition_id for bot_definition_id in bot_definition_ids if bot_definition_id]
+        if not normalized_ids:
+            return {}
+        rows = self.supabase.select(
+            "bot_backtest_runs",
+            columns="id,bot_definition_id,pnl_total_pct,max_drawdown_pct,completed_at,status",
+            filters={"bot_definition_id": ("in", normalized_ids), "status": "completed"},
+            order="completed_at.desc",
+        )
+        latest_backtest_by_definition: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            definition_id = str(row.get("bot_definition_id") or "").strip()
+            if not definition_id or definition_id in latest_backtest_by_definition:
+                continue
+            latest_backtest_by_definition[definition_id] = row
+        return latest_backtest_by_definition
+
+    def _strategy_versions_map(self, bot_definition_ids: list[str], *, limit_per_bot: int) -> dict[str, list[dict[str, Any]]]:
+        normalized_ids = [bot_definition_id for bot_definition_id in bot_definition_ids if bot_definition_id]
+        if not normalized_ids:
+            return {}
+        rows = self.supabase.select(
+            "bot_strategy_versions",
+            filters={"bot_definition_id": ("in", normalized_ids)},
+            order="version_number.desc",
+        )
+        versions_by_definition: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            definition_id = str(row.get("bot_definition_id") or "").strip()
+            if not definition_id or len(versions_by_definition[definition_id]) >= limit_per_bot:
+                continue
+            versions_by_definition[definition_id].append(self.builder_service.serialize_strategy_version(row))
+        return {definition_id: rows for definition_id, rows in versions_by_definition.items()}
+
+    def _publish_snapshots_map(self, bot_definition_ids: list[str], *, limit_per_bot: int) -> dict[str, list[dict[str, Any]]]:
+        normalized_ids = [bot_definition_id for bot_definition_id in bot_definition_ids if bot_definition_id]
+        if not normalized_ids:
+            return {}
+        rows = self.supabase.select(
+            "bot_publish_snapshots",
+            filters={"bot_definition_id": ("in", normalized_ids)},
+            order="created_at.desc",
+        )
+        snapshots_by_definition: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            definition_id = str(row.get("bot_definition_id") or "").strip()
+            if not definition_id or len(snapshots_by_definition[definition_id]) >= limit_per_bot:
+                continue
+            snapshots_by_definition[definition_id].append(self.builder_service.serialize_publish_snapshot(row))
+        return {definition_id: rows for definition_id, rows in snapshots_by_definition.items()}
+
+    def _runtime_health_metrics_map(self, runtime_lookup: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        runtime_ids = [runtime_id for runtime_id in runtime_lookup if runtime_id]
+        if not runtime_ids:
+            return {}
+        rows = self.supabase.select(
+            "bot_execution_events",
+            columns="id,runtime_id,event_type,status,error_reason,created_at",
+            filters={"runtime_id": ("in", runtime_ids)},
+            order="created_at.desc",
+            limit=max(250, len(runtime_ids) * 250),
+        )
+        events_by_runtime: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            runtime_id = str(row.get("runtime_id") or "").strip()
+            if not runtime_id or len(events_by_runtime[runtime_id]) >= 250:
+                continue
+            events_by_runtime[runtime_id].append(row)
+        return {
+            runtime_id: self._runtime_health_metrics_from_events(runtime=runtime, events=events_by_runtime.get(runtime_id, []))
+            for runtime_id, runtime in runtime_lookup.items()
+        }
+
+    @staticmethod
+    def _preloaded_definition_rows(
+        *,
+        preloaded_context: dict[str, Any] | None,
+        key: str,
+        definition_id: str,
+    ) -> list[dict[str, Any]] | None:
+        if preloaded_context is None:
+            return None
+        grouped_rows = preloaded_context.get(key)
+        if not isinstance(grouped_rows, dict):
+            return None
+        rows = grouped_rows.get(definition_id)
+        if rows is None:
+            return None
+        return [dict(row) for row in rows if isinstance(row, dict)]
 
     @staticmethod
     def _health_label(*, runtime_status: str, heartbeat_age_seconds: int, failure_rate_pct: float) -> str:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Callable
 
 from src.api.auth import AuthenticatedUser
 from src.services.ai_job_service import AiJobService
@@ -166,6 +166,7 @@ class AiJobRunnerService:
         end_time: int,
         initial_capital_usd: float,
         assumptions: dict[str, Any] | None,
+        heartbeat: Callable[[], None] | None = None,
     ) -> None:
         self._job_service.mark_running(job_id=job_id)
 
@@ -180,6 +181,8 @@ class AiJobRunnerService:
             )
 
         async def progress_callback(payload: dict[str, Any]) -> None:
+            if heartbeat is not None:
+                heartbeat()
             self._job_service.update_progress(
                 job_id=job_id,
                 progress_payload={

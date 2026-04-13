@@ -3,7 +3,13 @@ from __future__ import annotations
 import asyncio
 
 from src.api.auth import AuthenticatedUser
-from src.api.backtests import BacktestRunRequest, create_backtest_run_job, get_backtest_run_job
+from src.api.backtests import (
+    BacktestRunRequest,
+    create_backtest_run_job,
+    get_backtest_run_job,
+    get_backtests_bootstrap,
+    list_backtest_run_jobs,
+)
 
 
 def _job_user() -> AuthenticatedUser:
@@ -71,15 +77,10 @@ def _completed_run_payload() -> dict[str, object]:
 
 def test_create_backtest_run_job_returns_queued_job(monkeypatch) -> None:
     created: dict[str, object] = {}
-    launched: dict[str, object] = {}
 
     monkeypatch.setattr(
         "src.api.backtests.ai_job_service.create_job",
         lambda **kwargs: created.setdefault("job", {"id": "job-1", **kwargs}) or created["job"],
-    )
-    monkeypatch.setattr(
-        "src.api.backtests.ai_job_runner.start_backtest_run_job",
-        lambda **kwargs: launched.setdefault("payload", kwargs),
     )
 
     response = asyncio.run(
@@ -92,7 +93,6 @@ def test_create_backtest_run_job_returns_queued_job(monkeypatch) -> None:
                 end_time=2,
                 initial_capital_usd=10_000,
             ),
-            db=None,
             user=_job_user(),
         )
     )
@@ -102,8 +102,32 @@ def test_create_backtest_run_job_returns_queued_job(monkeypatch) -> None:
     assert response.jobType == "backtest_run"
     assert created["job"]["wallet_address"] == "wallet-abc"
     assert created["job"]["request_payload"]["bot_id"] == "bot-1"
-    assert launched["payload"]["job_id"] == "job-1"
-    assert launched["payload"]["interval"] == "1m"
+    assert created["job"]["request_payload"]["interval"] == "1m"
+
+
+def test_list_backtest_run_jobs_returns_recent_wallet_jobs(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.api.backtests.ai_job_service.list_jobs",
+        lambda **kwargs: [
+            {
+                "id": "job-2",
+                "job_type": "backtest_run",
+                "status": "queued",
+                "result_payload_json": {},
+                "error_detail": None,
+                "created_at": "2026-04-10T00:00:00+00:00",
+                "updated_at": "2026-04-10T00:00:00+00:00",
+                "completed_at": None,
+            }
+        ],
+    )
+
+    response = asyncio.run(list_backtest_run_jobs(wallet_address="wallet-abc", limit=10, user=_job_user()))
+
+    assert len(response) == 1
+    assert response[0].id == "job-2"
+    assert response[0].status == "queued"
+    assert response[0].createdAt == "2026-04-10T00:00:00+00:00"
 
 
 def test_get_backtest_run_job_returns_live_progress(monkeypatch) -> None:
@@ -164,3 +188,38 @@ def test_get_backtest_run_job_returns_completed_result(monkeypatch) -> None:
     assert response.result is not None
     assert response.result.id == "run-1"
     assert response.result.result_json["summary"]["interval"] == "1m"
+
+
+def test_get_backtests_bootstrap_includes_recent_backtest_jobs(monkeypatch) -> None:
+    monkeypatch.setattr("src.api.backtests.bot_builder_service.list_bots", lambda db, wallet_address: [])
+    monkeypatch.setattr(
+        "src.api.backtests.bot_backtest_service.list_runs",
+        lambda db, wallet_address, user_id, bot_id: [],
+    )
+    monkeypatch.setattr(
+        "src.api.backtests.ai_job_service.list_jobs",
+        lambda **kwargs: [
+            {
+                "id": "job-3",
+                "job_type": "backtest_run",
+                "status": "running",
+                "result_payload_json": {
+                    "type": "progress",
+                    "progress": 22,
+                    "stage": "Loading market history",
+                    "detail": "Fetching 4 windows.",
+                    "interval": "1m",
+                },
+                "error_detail": None,
+                "created_at": "2026-04-10T00:00:00+00:00",
+                "updated_at": "2026-04-10T00:00:02+00:00",
+                "completed_at": None,
+            }
+        ],
+    )
+
+    response = get_backtests_bootstrap(wallet_address="wallet-abc", bot_id=None, db=None, user=_job_user())
+
+    assert response.jobs[0].id == "job-3"
+    assert response.jobs[0].status == "running"
+    assert response.jobs[0].progress["progress"] == 22

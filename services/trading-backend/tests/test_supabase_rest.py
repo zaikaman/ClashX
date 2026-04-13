@@ -8,10 +8,12 @@ from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
 
 def _build_client(handler: httpx.MockTransport) -> SupabaseRestClient:
     client = SupabaseRestClient.__new__(SupabaseRestClient)
+    client._base_url = "https://example.supabase.co/rest/v1"  # noqa: SLF001
     client._client = httpx.Client(  # noqa: SLF001
         transport=handler,
-        base_url="https://example.supabase.co/rest/v1",
+        base_url=client._base_url,
     )
+    client._read_cache = SupabaseRestClient._shared_read_cache  # noqa: SLF001
     return client
 
 
@@ -69,3 +71,25 @@ def test_build_filters_quotes_string_values_for_in_operator() -> None:
     assert params == {
         "lease_key": 'in.("bot-runtime:abc-123","portfolio:\\"quoted\\"")',
     }
+
+
+def test_select_reuses_shared_read_cache_across_instances() -> None:
+    call_count = 0
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(200, json=[{"id": "row-1"}], request=request)
+
+    SupabaseRestClient._shared_read_cache.clear()
+    first = _build_client(httpx.MockTransport(_handler))
+    second = _build_client(httpx.MockTransport(_handler))
+    try:
+        assert first.select("worker_leases", cache_ttl_seconds=15) == [{"id": "row-1"}]
+        assert second.select("worker_leases", cache_ttl_seconds=15) == [{"id": "row-1"}]
+    finally:
+        first.close()
+        second.close()
+        SupabaseRestClient._shared_read_cache.clear()
+
+    assert call_count == 1

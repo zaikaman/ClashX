@@ -220,9 +220,11 @@ class CreatorMarketplaceService:
                 for row in public_rows
                 if str((row.get("creator") or {}).get("creator_id") or "").strip() == creator_id
             ]
+            follower_count = int(((creator_rows[0].get("creator") or {}).get("follower_count") or 0)) if creator_rows else 0
             creator_profiles_by_id[creator_id] = await self._build_creator_profile_live(
                 creator_id=creator_id,
                 public_rows=creator_rows,
+                follower_count=follower_count,
             )
 
         creator_highlights = self._build_creator_highlights(public_rows=public_rows, limit=max(len(creator_ids), 24))
@@ -371,27 +373,37 @@ class CreatorMarketplaceService:
         *,
         creator_id: str,
         public_rows: list[dict[str, Any]] | None = None,
+        follower_count: int | None = None,
     ) -> dict[str, Any]:
-        base_profile = self.trust_service.get_creator_profile(creator_id=creator_id, include_bots=False)
         user = self.supabase.maybe_one("users", filters={"id": creator_id})
         if user is None:
             raise ValueError("Creator not found")
+
+        creator_rows = public_rows
+        if creator_rows is not None:
+            base_profile = self._creator_profile_summary_from_rows(
+                creator_id=creator_id,
+                public_rows=creator_rows,
+                wallet_address=str(user.get("wallet_address") or ""),
+                display_name=str(user.get("display_name") or "") or str(user.get("wallet_address") or "")[:8],
+            )
+        else:
+            base_profile = self.trust_service.get_creator_profile(creator_id=creator_id, include_bots=False)
 
         marketplace_profile = self._ensure_creator_profile(
             user=user,
             display_name=str(base_profile.get("display_name") or user.get("display_name") or user["wallet_address"][:8]),
         )
-        creator_rows = public_rows
         if creator_rows is None:
             creator_rows = [
                 row
                 for row in await self._load_marketplace_rows(limit=96)
                 if str((row.get("creator") or {}).get("creator_id") or "") == creator_id
             ]
-        follower_count = self._count_creator_followers(creator_id=creator_id)
+        resolved_follower_count = follower_count if follower_count is not None else self._count_creator_followers(creator_id=creator_id)
         marketplace_reach_score = self._marketplace_reach_score(
             active_mirror_count=int(base_profile["active_mirror_count"]),
-            follower_count=follower_count,
+            follower_count=resolved_follower_count,
             public_bot_count=int(base_profile["public_bot_count"]),
             reputation_score=int(base_profile["reputation_score"]),
         )
@@ -401,7 +413,7 @@ class CreatorMarketplaceService:
             "bio": marketplace_profile["bio"],
             "slug": marketplace_profile["slug"],
             "social_links_json": marketplace_profile.get("social_links_json") or {},
-            "follower_count": follower_count,
+            "follower_count": resolved_follower_count,
             "featured_bot_count": 0,
             "marketplace_reach_score": marketplace_reach_score,
             "bots": self._normalize_creator_marketplace_rows(creator_rows),
@@ -1047,6 +1059,10 @@ class CreatorMarketplaceService:
             )
         }
         support = self._build_marketplace_support_maps(rows=rows, definitions=definitions)
+        preloaded_context = self.trust_service.preload_runtime_context_support(
+            runtimes=list(runtimes.values()),
+            definitions=list(definitions.values()),
+        )
         overview_rows: list[dict[str, Any]] = []
         for row in rows:
             runtime = runtimes.get(row["runtime_id"])
@@ -1066,6 +1082,7 @@ class CreatorMarketplaceService:
                 runtime=runtime,
                 definition=definition,
                 latest_snapshot=snapshot,
+                preloaded_context=preloaded_context,
             )
             creator_id = str(definition["user_id"])
             overview_rows.append(
@@ -1107,6 +1124,72 @@ class CreatorMarketplaceService:
             }
             for row in overview_rows
         ]
+
+    def _creator_profile_summary_from_rows(
+        self,
+        *,
+        creator_id: str,
+        public_rows: list[dict[str, Any]],
+        wallet_address: str,
+        display_name: str,
+    ) -> dict[str, Any]:
+        public_bot_count = len(public_rows)
+        runtime_ids = {
+            str(row.get("runtime_id") or "").strip()
+            for row in public_rows
+            if str(row.get("runtime_id") or "").strip()
+        }
+        trust_scores = [
+            int(((row.get("trust") or {}).get("trust_score")) or 0)
+            for row in public_rows
+            if isinstance(row.get("trust"), dict)
+        ]
+        ranked_rows = [
+            int(row["rank"])
+            for row in public_rows
+            if row.get("rank") is not None
+        ]
+        mirror_count = sum(int(((row.get("copy_stats") or {}).get("mirror_count")) or 0) for row in public_rows)
+        active_mirror_count = sum(int(((row.get("copy_stats") or {}).get("active_mirror_count")) or 0) for row in public_rows)
+        clone_count = sum(int(((row.get("copy_stats") or {}).get("clone_count")) or 0) for row in public_rows)
+        average_trust_score = round(sum(trust_scores) / len(trust_scores)) if trust_scores else 0
+        best_rank = min(ranked_rows) if ranked_rows else None
+        reputation_score = self.trust_service._creator_reputation_score(
+            average_trust_score=average_trust_score,
+            active_mirror_count=active_mirror_count,
+            mirror_count=mirror_count,
+            clone_count=clone_count,
+            public_bot_count=public_bot_count,
+            best_rank=best_rank,
+        )
+        reputation_label = self.trust_service._reputation_label(reputation_score)
+        tags = self.trust_service._creator_tags(
+            reputation_label=reputation_label,
+            best_rank=best_rank,
+            active_mirror_count=active_mirror_count,
+            public_bot_count=public_bot_count,
+        )
+        return {
+            "creator_id": creator_id,
+            "wallet_address": wallet_address,
+            "display_name": display_name,
+            "public_bot_count": public_bot_count,
+            "active_runtime_count": len(runtime_ids),
+            "mirror_count": mirror_count,
+            "active_mirror_count": active_mirror_count,
+            "clone_count": clone_count,
+            "average_trust_score": average_trust_score,
+            "best_rank": best_rank,
+            "reputation_score": reputation_score,
+            "reputation_label": reputation_label,
+            "summary": self.trust_service._creator_summary(
+                display_name=display_name,
+                public_bot_count=public_bot_count,
+                active_mirror_count=active_mirror_count,
+                average_trust_score=average_trust_score,
+            ),
+            "tags": tags,
+        }
 
     def _augment_marketplace_overview_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not rows:

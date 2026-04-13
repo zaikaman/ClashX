@@ -8,7 +8,6 @@ from typing import Any as Session
 
 from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authenticated_user, resolve_app_user_id
 from src.db.session import get_db
-from src.services.ai_job_runner_service import AiJobRunnerService
 from src.services.ai_job_service import AiJobStatus, AiJobType, AiJobService
 from src.services.bot_builder_service import BotBuilderService
 from src.services.bot_backtest_service import BotBacktestService
@@ -17,7 +16,6 @@ router = APIRouter(prefix="/api/backtests", tags=["backtests"])
 bot_backtest_service = BotBacktestService()
 bot_builder_service = BotBuilderService()
 ai_job_service = AiJobService()
-ai_job_runner = AiJobRunnerService(job_service=ai_job_service, bot_backtest_service=bot_backtest_service)
 
 
 class BacktestAssumptionConfigRequest(BaseModel):
@@ -77,11 +75,6 @@ class BacktestBotOptionResponse(BaseModel):
     updated_at: str
 
 
-class BacktestsBootstrapResponse(BaseModel):
-    bots: list[BacktestBotOptionResponse]
-    runs: list[BacktestRunSummaryResponse]
-
-
 class BacktestRunJobCreateResponse(BaseModel):
     id: str
     jobType: AiJobType
@@ -100,6 +93,12 @@ class BacktestRunJobStatusResponse(BaseModel):
     completedAt: str | None = None
 
 
+class BacktestsBootstrapResponse(BaseModel):
+    bots: list[BacktestBotOptionResponse]
+    runs: list[BacktestRunSummaryResponse]
+    jobs: list[BacktestRunJobStatusResponse] = Field(default_factory=list)
+
+
 def _resolve_wallet(user: AuthenticatedUser, wallet_address: str | None) -> str:
     resolved = wallet_address or (user.wallet_addresses[0] if user.wallet_addresses else None)
     if not resolved:
@@ -111,6 +110,23 @@ def _resolve_wallet(user: AuthenticatedUser, wallet_address: str | None) -> str:
 def _resolve_wallet_user_id(user: AuthenticatedUser, wallet_address: str | None) -> tuple[str, str]:
     resolved_wallet = _resolve_wallet(user, wallet_address)
     return resolved_wallet, resolve_app_user_id(user, resolved_wallet)
+
+
+def _serialize_backtest_job(job: dict[str, Any]) -> BacktestRunJobStatusResponse:
+    result_payload = job.get("result_payload_json") if isinstance(job.get("result_payload_json"), dict) else {}
+    progress_payload = result_payload if result_payload.get("type") == "progress" else {}
+    run_payload = result_payload.get("run") if result_payload.get("type") == "result" and isinstance(result_payload.get("run"), dict) else None
+    return BacktestRunJobStatusResponse(
+        id=str(job.get("id") or ""),
+        jobType="backtest_run",
+        status=str(job.get("status") or "queued"),
+        progress=progress_payload,
+        result=BacktestRunDetailResponse.model_validate(run_payload) if run_payload is not None else None,
+        errorDetail=str(job.get("error_detail") or "") or None,
+        createdAt=job.get("created_at"),
+        updatedAt=job.get("updated_at"),
+        completedAt=job.get("completed_at"),
+    )
 
 
 @router.post("/runs", response_model=BacktestRunDetailResponse)
@@ -140,10 +156,8 @@ async def create_backtest_run(
 @router.post("/runs/jobs", response_model=BacktestRunJobCreateResponse)
 async def create_backtest_run_job(
     payload: BacktestRunRequest,
-    db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> BacktestRunJobCreateResponse:
-    del db
     resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, payload.wallet_address)
     job = ai_job_service.create_job(
         job_type="backtest_run",
@@ -159,18 +173,23 @@ async def create_backtest_run_job(
             "assumptions": payload.assumptions.model_dump() if payload.assumptions is not None else None,
         },
     )
-    ai_job_runner.start_backtest_run_job(
-        job_id=job["id"],
-        bot_id=payload.bot_id,
-        wallet_address=resolved_wallet,
-        user_id=resolved_user_id,
-        interval=payload.interval,
-        start_time=payload.start_time,
-        end_time=payload.end_time,
-        initial_capital_usd=payload.initial_capital_usd,
-        assumptions=payload.assumptions.model_dump() if payload.assumptions is not None else None,
-    )
     return BacktestRunJobCreateResponse(id=job["id"], jobType="backtest_run", status="queued")
+
+
+@router.get("/runs/jobs", response_model=list[BacktestRunJobStatusResponse])
+async def list_backtest_run_jobs(
+    wallet_address: str | None = Query(default=None, min_length=8),
+    limit: int = Query(default=10, ge=1, le=25),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> list[BacktestRunJobStatusResponse]:
+    resolved_wallet = _resolve_wallet(user, wallet_address)
+    jobs = ai_job_service.list_jobs(
+        job_type="backtest_run",
+        wallet_addresses=[resolved_wallet],
+        order="created_at.desc",
+        limit=limit,
+    )
+    return [_serialize_backtest_job(job) for job in jobs]
 
 
 @router.get("/runs/jobs/{job_id}", response_model=BacktestRunJobStatusResponse)
@@ -181,20 +200,7 @@ async def get_backtest_run_job(
     job = ai_job_service.get_job_for_wallets(job_id=job_id, wallet_addresses=user.wallet_addresses)
     if job is None or job.get("job_type") != "backtest_run":
         raise HTTPException(status_code=404, detail="Backtest job not found.")
-    result_payload = job.get("result_payload_json") if isinstance(job.get("result_payload_json"), dict) else {}
-    progress_payload = result_payload if result_payload.get("type") == "progress" else {}
-    run_payload = result_payload.get("run") if result_payload.get("type") == "result" and isinstance(result_payload.get("run"), dict) else None
-    return BacktestRunJobStatusResponse(
-        id=str(job.get("id") or ""),
-        jobType="backtest_run",
-        status=str(job.get("status") or "queued"),
-        progress=progress_payload,
-        result=BacktestRunDetailResponse.model_validate(run_payload) if run_payload is not None else None,
-        errorDetail=str(job.get("error_detail") or "") or None,
-        createdAt=job.get("created_at"),
-        updatedAt=job.get("updated_at"),
-        completedAt=job.get("completed_at"),
-    )
+    return _serialize_backtest_job(job)
 
 
 @router.get("/runs", response_model=list[BacktestRunSummaryResponse])
@@ -231,10 +237,17 @@ def get_backtests_bootstrap(
         user_id=resolved_user_id,
         bot_id=bot_id,
     )
+    jobs = ai_job_service.list_jobs(
+        job_type="backtest_run",
+        wallet_addresses=[resolved_wallet],
+        order="created_at.desc",
+        limit=10,
+    )
     return BacktestsBootstrapResponse.model_validate(
         {
             "bots": bots,
             "runs": runs,
+            "jobs": [_serialize_backtest_job(job).model_dump(mode="json") for job in jobs],
         }
     )
 

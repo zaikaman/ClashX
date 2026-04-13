@@ -238,3 +238,77 @@ def test_refresh_after_publication_refreshes_leaderboard_then_snapshots(monkeypa
         ("clear", None),
         ("snapshots", 120),
     ]
+
+
+def test_build_creator_profile_live_uses_public_rows_without_creator_trust_lookup(monkeypatch) -> None:
+    service = CreatorMarketplaceService.__new__(CreatorMarketplaceService)
+    service.supabase = SimpleNamespace(
+        maybe_one=lambda table, **_kwargs: {
+            "id": "creator-1",
+            "wallet_address": "wallet-1",
+            "display_name": "Creator One",
+        }
+        if table == "users"
+        else None,
+    )
+    service.trust_service = SimpleNamespace(
+        get_creator_profile=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not read creator profile")),
+        _creator_reputation_score=lambda **_kwargs: 77,
+        _reputation_label=lambda _score: "Trusted",
+        _creator_tags=lambda **_kwargs: ["Trusted", "Top 10"],
+        _creator_summary=lambda **_kwargs: "Creator summary",
+    )
+
+    def _fake_ensure_creator_profile(**_kwargs):
+        return {
+            "display_name": "Creator One",
+            "headline": "Publishes disciplined bots",
+            "bio": "Bio",
+            "slug": "creator-one",
+            "social_links_json": {"x": "@creator"},
+        }
+
+    monkeypatch.setattr(service, "_ensure_creator_profile", _fake_ensure_creator_profile, raising=False)
+    monkeypatch.setattr(service, "_count_creator_followers", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not count followers")), raising=False)
+    monkeypatch.setattr(service, "_normalize_creator_marketplace_rows", lambda rows: rows, raising=False)
+    monkeypatch.setattr(service, "_marketplace_reach_score", lambda **_kwargs: 64, raising=False)
+
+    public_rows = [
+        {
+            "runtime_id": "runtime-1",
+            "bot_definition_id": "bot-1",
+            "bot_name": "Bot One",
+            "strategy_type": "trend",
+            "rank": 1,
+            "trust": {"trust_score": 82},
+            "copy_stats": {"mirror_count": 3, "active_mirror_count": 2, "clone_count": 1},
+        },
+        {
+            "runtime_id": "runtime-2",
+            "bot_definition_id": "bot-2",
+            "bot_name": "Bot Two",
+            "strategy_type": "mean_reversion",
+            "rank": 4,
+            "trust": {"trust_score": 74},
+            "copy_stats": {"mirror_count": 2, "active_mirror_count": 1, "clone_count": 0},
+        },
+    ]
+
+    payload = asyncio.run(
+        service._build_creator_profile_live(
+            creator_id="creator-1",
+            public_rows=public_rows,
+            follower_count=5,
+        )
+    )
+
+    assert payload["public_bot_count"] == 2
+    assert payload["active_runtime_count"] == 2
+    assert payload["mirror_count"] == 5
+    assert payload["active_mirror_count"] == 3
+    assert payload["clone_count"] == 1
+    assert payload["average_trust_score"] == 78
+    assert payload["best_rank"] == 1
+    assert payload["follower_count"] == 5
+    assert payload["marketplace_reach_score"] == 64
+    assert payload["bots"] == public_rows

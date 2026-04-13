@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from html import unescape
 import re
+import threading
 from time import monotonic
 from typing import Any
 
@@ -29,6 +30,9 @@ _DEFAULT_CACHE_TTL_SECONDS = 15.0
 
 
 class SupabaseRestClient:
+    _shared_read_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+    _shared_cache_lock = threading.Lock()
+
     def __init__(self) -> None:
         settings = get_settings()
         if not settings.supabase_url or not settings.supabase_service_role_key:
@@ -44,7 +48,7 @@ class SupabaseRestClient:
             headers=self._headers,
             timeout=20,
         )
-        self._read_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        self._read_cache = type(self)._shared_read_cache
 
     def select(
         self,
@@ -66,7 +70,8 @@ class SupabaseRestClient:
         )
         effective_cache_ttl = min(max(0.0, float(cache_ttl_seconds or 0.0)), _DEFAULT_CACHE_TTL_SECONDS)
         if cache_key is not None:
-            cached = self._read_cache.get(cache_key)
+            with type(self)._shared_cache_lock:
+                cached = self._read_cache.get(cache_key)
             if cached is not None and (monotonic() - cached[0]) < effective_cache_ttl:
                 return [dict(row) for row in cached[1]]
         params: dict[str, str] = {"select": columns}
@@ -79,7 +84,8 @@ class SupabaseRestClient:
         data = response.json()
         rows = data if isinstance(data, list) else []
         if cache_key is not None:
-            self._read_cache[cache_key] = (monotonic(), [dict(row) for row in rows if isinstance(row, dict)])
+            with type(self)._shared_cache_lock:
+                self._read_cache[cache_key] = (monotonic(), [dict(row) for row in rows if isinstance(row, dict)])
         return rows
 
     def maybe_one(
@@ -152,9 +158,6 @@ class SupabaseRestClient:
 
     def close(self) -> None:
         self._client.close()
-        read_cache = getattr(self, "_read_cache", None)
-        if isinstance(read_cache, dict):
-            read_cache.clear()
 
     def _build_filters(self, filters: Mapping[str, Any] | None) -> dict[str, str]:
         params: dict[str, str] = {}
@@ -208,7 +211,7 @@ class SupabaseRestClient:
         if normalized_filters is None:
             return None
         ttl = min(float(cache_ttl_seconds), _DEFAULT_CACHE_TTL_SECONDS)
-        return f"{table}|{columns}|{order or ''}|{limit or ''}|{normalized_filters}|{ttl}"
+        return f"{self._base_url}|{table}|{columns}|{order or ''}|{limit or ''}|{normalized_filters}|{ttl}"
 
     def _normalize_cacheable_filters(self, filters: Mapping[str, Any] | None) -> tuple[tuple[str, Any], ...] | None:
         if not filters:
@@ -234,9 +237,10 @@ class SupabaseRestClient:
         return tuple(normalized)
 
     def _invalidate_table_cache(self, table: str) -> None:
-        prefix = f"{table}|"
-        for key in [cache_key for cache_key in self._read_cache if cache_key.startswith(prefix)]:
-            self._read_cache.pop(key, None)
+        prefix = f"{self._base_url}|{table}|"
+        with type(self)._shared_cache_lock:
+            for key in [cache_key for cache_key in self._read_cache if cache_key.startswith(prefix)]:
+                self._read_cache.pop(key, None)
 
     def _request(
         self,
