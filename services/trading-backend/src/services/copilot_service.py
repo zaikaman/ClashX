@@ -283,9 +283,24 @@ class CopilotService:
                 reply = str(payload.get("reply") or "").strip()
                 if not reply:
                     raise RuntimeError("AI final response was empty")
+                follow_ups = self._sanitize_follow_ups(payload.get("followUps") or payload.get("follow_ups"))
+                if not tool_traces and self._final_reply_requires_tool_retry(reply):
+                    conversation.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "SYSTEM_RETRY Your previous response implied you were fetching, checking, or "
+                                "pulling live user data, but you did not emit a tool_call JSON object. If "
+                                "live or account-specific data is needed, your next response must be a "
+                                "tool_call. If a blocking clarification is truly required, ask only that "
+                                "question plainly and do not imply that retrieval has already started."
+                            ),
+                        }
+                    )
+                    continue
                 return {
                     "reply": reply,
-                    "followUps": self._sanitize_follow_ups(payload.get("followUps") or payload.get("follow_ups")),
+                    "followUps": follow_ups,
                     "toolCalls": tool_traces,
                     "usedWalletAddress": scope_cache.get("default_wallet_address")
                     or wallet_address
@@ -632,6 +647,9 @@ class CopilotService:
                 "When you receive a message starting with TOOL_RESULT, treat it as the output of your previous tool call.",
                 "When you receive a message starting with CONTEXT_SUMMARY, treat it as compacted history from older turns in the same conversation.",
                 "Never invent balances, bot statuses, event counts, or database rows.",
+                "Do not say you are checking, fetching, pulling, or loading live data unless your response is a tool_call.",
+                "If clarification is required before any tool call, ask only the single blocking question plainly.",
+                "Do not ask optional presentation questions before the first tool call. Choose a sensible default instead.",
                 "Prefer concise answers that cite concrete numbers, names, ids, or timestamps from tool results when available.",
                 "If the user asks about tables or raw data, prefer list_schema_tables, describe_schema_table, or query_database.",
                 "Use query_database sparingly, with a small limit and explicit relevant tables only.",
@@ -869,6 +887,33 @@ class CopilotService:
         if isinstance(value, str):
             return self._extract_json(value)
         return {}
+
+    def _final_reply_requires_tool_retry(self, reply: str) -> bool:
+        normalized = re.sub(r"\s+", " ", reply.strip().lower())
+        if not normalized:
+            return False
+        blocked_phrases = (
+            "i'm pulling",
+            "i am pulling",
+            "pulling your",
+            "i'm fetching",
+            "i am fetching",
+            "fetching your",
+            "let me check",
+            "i'll check",
+            "i will check",
+            "checking your",
+            "i'm checking",
+            "i am checking",
+            "i'm looking up",
+            "i am looking up",
+            "looking up your",
+            "retrieving your",
+            "loading your",
+            "gathering your",
+            "reviewing your",
+        )
+        return any(phrase in normalized for phrase in blocked_phrases)
 
     def _summarize_tool_result(self, result: dict[str, Any]) -> str:
         if not result.get("ok"):

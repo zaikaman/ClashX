@@ -198,6 +198,56 @@ def test_copilot_ignores_extra_json_after_first_object() -> None:
     assert result["followUps"] == ["Show recent activity"]
 
 
+def test_copilot_retries_when_final_reply_claims_fetching_without_tool_call() -> None:
+    service, http_client = _service_with(
+        settings=_FakeSettings(
+            gemini_api_key="gem-key",
+            gemini_base_url="https://example.test/v1beta",
+            gemini_model="gemini-3-flash-preview",
+        ),
+        responses=[
+            _FakeResponse(
+                200,
+                _gemini_text_payload(
+                    '{"type":"final","reply":"I\\u2019m pulling your recent runtime events. Fetching your bots and their latest events now.","followUps":["Would you like me to summarize only the most recent event per bot, or provide a full list of the last 20 events per bot?"]}'
+                ),
+            ),
+            _FakeResponse(200, _gemini_text_payload('{"type":"tool_call","tool":"list_bots","arguments":{"wallet_address":"wallet-abc"}}')),
+            _FakeResponse(200, _gemini_text_payload('{"type":"final","reply":"You have 2 bots. The newest runtime event was a rebalance on Momentum.","followUps":["Show the full event timeline"]}')),
+        ],
+    )
+
+    async def fake_execute_tool_call(*, tool_name: str, arguments: dict[str, Any], **_: Any) -> dict[str, Any]:
+        assert tool_name == "list_bots"
+        assert arguments["wallet_address"] == "wallet-abc"
+        return {
+            "ok": True,
+            "data": {
+                "wallet_address": "wallet-abc",
+                "bots": [
+                    {"id": "bot-1", "name": "Momentum"},
+                    {"id": "bot-2", "name": "Mean Revert"},
+                ],
+            },
+        }
+
+    service._execute_tool_call = fake_execute_tool_call  # type: ignore[method-assign]
+
+    result = asyncio.run(
+        service.chat(
+            messages=[{"role": "user", "content": "What happened in my recent runtime events?"}],
+            user=_user(),
+            wallet_address="wallet-abc",
+        )
+    )
+
+    assert result["reply"] == "You have 2 bots. The newest runtime event was a rebalance on Momentum."
+    assert result["followUps"] == ["Show the full event timeline"]
+    assert len(result["toolCalls"]) == 1
+    assert result["toolCalls"][0]["tool"] == "list_bots"
+    assert "SYSTEM_RETRY" in http_client.calls[1]["json"]["contents"][-1]["parts"][0]["text"]
+
+
 def test_copilot_converts_openai_timeouts_to_runtime_errors() -> None:
     service = CopilotService()
     service.settings = _FakeSettings(
