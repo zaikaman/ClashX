@@ -32,10 +32,8 @@ type RunProgressState = {
   progress: number;
   stage: string;
   detail: string;
-  estimatedBars: number;
-  estimatedRequests: number;
-  estimatedDurationMs: number;
-  startedAt: number;
+  interval: string;
+  metrics?: Record<string, number | string>;
 };
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -120,32 +118,43 @@ function estimateBacktestWorkload(startDate: string, endDate: string, interval: 
   };
 }
 
-function describeRunPhase(progress: number, estimatedRequests: number, interval: string) {
-  if (progress < 22) {
-    return {
-      stage: "Staging replay",
-      detail: `Locking the ${interval} timeline and sizing the market-data pull.`,
-    };
+type BacktestProgressEvent = {
+  progress: number;
+  stage: string;
+  detail: string;
+  interval: string;
+  metrics?: Record<string, number | string>;
+};
+
+type BacktestStreamEvent =
+  | { event: "progress"; data: BacktestProgressEvent }
+  | { event: "complete"; data: BacktestRunDetail }
+  | { event: "error"; data: { detail?: string } };
+
+function parseSseChunk(rawEvent: string): BacktestStreamEvent | null {
+  const lines = rawEvent
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+  if (!lines.length) {
+    return null;
   }
-  if (progress < 68) {
-    return {
-      stage: "Loading candle windows",
-      detail:
-        estimatedRequests > 1
-          ? `Fetching ${estimatedRequests} Pacifica windows in parallel with rate-limit backoff.`
-          : "Fetching the replay window from Pacifica.",
-    };
+  const eventLine = lines.find((line) => line.startsWith("event:"));
+  const dataLines = lines.filter((line) => line.startsWith("data:"));
+  if (!eventLine || !dataLines.length) {
+    return null;
   }
-  if (progress < 88) {
-    return {
-      stage: "Merging history",
-      detail: "Deduplicating windows and aligning candles for the replay engine.",
-    };
+  const event = eventLine.slice("event:".length).trim();
+  const dataText = dataLines.map((line) => line.slice("data:".length).trim()).join("\n");
+  try {
+    const data = JSON.parse(dataText) as BacktestProgressEvent | BacktestRunDetail | { detail?: string };
+    if (event === "progress" || event === "complete" || event === "error") {
+      return { event, data } as BacktestStreamEvent;
+    }
+  } catch {
+    return null;
   }
-  return {
-    stage: "Simulating strategy",
-    detail: "Walking the replay bars and evaluating every rule transition.",
-  };
+  return null;
 }
 
 function formatDuration(seconds: number) {
@@ -258,29 +267,6 @@ export function BacktestingLabPage() {
 
     return next;
   }, [compareRuns, currentRun]);
-
-  useEffect(() => {
-    if (!running) {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      setRunProgress((current) => {
-        if (!current) {
-          return current;
-        }
-        const elapsedMs = Date.now() - current.startedAt;
-        const normalized = clampNumber(elapsedMs / current.estimatedDurationMs, 0, 0.98);
-        const eased = 1 - Math.pow(1 - normalized, 3);
-        const nextProgress = clampNumber(8 + eased * 88, current.progress, 96);
-        return {
-          ...current,
-          progress: nextProgress,
-          ...describeRunPhase(nextProgress, current.estimatedRequests, pendingWorkload.interval),
-        };
-      });
-    }, 180);
-    return () => window.clearInterval(timer);
-  }, [pendingWorkload.interval, running]);
 
   useEffect(() => {
     if (!authenticated || !walletAddress) {
@@ -504,39 +490,76 @@ export function BacktestingLabPage() {
     setPageError(null);
     setRunProgress({
       progress: 8,
-      estimatedBars: pendingWorkload.estimatedBars,
-      estimatedRequests: pendingWorkload.estimatedRequests,
-      estimatedDurationMs: pendingWorkload.estimatedDurationMs,
-      startedAt: Date.now(),
-      ...describeRunPhase(8, pendingWorkload.estimatedRequests, pendingWorkload.interval),
+      stage: "Opening stream",
+      detail: "Waiting for the backtest worker to start emitting progress.",
+      interval: pendingWorkload.interval,
+      metrics: {
+        estimated_bars: pendingWorkload.estimatedBars,
+        estimated_requests: pendingWorkload.estimatedRequests,
+      },
     });
     try {
-      const response = await fetch(`${API_BASE_URL}/api/backtests/runs`, {
+      const response = await fetch(`${API_BASE_URL}/api/backtests/runs/stream`, {
         method: "POST",
         headers: await getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(payload),
       });
-      const result = (await response.json()) as BacktestRunDetail | { detail?: string };
       if (!response.ok) {
+        const result = (await response.json()) as { detail?: string };
         throw new Error("detail" in result ? result.detail ?? "Backtest failed." : "Backtest failed.");
       }
-      const detail = result as BacktestRunDetail;
-      setRunProgress((current) =>
-        current
-          ? {
-              ...current,
-              progress: 100,
-              stage: detail.status === "completed" ? "Replay complete" : "Run finished with issues",
-              detail:
-                detail.status === "completed"
-                  ? "The result set is ready."
-                  : "The replay returned an issue summary instead of a completed equity curve.",
-            }
-          : current,
-      );
-      setRuns((current) => [detail, ...current.filter((run) => run.id !== detail.id)]);
-      setRunCache((current) => ({ ...current, [detail.id]: detail }));
-      setActiveRunId(detail.id);
+      if (!response.body) {
+        throw new Error("Backtest stream did not return a readable body.");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let completedRun: BacktestRunDetail | null = null;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? "";
+        for (const rawEvent of events) {
+          const parsed = parseSseChunk(rawEvent);
+          if (!parsed) {
+            continue;
+          }
+          if (parsed.event === "progress") {
+            setRunProgress({
+              progress: clampNumber(parsed.data.progress, 0, 100),
+              stage: parsed.data.stage,
+              detail: parsed.data.detail,
+              interval: parsed.data.interval,
+              metrics: parsed.data.metrics,
+            });
+            continue;
+          }
+          if (parsed.event === "error") {
+            throw new Error(parsed.data.detail ?? "Backtest failed while streaming progress.");
+          }
+          completedRun = parsed.data;
+        }
+      }
+
+      if (!completedRun) {
+        throw new Error("Backtest stream ended before a final result arrived.");
+      }
+
+      setRunProgress({
+        progress: 100,
+        stage: completedRun.status === "completed" ? "Replay complete" : "Run finished with issues",
+        detail: completedRun.status === "completed" ? "The result set is ready." : "The replay finished with issue details.",
+        interval: completedRun.interval,
+      });
+      setRuns((current) => [completedRun, ...current.filter((run) => run.id !== completedRun.id)]);
+      setRunCache((current) => ({ ...current, [completedRun.id]: completedRun }));
+      setActiveRunId(completedRun.id);
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "Backtest failed.");
     } finally {
@@ -862,9 +885,15 @@ export function BacktestingLabPage() {
                   />
                 </div>
                 <div className="flex flex-wrap gap-3 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-neutral-300">
-                  <span>{runProgress.estimatedBars.toLocaleString()} replay bars</span>
-                  <span>{runProgress.estimatedRequests} Pacifica windows</span>
-                  <span>{pendingWorkload.interval} cadence</span>
+                  <span>
+                    {Number(runProgress.metrics?.processed_bars ?? runProgress.metrics?.estimated_bars ?? 0).toLocaleString()} /{" "}
+                    {Number(runProgress.metrics?.total_bars ?? runProgress.metrics?.estimated_bars ?? pendingWorkload.estimatedBars).toLocaleString()} bars
+                  </span>
+                  <span>
+                    {Number(runProgress.metrics?.completed_requests ?? 0).toLocaleString()} /{" "}
+                    {Number(runProgress.metrics?.total_requests ?? runProgress.metrics?.estimated_requests ?? pendingWorkload.estimatedRequests).toLocaleString()} streams
+                  </span>
+                  <span>{runProgress.interval} cadence</span>
                 </div>
               </article>
             ) : null}

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import uuid
+from asyncio import Semaphore, as_completed
 from bisect import bisect_right
 from copy import deepcopy
 from datetime import UTC, datetime
-from typing import Any
+from inspect import isawaitable
+from typing import Any, Awaitable, Callable
 
 from src.services.indicator_context_service import extract_candle_requests, normalize_symbol
 from src.services.pacifica_client import PacificaClient, PacificaClientError, get_pacifica_client
@@ -43,6 +45,8 @@ DEFAULT_BACKTEST_ASSUMPTIONS = {
     "funding_bps_per_interval": 0.0,
 }
 DEFAULT_BACKTEST_INTERVAL = "15m"
+MAX_BACKTEST_CONCURRENT_CANDLE_REQUESTS = 3
+ProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 
 
 def infer_backtest_interval_from_rules(rules_json: dict[str, Any] | None) -> str:
@@ -84,6 +88,7 @@ class BotBacktestService:
         end_time: int,
         initial_capital_usd: float,
         assumptions: dict[str, Any] | None = None,
+        progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         del db
         bot = self._resolve_bot(bot_id=bot_id, wallet_address=wallet_address, user_id=user_id)
@@ -91,6 +96,13 @@ class BotBacktestService:
         resolved_interval = str(interval or "").strip().lower() or infer_backtest_interval_from_rules(rules_snapshot)
         normalized_assumptions = self._normalize_assumptions(assumptions)
         placeholder_symbols = self._market_scope_symbols(str(bot.get("market_scope") or ""))
+        await self._emit_progress(
+            progress,
+            stage="Validating backtest",
+            detail=f"Checking replay inputs for the {resolved_interval} run.",
+            progress_value=4.0,
+            interval=resolved_interval,
+        )
         preflight_issues = self._preflight_issues(
             bot=bot,
             interval=resolved_interval,
@@ -105,6 +117,13 @@ class BotBacktestService:
         try:
             if preflight_issues:
                 status = "failed"
+                await self._emit_progress(
+                    progress,
+                    stage="Validation failed",
+                    detail=preflight_issues[0],
+                    progress_value=100.0,
+                    interval=resolved_interval,
+                )
                 result_json = self._failed_result(
                     bot=bot,
                     interval=resolved_interval,
@@ -115,6 +134,13 @@ class BotBacktestService:
                     preflight_issues=preflight_issues,
                 )
             else:
+                await self._emit_progress(
+                    progress,
+                    stage="Validation complete",
+                    detail="Preparing market data requests for the replay.",
+                    progress_value=10.0,
+                    interval=resolved_interval,
+                )
                 result_json = await self._simulate(
                     bot=bot,
                     rules_snapshot=rules_snapshot,
@@ -124,9 +150,17 @@ class BotBacktestService:
                     initial_capital_usd=initial_capital_usd,
                     assumptions=normalized_assumptions,
                     placeholder_symbols=placeholder_symbols,
+                    progress=progress,
                 )
         except (PacificaClientError, ValueError) as exc:
             status = "failed"
+            await self._emit_progress(
+                progress,
+                stage="Run failed",
+                detail=str(exc),
+                progress_value=100.0,
+                interval=resolved_interval,
+            )
             result_json = self._failed_result(
                 bot=bot,
                 interval=resolved_interval,
@@ -170,6 +204,13 @@ class BotBacktestService:
                 "updated_at": completed_at,
             },
         )[0]
+        await self._emit_progress(
+            progress,
+            stage="Replay complete" if status == "completed" else "Run finished with issues",
+            detail="Backtest result is ready.",
+            progress_value=100.0,
+            interval=resolved_interval,
+        )
         return self.serialize_run_detail(row)
 
     def list_runs(
@@ -212,6 +253,7 @@ class BotBacktestService:
         initial_capital_usd: float,
         assumptions: dict[str, float],
         placeholder_symbols: list[str],
+        progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         evaluation_rulesets = self._build_evaluation_rulesets(rules_snapshot, placeholder_symbols)
         active_symbols = sorted(
@@ -238,21 +280,57 @@ class BotBacktestService:
                     continue
                 candle_requests[(symbol, timeframe)] = {"symbol": symbol, "timeframe": timeframe}
 
+        total_candle_requests = len(candle_requests)
+        await self._emit_progress(
+            progress,
+            stage="Loading market history",
+            detail=f"Fetching {total_candle_requests} candle stream{'s' if total_candle_requests != 1 else ''} from Pacifica.",
+            progress_value=14.0,
+            interval=interval,
+            total_requests=total_candle_requests,
+            completed_requests=0,
+            symbol_count=len(active_symbols),
+        )
+
         candle_lookup: dict[str, dict[str, list[dict[str, Any]]]] = {}
         close_time_lookup: dict[tuple[str, str], list[int]] = {}
         missing_main_symbols: set[str] = set()
-        for symbol, timeframe in sorted(candle_requests):
-            candles = await self._pacifica.get_kline(
-                symbol,
-                interval=timeframe,
-                start_time=start_time,
-                end_time=end_time,
-            )
+        semaphore = Semaphore(min(MAX_BACKTEST_CONCURRENT_CANDLE_REQUESTS, max(1, total_candle_requests)))
+
+        async def load_candle_request(symbol: str, timeframe: str) -> tuple[str, str, list[dict[str, Any]]]:
+            async with semaphore:
+                candles = await self._pacifica.get_kline(
+                    symbol,
+                    interval=timeframe,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+                return symbol, timeframe, candles
+
+        completed_requests = 0
+        tasks = [
+            self._create_candle_request_task(symbol=symbol, timeframe=timeframe, loader=load_candle_request)
+            for symbol, timeframe in sorted(candle_requests)
+        ]
+        for task in as_completed(tasks):
+            symbol, timeframe, candles = await task
             if timeframe == interval and not candles:
                 missing_main_symbols.add(symbol)
-                continue
-            candle_lookup.setdefault(symbol, {})[timeframe] = candles
-            close_time_lookup[(symbol, timeframe)] = [int(item.get("close_time") or 0) for item in candles]
+            else:
+                candle_lookup.setdefault(symbol, {})[timeframe] = candles
+                close_time_lookup[(symbol, timeframe)] = [int(item.get("close_time") or 0) for item in candles]
+            completed_requests += 1
+            history_progress = 14.0 + (completed_requests / max(1, total_candle_requests)) * 36.0
+            await self._emit_progress(
+                progress,
+                stage="Loading market history",
+                detail=f"Loaded {completed_requests} of {total_candle_requests} candle streams.",
+                progress_value=history_progress,
+                interval=interval,
+                total_requests=total_candle_requests,
+                completed_requests=completed_requests,
+                symbol_count=len(active_symbols),
+            )
 
         if missing_main_symbols:
             active_symbols = [symbol for symbol in active_symbols if symbol not in missing_main_symbols]
@@ -281,6 +359,16 @@ class BotBacktestService:
         )
         if not timeline:
             raise ValueError("No main replay bars were returned for this backtest range.")
+        await self._emit_progress(
+            progress,
+            stage="Preparing replay timeline",
+            detail=f"Aligned {len(timeline)} replay bars across {len(active_symbols)} active market{'s' if len(active_symbols) != 1 else ''}.",
+            progress_value=56.0,
+            interval=interval,
+            total_bars=len(timeline),
+            processed_bars=0,
+            active_symbol_count=len(active_symbols),
+        )
 
         current_candle_by_symbol: dict[str, dict[str, Any]] = {}
         candle_index_by_symbol = {symbol: -1 for symbol in active_symbols}
@@ -291,8 +379,9 @@ class BotBacktestService:
         last_executed_at: str | None = None
         cumulative_realized = 0.0
         trade_counter = 0
+        progress_report_stride = max(1, len(timeline) // 24)
 
-        for timestamp in timeline:
+        for index, timestamp in enumerate(timeline, start=1):
             timestamp_iso = self._iso_from_ms(timestamp)
             for symbol in active_symbols:
                 symbol_candles = main_candles.get(symbol, [])
@@ -423,6 +512,19 @@ class BotBacktestService:
                     "unrealized_pnl": round(unrealized_pnl, 8),
                 }
             )
+            if index == len(timeline) or index % progress_report_stride == 0:
+                replay_progress = 60.0 + (index / len(timeline)) * 36.0
+                await self._emit_progress(
+                    progress,
+                    stage="Simulating strategy",
+                    detail=f"Processed {index} of {len(timeline)} replay bars.",
+                    progress_value=replay_progress,
+                    interval=interval,
+                    total_bars=len(timeline),
+                    processed_bars=index,
+                    trade_count=len(closed_trades),
+                    active_symbol_count=len(active_symbols),
+                )
 
         open_trades = [
             self._open_trade_snapshot(
@@ -471,6 +573,17 @@ class BotBacktestService:
             "fees_paid_usd": total_fees_paid,
             "funding_pnl_usd": total_funding_pnl,
         }
+        await self._emit_progress(
+            progress,
+            stage="Finalizing result",
+            detail=f"Compiling {trade_count} closed trade{'s' if trade_count != 1 else ''} and the equity curve.",
+            progress_value=98.0,
+            interval=interval,
+            total_bars=len(timeline),
+            processed_bars=len(timeline),
+            trade_count=trade_count,
+            active_symbol_count=len(active_symbols),
+        )
         return {
             "equity_curve": equity_curve,
             "price_series": {
@@ -499,6 +612,39 @@ class BotBacktestService:
                 missing_main_symbols=missing_main_symbols,
             ),
         }
+
+    @staticmethod
+    async def _emit_progress(
+        progress: ProgressCallback | None,
+        *,
+        stage: str,
+        detail: str,
+        progress_value: float,
+        interval: str,
+        **metrics: Any,
+    ) -> None:
+        if progress is None:
+            return
+        payload = {
+            "stage": stage,
+            "detail": detail,
+            "progress": round(max(0.0, min(100.0, progress_value)), 2),
+            "interval": interval,
+        }
+        if metrics:
+            payload["metrics"] = metrics
+        maybe_awaitable = progress(payload)
+        if isawaitable(maybe_awaitable):
+            await maybe_awaitable
+
+    @staticmethod
+    def _create_candle_request_task(
+        *,
+        symbol: str,
+        timeframe: str,
+        loader: Callable[[str, str], Awaitable[tuple[str, str, list[dict[str, Any]]]]],
+    ) -> Awaitable[tuple[str, str, list[dict[str, Any]]]]:
+        return loader(symbol, timeframe)
 
     def _preflight_issues(
         self,

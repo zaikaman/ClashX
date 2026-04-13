@@ -243,6 +243,45 @@ def test_backtest_profitable_long_then_close() -> None:
     assert run["result_json"]["trades"][0]["close_reason"] == "action_close"
 
 
+def test_backtest_emits_progress_updates_during_execution() -> None:
+    rules_json = _graph_rules(
+        nodes=[
+            {"id": "condition-open", "kind": "condition", "position": {"x": 120, "y": 80}, "config": {"type": "price_above", "symbol": "BTC", "value": 90}},
+            {"id": "action-open", "kind": "action", "position": {"x": 320, "y": 80}, "config": {"type": "open_long", "symbol": "BTC", "size_usd": 100, "leverage": 1}},
+        ],
+        edges=[
+            {"id": "edge-open-1", "source": "builder-entry", "target": "condition-open"},
+            {"id": "edge-open-2", "source": "condition-open", "target": "action-open"},
+        ],
+    )
+    candles = [_candle(index, 99, 101, 98, 100 + (index % 3)) for index in range(12)]
+    service, _ = _service(rules_json, candles)
+    events: list[dict[str, Any]] = []
+
+    async def collect_progress(payload: dict[str, Any]) -> None:
+        events.append(payload)
+
+    run = asyncio.run(
+        service.run_backtest(
+            None,
+            bot_id="bot-a",
+            wallet_address="wallet-a",
+            user_id="user-a",
+            interval="15m",
+            start_time=BASE_TIME_MS,
+            end_time=BASE_TIME_MS + 12 * FIFTEEN_MINUTES_MS,
+            initial_capital_usd=10_000,
+            progress=collect_progress,
+        )
+    )
+
+    assert run["status"] == "completed"
+    assert events
+    assert any(event["stage"] == "Loading market history" for event in events)
+    assert any(event["stage"] == "Simulating strategy" for event in events)
+    assert events[-1]["progress"] == 100.0
+
+
 def test_backtest_persists_history_row_with_snapshots_and_inputs() -> None:
     rules_json = _graph_rules(
         nodes=[

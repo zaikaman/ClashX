@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Any as Session
 
@@ -10,6 +13,7 @@ from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authent
 from src.db.session import get_db
 from src.services.bot_builder_service import BotBuilderService
 from src.services.bot_backtest_service import BotBacktestService
+from src.services.event_broadcaster import format_sse
 
 router = APIRouter(prefix="/api/backtests", tags=["backtests"])
 bot_backtest_service = BotBacktestService()
@@ -113,6 +117,69 @@ async def create_backtest_run(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return BacktestRunDetailResponse.model_validate(run)
+
+
+@router.post("/runs/stream")
+async def create_backtest_run_stream(
+    payload: BacktestRunRequest,
+    db: Session = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> StreamingResponse:
+    resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, payload.wallet_address)
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+    async def emit_event(event: str, data: dict[str, Any]) -> None:
+        await queue.put(format_sse(event=event, data=data))
+
+    async def progress_callback(progress_payload: dict[str, Any]) -> None:
+        await emit_event("progress", progress_payload)
+
+    async def run_backtest_job() -> None:
+        try:
+            run = await bot_backtest_service.run_backtest(
+                db,
+                bot_id=payload.bot_id,
+                wallet_address=resolved_wallet,
+                user_id=resolved_user_id,
+                interval=payload.interval,
+                start_time=payload.start_time,
+                end_time=payload.end_time,
+                initial_capital_usd=payload.initial_capital_usd,
+                assumptions=payload.assumptions.model_dump() if payload.assumptions is not None else None,
+                progress=progress_callback,
+            )
+        except ValueError as exc:
+            await emit_event("error", {"detail": str(exc)})
+        except Exception:
+            await emit_event("error", {"detail": "Backtest failed while streaming progress."})
+        else:
+            await emit_event("complete", BacktestRunDetailResponse.model_validate(run).model_dump(mode="json"))
+        finally:
+            await queue.put(None)
+
+    async def event_stream():
+        task = asyncio.create_task(run_backtest_job())
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield item
+        finally:
+            if not task.done():
+                task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/runs", response_model=list[BacktestRunSummaryResponse])
