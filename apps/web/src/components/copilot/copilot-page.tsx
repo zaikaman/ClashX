@@ -102,8 +102,9 @@ const QUICK_PROMPTS = [
   },
 ];
 const LOADING_MESSAGES = ["Thinking...", "Reviewing your account context...", "Checking recent activity...", "Putting the answer together..."];
-const JOB_POLL_VISIBLE_MS = 1800;
-const JOB_POLL_HIDDEN_MS = 6000;
+const JOB_POLL_VISIBLE_MS = 1200;
+const JOB_POLL_VISIBLE_FAST_MS = 450;
+const JOB_POLL_HIDDEN_MS = 2500;
 
 function formatWalletAddress(walletAddress: string | null | undefined) {
   if (!walletAddress) return "";
@@ -325,20 +326,21 @@ export function CopilotPage() {
 
     let cancelled = false;
     let timeoutId: number | null = null;
+    let pollCount = 0;
 
     const scheduleNextPoll = () => {
       if (cancelled) {
         return;
       }
-      const delay = typeof document !== "undefined" && document.visibilityState === "hidden"
-        ? JOB_POLL_HIDDEN_MS
-        : JOB_POLL_VISIBLE_MS;
+      const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+      const delay = hidden ? JOB_POLL_HIDDEN_MS : pollCount < 3 ? JOB_POLL_VISIBLE_FAST_MS : JOB_POLL_VISIBLE_MS;
       timeoutId = window.setTimeout(() => {
         void pollJob();
       }, delay);
     };
 
     const pollJob = async () => {
+      pollCount += 1;
       try {
         const headers = await getAuthHeaders();
         const response = await fetch(`${API_BASE_URL}/api/copilot/chat/jobs/${pendingChatJob.jobId}`, { headers });

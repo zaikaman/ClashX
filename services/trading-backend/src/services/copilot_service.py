@@ -22,6 +22,10 @@ from src.services.runtime_observability_service import RuntimeObservabilityServi
 from src.services.supabase_rest import SupabaseRestClient
 from src.services.trading_service import TradingService
 
+GEMINI_COPILOT_TEMPERATURE = 0.2
+GEMINI_COPILOT_TOP_P = 0.9
+GEMINI_COPILOT_THINKING_BUDGET = 2048
+
 
 @dataclass(frozen=True)
 class _ProviderAttempt:
@@ -767,11 +771,11 @@ class CopilotService:
                     "systemInstruction": {"parts": [{"text": system_prompt}]},
                     "contents": self._build_gemini_contents(messages),
                     "generationConfig": {
-                        "temperature": 0.35,
-                        "topP": 0.95,
+                        "temperature": GEMINI_COPILOT_TEMPERATURE,
+                        "topP": GEMINI_COPILOT_TOP_P,
                         "thinkingConfig": {
-                            "includeThoughts": True,
-                            "thinkingBudget": 24576,
+                            "includeThoughts": False,
+                            "thinkingBudget": GEMINI_COPILOT_THINKING_BUDGET,
                         },
                     },
                 },
