@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from src.services.pacifica_client import PacificaClient, get_pacifica_client
@@ -139,6 +140,29 @@ def extract_candle_requests(rules_json: dict[str, Any]) -> list[dict[str, Any]]:
         for (symbol, timeframe), lookback in sorted(requests.items())
         if lookback > 0
     ]
+
+
+def extract_indicator_conditions(rules_json: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        dict(condition)
+        for condition in _iter_condition_configs(rules_json)
+        if str(condition.get("type") or "").strip() in INDICATOR_CONDITION_TYPES
+    ]
+
+
+def indicator_condition_key(condition: dict[str, Any]) -> str:
+    normalized = {
+        key: value
+        for key, value in condition.items()
+        if key
+    }
+    if "symbol" in normalized:
+        normalized["symbol"] = normalize_symbol(normalized.get("symbol"))
+    if "timeframe" in normalized:
+        normalized["timeframe"] = normalize_timeframe(normalized.get("timeframe"))
+    if "secondary_timeframe" in normalized:
+        normalized["secondary_timeframe"] = normalize_timeframe(normalized.get("secondary_timeframe"))
+    return json.dumps(normalized, sort_keys=True, separators=(",", ":"), default=str)
 
 
 class IndicatorContextService:

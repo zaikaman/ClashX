@@ -9,7 +9,13 @@ from inspect import isawaitable
 from time import monotonic
 from typing import Any, Awaitable, Callable
 
-from src.services.indicator_context_service import extract_candle_requests, normalize_symbol
+from src.services.indicator_context_service import (
+    extract_candle_requests,
+    extract_indicator_conditions,
+    indicator_condition_key,
+    normalize_symbol,
+    normalize_timeframe,
+)
 from src.services.pacifica_client import PacificaClient, PacificaClientError, get_pacifica_client
 from src.services.rules_engine import RulesEngine
 from src.services.supabase_rest import SupabaseRestClient
@@ -261,11 +267,19 @@ class BotBacktestService:
         resume_checkpoint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         evaluation_rulesets = self._build_evaluation_rulesets(rules_snapshot, placeholder_symbols)
+        ruleset_plans = [
+            {
+                "rules_json": ruleset,
+                "symbols": self._extract_symbols(ruleset),
+                "indicator_conditions": extract_indicator_conditions(ruleset),
+            }
+            for ruleset in evaluation_rulesets
+        ]
         active_symbols = sorted(
             {
                 symbol
-                for ruleset in evaluation_rulesets
-                for symbol in self._extract_symbols(ruleset)
+                for plan in ruleset_plans
+                for symbol in plan["symbols"]
                 if symbol and symbol != MARKET_UNIVERSE_SYMBOL
             }
         )
@@ -277,8 +291,8 @@ class BotBacktestService:
             (symbol, interval): {"symbol": symbol, "timeframe": interval}
             for symbol in active_symbols
         }
-        for ruleset in evaluation_rulesets:
-            for request in extract_candle_requests(ruleset):
+        for plan in ruleset_plans:
+            for request in extract_candle_requests(plan["rules_json"]):
                 symbol = normalize_symbol(request.get("symbol"))
                 timeframe = str(request.get("timeframe") or "").strip().lower()
                 if not symbol or timeframe not in MAIN_TIMEFRAME_MS:
@@ -319,11 +333,16 @@ class BotBacktestService:
         ]
         for task in as_completed(tasks):
             symbol, timeframe, candles = await task
-            if timeframe == interval and not candles:
+            normalized_candles = [
+                item
+                for item in candles
+                if isinstance(item, dict) and self._to_float(item.get("close"), 0.0) > 0 and int(item.get("close_time") or 0) > 0
+            ]
+            if timeframe == interval and not normalized_candles:
                 missing_main_symbols.add(symbol)
             else:
-                candle_lookup.setdefault(symbol, {})[timeframe] = candles
-                close_time_lookup[(symbol, timeframe)] = [int(item.get("close_time") or 0) for item in candles]
+                candle_lookup.setdefault(symbol, {})[timeframe] = normalized_candles
+                close_time_lookup[(symbol, timeframe)] = [int(item.get("close_time") or 0) for item in normalized_candles]
             completed_requests += 1
             history_progress = 14.0 + (completed_requests / max(1, total_candle_requests)) * 36.0
             await self._emit_progress(
@@ -339,10 +358,10 @@ class BotBacktestService:
 
         if missing_main_symbols:
             active_symbols = [symbol for symbol in active_symbols if symbol not in missing_main_symbols]
-            evaluation_rulesets = [
-                ruleset
-                for ruleset in evaluation_rulesets
-                if self._extract_symbols(ruleset).intersection(active_symbols)
+            ruleset_plans = [
+                plan
+                for plan in ruleset_plans
+                if plan["symbols"].intersection(active_symbols)
             ]
 
         if not active_symbols:
@@ -352,6 +371,14 @@ class BotBacktestService:
                 "No historical candles were returned for any requested symbol on "
                 f"{interval}. Missing: {', '.join(sorted(missing_main_symbols))}."
             )
+
+        indicator_cache = self._build_indicator_cache(ruleset_plans=ruleset_plans, candle_lookup=candle_lookup)
+        candle_request_keys = sorted(candle_requests)
+        candle_index_by_request = {request_key: -1 for request_key in candle_request_keys}
+        request_candles = {
+            request_key: candle_lookup.get(request_key[0], {}).get(request_key[1], [])
+            for request_key in candle_request_keys
+        }
 
         main_candles = {symbol: candle_lookup.get(symbol, {}).get(interval, []) for symbol in active_symbols}
         timeline = sorted(
@@ -433,18 +460,24 @@ class BotBacktestService:
 
         next_checkpoint_at = monotonic() + BACKTEST_CHECKPOINT_INTERVAL_SECONDS
         total_bars = len(timeline)
+        any_indicator_rules = any(plan["indicator_conditions"] for plan in ruleset_plans)
 
         for processed_bars, timestamp in enumerate(timeline[processed_bars:], start=processed_bars + 1):
             timestamp_iso = self._iso_from_ms(timestamp)
-            for symbol in active_symbols:
-                symbol_candles = main_candles.get(symbol, [])
-                next_index = candle_index_by_symbol[symbol] + 1
-                while next_index < len(symbol_candles) and int(symbol_candles[next_index].get("close_time") or 0) <= timestamp:
-                    candle_index_by_symbol[symbol] = next_index
+            for request_key in candle_request_keys:
+                request_candle_rows = request_candles.get(request_key, [])
+                next_index = candle_index_by_request[request_key] + 1
+                while next_index < len(request_candle_rows) and int(request_candle_rows[next_index].get("close_time") or 0) <= timestamp:
+                    candle_index_by_request[request_key] = next_index
                     next_index += 1
-                symbol_index = candle_index_by_symbol[symbol]
+            for symbol in active_symbols:
+                symbol_index = candle_index_by_request.get((symbol, interval), -1)
+                candle_index_by_symbol[symbol] = symbol_index
+                symbol_candles = main_candles.get(symbol, [])
                 if symbol_index >= 0:
                     current_candle_by_symbol[symbol] = symbol_candles[symbol_index]
+                else:
+                    current_candle_by_symbol.pop(symbol, None)
 
             self._accrue_funding(
                 positions=positions,
@@ -497,11 +530,16 @@ class BotBacktestService:
                 for symbol, position in positions.items()
             }
 
-            for ruleset in evaluation_rulesets:
+            candle_view_lookup = (
+                self._build_candle_view_lookup(candle_request_keys=candle_request_keys, candle_lookup=candle_lookup, candle_index_by_request=candle_index_by_request)
+                if any_indicator_rules
+                else {}
+            )
+
+            for plan in ruleset_plans:
                 context = {
                     "market_lookup": market_lookup,
                     "position_lookup": position_lookup,
-                    "candle_lookup": self._slice_candle_lookup(candle_lookup, close_time_lookup, timestamp),
                     "runtime": {
                         "state": {
                             "last_executed_at": last_executed_at,
@@ -509,7 +547,10 @@ class BotBacktestService:
                         }
                     },
                 }
-                evaluation = self._rules.evaluate(rules_json=ruleset, context=context)
+                if plan["indicator_conditions"]:
+                    context["candle_lookup"] = candle_view_lookup
+                    context["indicator_cache"] = indicator_cache
+                evaluation = self._rules.evaluate(rules_json=plan["rules_json"], context=context)
                 actions = evaluation.get("actions") if isinstance(evaluation.get("actions"), list) else []
                 if not actions:
                     continue
@@ -686,6 +727,105 @@ class BotBacktestService:
                 missing_main_symbols=missing_main_symbols,
             ),
         }
+
+    def _build_candle_view_lookup(
+        self,
+        *,
+        candle_request_keys: list[tuple[str, str]],
+        candle_lookup: dict[str, dict[str, list[dict[str, Any]]]],
+        candle_index_by_request: dict[tuple[str, str], int],
+    ) -> dict[str, dict[str, dict[str, Any]]]:
+        view_lookup: dict[str, dict[str, dict[str, Any]]] = {}
+        for request_key in candle_request_keys:
+            end_index = candle_index_by_request.get(request_key, -1) + 1
+            if end_index <= 0:
+                continue
+            symbol, timeframe = request_key
+            candles = candle_lookup.get(symbol, {}).get(timeframe, [])
+            if not candles:
+                continue
+            view_lookup.setdefault(symbol, {})[timeframe] = {
+                "candles": candles,
+                "end_index": end_index,
+            }
+        return view_lookup
+
+    def _build_indicator_cache(
+        self,
+        *,
+        ruleset_plans: list[dict[str, Any]],
+        candle_lookup: dict[str, dict[str, list[dict[str, Any]]]],
+    ) -> dict[str, Any]:
+        indicator_cache: dict[str, Any] = {}
+        for plan in ruleset_plans:
+            for condition in plan["indicator_conditions"]:
+                condition_type = str(condition.get("type") or "").strip()
+                if condition_type not in {"rsi_above", "rsi_below", "ema_crosses_above", "ema_crosses_below", "macd_crosses_above_signal", "macd_crosses_below_signal"}:
+                    continue
+                cache_key = indicator_condition_key(condition)
+                if cache_key in indicator_cache:
+                    continue
+                symbol = normalize_symbol(condition.get("symbol"))
+                timeframe = normalize_timeframe(condition.get("timeframe"))
+                closes = [
+                    self._to_float(item.get("close"), 0.0)
+                    for item in candle_lookup.get(symbol, {}).get(timeframe, [])
+                ]
+                if not closes:
+                    continue
+                if condition_type in {"rsi_above", "rsi_below"}:
+                    period = max(2, int(self._to_float(condition.get("period"), 14)))
+                    indicator_cache[cache_key] = {"rsi": self._rsi_series(closes, period)}
+                    continue
+                if condition_type in {"ema_crosses_above", "ema_crosses_below"}:
+                    fast_period = max(2, int(self._to_float(condition.get("fast_period"), 9)))
+                    slow_period = max(fast_period + 1, int(self._to_float(condition.get("slow_period"), 21)))
+                    fast_values = self._rules._ema_series(closes, fast_period)
+                    slow_values = self._rules._ema_series(closes, slow_period)
+                    if len(fast_values) != len(closes):
+                        fast_values = [None] * len(closes)
+                    if len(slow_values) != len(closes):
+                        slow_values = [None] * len(closes)
+                    indicator_cache[cache_key] = {"fast": fast_values, "slow": slow_values}
+                    continue
+                fast_period = max(2, int(self._to_float(condition.get("fast_period"), 12)))
+                slow_period = max(fast_period + 1, int(self._to_float(condition.get("slow_period"), 26)))
+                signal_period = max(2, int(self._to_float(condition.get("signal_period"), 9)))
+                fast_values = self._rules._ema_series(closes, fast_period)
+                slow_values = self._rules._ema_series(closes, slow_period)
+                if len(fast_values) != len(closes) or len(slow_values) != len(closes):
+                    continue
+                macd_values = [fast - slow for fast, slow in zip(fast_values, slow_values, strict=True)]
+                signal_values = self._rules._ema_series(macd_values, signal_period)
+                padded_signal_values: list[float | None]
+                if len(signal_values) == len(macd_values):
+                    padded_signal_values = signal_values
+                else:
+                    padded_signal_values = [None] * len(macd_values)
+                indicator_cache[cache_key] = {"macd": macd_values, "signal": padded_signal_values}
+        return indicator_cache
+
+    @staticmethod
+    def _rsi_series(closes: list[float], period: int) -> list[float | None]:
+        values: list[float | None] = [None] * len(closes)
+        if len(closes) <= period:
+            return values
+        gains: list[float] = []
+        losses: list[float] = []
+        for previous, current in zip(closes, closes[1:]):
+            change = current - previous
+            gains.append(max(change, 0.0))
+            losses.append(max(-change, 0.0))
+        average_gain = sum(gains[:period]) / period
+        average_loss = sum(losses[:period]) / period
+        values[period] = 100.0 if average_loss == 0 else 100.0 - (100.0 / (1.0 + (average_gain / average_loss)))
+        for index in range(period + 1, len(closes)):
+            gain = gains[index - 1]
+            loss = losses[index - 1]
+            average_gain = ((average_gain * (period - 1)) + gain) / period
+            average_loss = ((average_loss * (period - 1)) + loss) / period
+            values[index] = 100.0 if average_loss == 0 else 100.0 - (100.0 / (1.0 + (average_gain / average_loss)))
+        return values
 
     @staticmethod
     async def _emit_progress(

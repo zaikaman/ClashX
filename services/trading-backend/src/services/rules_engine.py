@@ -7,6 +7,7 @@ from typing import Any
 
 from src.services.indicator_context_service import (
     DEFAULT_INDICATOR_TIMEFRAME,
+    indicator_condition_key,
     normalize_symbol,
     normalize_timeframe,
 )
@@ -36,6 +37,37 @@ class _GraphInspection:
     issues: list[str]
     reachable_conditions: int
     reachable_actions: int
+
+
+@dataclass(frozen=True)
+class _CandleWindow:
+    candles: list[dict[str, Any]]
+    start: int = 0
+    end: int | None = None
+
+    def __len__(self) -> int:
+        resolved_end = len(self.candles) if self.end is None else min(self.end, len(self.candles))
+        return max(0, resolved_end - self.start)
+
+    def __iter__(self):
+        resolved_end = len(self.candles) if self.end is None else min(self.end, len(self.candles))
+        return iter(self.candles[self.start:resolved_end])
+
+    def __getitem__(self, key: int | slice):
+        length = len(self)
+        if isinstance(key, slice):
+            start, stop, step = key.indices(length)
+            if step != 1:
+                return [self[index] for index in range(start, stop, step)]
+            return _CandleWindow(
+                candles=self.candles,
+                start=self.start + start,
+                end=self.start + stop,
+            )
+        index = key if key >= 0 else length + key
+        if index < 0 or index >= length:
+            raise IndexError(index)
+        return self.candles[self.start + index]
 
 
 class RulesEngine:
@@ -616,6 +648,7 @@ class RulesEngine:
         market_lookup = context.get("market_lookup") if isinstance(context.get("market_lookup"), dict) else {}
         position_lookup = context.get("position_lookup") if isinstance(context.get("position_lookup"), dict) else {}
         candle_lookup = context.get("candle_lookup") if isinstance(context.get("candle_lookup"), dict) else {}
+        indicator_cache = context.get("indicator_cache") if isinstance(context.get("indicator_cache"), dict) else {}
 
         if condition_type in {"price_above", "price_below"}:
             symbol = normalize_symbol(condition.get("symbol"))
@@ -680,7 +713,7 @@ class RulesEngine:
             return elapsed >= cooldown_seconds, f"cooldown elapsed {int(elapsed)}s / {cooldown_seconds}s"
 
         if condition_type in {"rsi_above", "rsi_below"}:
-            return self._evaluate_rsi_condition(condition, candle_lookup)
+            return self._evaluate_rsi_condition(condition, candle_lookup, indicator_cache)
 
         if condition_type in {"sma_above", "sma_below"}:
             return self._evaluate_sma_condition(condition, candle_lookup)
@@ -707,10 +740,10 @@ class RulesEngine:
             return self._evaluate_higher_timeframe_sma_condition(condition, candle_lookup)
 
         if condition_type in {"ema_crosses_above", "ema_crosses_below"}:
-            return self._evaluate_ema_cross_condition(condition, candle_lookup)
+            return self._evaluate_ema_cross_condition(condition, candle_lookup, indicator_cache)
 
         if condition_type in {"macd_crosses_above_signal", "macd_crosses_below_signal"}:
-            return self._evaluate_macd_cross_condition(condition, candle_lookup)
+            return self._evaluate_macd_cross_condition(condition, candle_lookup, indicator_cache)
 
         if condition_type in {"position_pnl_above", "position_pnl_below"}:
             return self._evaluate_position_pnl_condition(condition, position_lookup)
@@ -770,9 +803,14 @@ class RulesEngine:
         symbol: str,
         timeframe: str,
         candle_lookup: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        raw_candles = ((candle_lookup.get(symbol) or {}).get(timeframe) or []) if isinstance(candle_lookup, dict) else []
-        return [item for item in raw_candles if isinstance(item, dict) and float(item.get("close") or 0.0) > 0]
+    ) -> _CandleWindow:
+        raw_entry = ((candle_lookup.get(symbol) or {}).get(timeframe) or []) if isinstance(candle_lookup, dict) else []
+        if isinstance(raw_entry, dict) and isinstance(raw_entry.get("candles"), list):
+            candles = raw_entry["candles"]
+            end_index = int(raw_entry.get("end_index") or len(candles))
+            return _CandleWindow(candles=candles, end=max(0, min(end_index, len(candles))))
+        raw_candles = [item for item in raw_entry if isinstance(item, dict) and float(item.get("close") or 0.0) > 0] if isinstance(raw_entry, list) else []
+        return _CandleWindow(candles=raw_candles, end=len(raw_candles))
 
     @classmethod
     def _candles_for_condition(cls, condition: dict[str, Any], candle_lookup: dict[str, Any]) -> tuple[str, str, list[dict[str, Any]]]:
@@ -782,16 +820,19 @@ class RulesEngine:
         return symbol, timeframe or DEFAULT_INDICATOR_TIMEFRAME, candles
 
     @classmethod
-    def _closes_for_condition(cls, condition: dict[str, Any], candle_lookup: dict[str, Any]) -> tuple[str, str, list[float]]:
-        symbol, timeframe, candles = cls._candles_for_condition(condition, candle_lookup)
-        closes = [float(item.get("close") or 0.0) for item in candles]
-        return symbol, timeframe, closes
-
-    def _evaluate_rsi_condition(self, condition: dict[str, Any], candle_lookup: dict[str, Any]) -> tuple[bool, str]:
-        symbol, timeframe, closes = self._closes_for_condition(condition, candle_lookup)
+    def _evaluate_rsi_condition(
+        self,
+        condition: dict[str, Any],
+        candle_lookup: dict[str, Any],
+        indicator_cache: dict[str, Any],
+    ) -> tuple[bool, str]:
+        symbol, timeframe, candles = self._candles_for_condition(condition, candle_lookup)
         period = max(2, int(self._to_float(condition.get("period"), 14)))
         threshold = self._to_float(condition.get("value"), 70.0 if str(condition.get("type")) == "rsi_above" else 30.0)
-        rsi_value = self._latest_rsi(closes, period)
+        rsi_value = self._cached_series_value(condition, candles, indicator_cache, series_key="rsi")
+        if rsi_value is None:
+            closes = [float(item.get("close") or 0.0) for item in candles]
+            rsi_value = self._latest_rsi(closes, period)
         if rsi_value is None:
             return False, f"indicator data unavailable for {symbol} {timeframe} RSI({period})"
         if str(condition.get("type")) == "rsi_above":
@@ -799,24 +840,25 @@ class RulesEngine:
         return rsi_value < threshold, f"{symbol} {timeframe} RSI({period}) {rsi_value:.2f} < {threshold:.2f}"
 
     def _evaluate_sma_condition(self, condition: dict[str, Any], candle_lookup: dict[str, Any]) -> tuple[bool, str]:
-        symbol, timeframe, closes = self._closes_for_condition(condition, candle_lookup)
+        symbol, timeframe, candles = self._candles_for_condition(condition, candle_lookup)
         period = max(2, int(self._to_float(condition.get("period"), 20)))
-        if len(closes) < period:
+        if len(candles) < period:
             return False, f"indicator data unavailable for {symbol} {timeframe} SMA({period})"
-        latest_close = closes[-1]
-        sma_value = sum(closes[-period:]) / period
+        window = candles[-period:]
+        latest_close = self._to_float(candles[-1].get("close"), 0.0)
+        sma_value = sum(self._to_float(item.get("close"), 0.0) for item in window) / period
         if str(condition.get("type")) == "sma_above":
             return latest_close > sma_value, f"{symbol} {timeframe} close {latest_close:.4f} > SMA({period}) {sma_value:.4f}"
         return latest_close < sma_value, f"{symbol} {timeframe} close {latest_close:.4f} < SMA({period}) {sma_value:.4f}"
 
     def _evaluate_price_change_condition(self, condition: dict[str, Any], candle_lookup: dict[str, Any]) -> tuple[bool, str]:
-        symbol, timeframe, closes = self._closes_for_condition(condition, candle_lookup)
+        symbol, timeframe, candles = self._candles_for_condition(condition, candle_lookup)
         period = max(1, int(self._to_float(condition.get("period"), 5)))
         threshold = self._to_float(condition.get("value"), 1.0)
-        if len(closes) <= period:
+        if len(candles) <= period:
             return False, f"indicator data unavailable for {symbol} {timeframe} price change({period})"
-        baseline = closes[-(period + 1)]
-        latest_close = closes[-1]
+        baseline = self._to_float(candles[-(period + 1)].get("close"), 0.0)
+        latest_close = self._to_float(candles[-1].get("close"), 0.0)
         if baseline <= 0:
             return False, f"invalid baseline price for {symbol} {timeframe} change({period})"
         change_pct = ((latest_close - baseline) / baseline) * 100.0
@@ -825,16 +867,19 @@ class RulesEngine:
         return change_pct < threshold, f"{symbol} {timeframe} change {change_pct:.2f}% < {threshold:.2f}% over {period} bars"
 
     def _evaluate_volatility_condition(self, condition: dict[str, Any], candle_lookup: dict[str, Any]) -> tuple[bool, str]:
-        symbol, timeframe, closes = self._closes_for_condition(condition, candle_lookup)
+        symbol, timeframe, candles = self._candles_for_condition(condition, candle_lookup)
         period = max(2, int(self._to_float(condition.get("period"), 20)))
         threshold = self._to_float(condition.get("value"), 1.5)
-        if len(closes) <= period:
+        if len(candles) <= period:
             return False, f"indicator data unavailable for {symbol} {timeframe} volatility({period})"
+        recent = candles[-(period + 1):]
         returns: list[float] = []
-        for previous, current in zip(closes[-(period + 1):], closes[-period:], strict=True):
-            if previous <= 0:
+        for previous, current in zip(recent, recent[1:], strict=True):
+            previous_close = self._to_float(previous.get("close"), 0.0)
+            current_close = self._to_float(current.get("close"), 0.0)
+            if previous_close <= 0:
                 continue
-            returns.append(((current - previous) / previous) * 100.0)
+            returns.append(((current_close - previous_close) / previous_close) * 100.0)
         if len(returns) < period:
             return False, f"indicator data unavailable for {symbol} {timeframe} volatility({period})"
         mean = sum(returns) / len(returns)
@@ -845,16 +890,16 @@ class RulesEngine:
         return volatility < threshold, f"{symbol} {timeframe} volatility {volatility:.2f}% < {threshold:.2f}%"
 
     def _evaluate_bollinger_condition(self, condition: dict[str, Any], candle_lookup: dict[str, Any]) -> tuple[bool, str]:
-        symbol, timeframe, closes = self._closes_for_condition(condition, candle_lookup)
+        symbol, timeframe, candles = self._candles_for_condition(condition, candle_lookup)
         period = max(2, int(self._to_float(condition.get("period"), 20)))
         deviation_multiplier = self._to_float(condition.get("value"), 2.0)
-        if len(closes) < period:
+        if len(candles) < period:
             return False, f"indicator data unavailable for {symbol} {timeframe} Bollinger({period})"
-        window = closes[-period:]
+        window = [self._to_float(item.get("close"), 0.0) for item in candles[-period:]]
         basis = sum(window) / period
         variance = sum((item - basis) ** 2 for item in window) / period
         deviation = variance ** 0.5
-        latest_close = closes[-1]
+        latest_close = self._to_float(candles[-1].get("close"), 0.0)
         upper_band = basis + (deviation * deviation_multiplier)
         lower_band = basis - (deviation * deviation_multiplier)
         if str(condition.get("type")) == "bollinger_above_upper":
@@ -938,12 +983,42 @@ class RulesEngine:
             return latest_close > htf_sma, f"{symbol} {timeframe} close {latest_close:.4f} > {secondary_timeframe} SMA({period}) {htf_sma:.4f}"
         return latest_close < htf_sma, f"{symbol} {timeframe} close {latest_close:.4f} < {secondary_timeframe} SMA({period}) {htf_sma:.4f}"
 
-    def _evaluate_ema_cross_condition(self, condition: dict[str, Any], candle_lookup: dict[str, Any]) -> tuple[bool, str]:
-        symbol, timeframe, closes = self._closes_for_condition(condition, candle_lookup)
+    def _evaluate_ema_cross_condition(
+        self,
+        condition: dict[str, Any],
+        candle_lookup: dict[str, Any],
+        indicator_cache: dict[str, Any],
+    ) -> tuple[bool, str]:
+        symbol, timeframe, candles = self._candles_for_condition(condition, candle_lookup)
         fast_period = max(2, int(self._to_float(condition.get("fast_period"), 9)))
         slow_period = max(fast_period + 1, int(self._to_float(condition.get("slow_period"), 21)))
-        fast_pair = self._latest_indicator_pair(self._ema_series(closes, fast_period))
-        slow_pair = self._latest_indicator_pair(self._ema_series(closes, slow_period))
+        cached_entry = indicator_cache.get(indicator_condition_key(condition))
+        if isinstance(cached_entry, dict):
+            current_index = len(candles) - 1
+            fast_values = cached_entry.get("fast")
+            slow_values = cached_entry.get("slow")
+            if isinstance(fast_values, list) and isinstance(slow_values, list) and current_index >= 1:
+                if current_index < len(fast_values) and current_index < len(slow_values):
+                    previous_fast = fast_values[current_index - 1]
+                    current_fast = fast_values[current_index]
+                    previous_slow = slow_values[current_index - 1]
+                    current_slow = slow_values[current_index]
+                    if None in {previous_fast, current_fast, previous_slow, current_slow}:
+                        fast_pair = None
+                        slow_pair = None
+                    else:
+                        fast_pair = (float(previous_fast), float(current_fast))
+                        slow_pair = (float(previous_slow), float(current_slow))
+                else:
+                    fast_pair = None
+                    slow_pair = None
+            else:
+                fast_pair = None
+                slow_pair = None
+        else:
+            closes = [float(item.get("close") or 0.0) for item in candles]
+            fast_pair = self._latest_indicator_pair(self._ema_series(closes, fast_period))
+            slow_pair = self._latest_indicator_pair(self._ema_series(closes, slow_period))
         if fast_pair is None or slow_pair is None:
             return False, f"indicator data unavailable for {symbol} {timeframe} EMA({fast_period}/{slow_period})"
 
@@ -962,12 +1037,43 @@ class RulesEngine:
             f"EMA({slow_period}) {slow_previous:.2f}->{slow_current:.2f}"
         )
 
-    def _evaluate_macd_cross_condition(self, condition: dict[str, Any], candle_lookup: dict[str, Any]) -> tuple[bool, str]:
-        symbol, timeframe, closes = self._closes_for_condition(condition, candle_lookup)
+    def _evaluate_macd_cross_condition(
+        self,
+        condition: dict[str, Any],
+        candle_lookup: dict[str, Any],
+        indicator_cache: dict[str, Any],
+    ) -> tuple[bool, str]:
+        symbol, timeframe, candles = self._candles_for_condition(condition, candle_lookup)
         fast_period = max(2, int(self._to_float(condition.get("fast_period"), 12)))
         slow_period = max(fast_period + 1, int(self._to_float(condition.get("slow_period"), 26)))
         signal_period = max(2, int(self._to_float(condition.get("signal_period"), 9)))
-        macd_pair = self._latest_macd_pair(closes, fast_period, slow_period, signal_period)
+        cached_entry = indicator_cache.get(indicator_condition_key(condition))
+        if isinstance(cached_entry, dict):
+            current_index = len(candles) - 1
+            macd_values = cached_entry.get("macd")
+            signal_values = cached_entry.get("signal")
+            if isinstance(macd_values, list) and isinstance(signal_values, list) and current_index >= 1:
+                if current_index < len(macd_values) and current_index < len(signal_values):
+                    previous_macd = macd_values[current_index - 1]
+                    current_macd = macd_values[current_index]
+                    previous_signal = signal_values[current_index - 1]
+                    current_signal = signal_values[current_index]
+                    if None in {previous_macd, current_macd, previous_signal, current_signal}:
+                        macd_pair = None
+                    else:
+                        macd_pair = (
+                            float(previous_macd),
+                            float(previous_signal),
+                            float(current_macd),
+                            float(current_signal),
+                        )
+                else:
+                    macd_pair = None
+            else:
+                macd_pair = None
+        else:
+            closes = [float(item.get("close") or 0.0) for item in candles]
+            macd_pair = self._latest_macd_pair(closes, fast_period, slow_period, signal_period)
         if macd_pair is None:
             return False, f"indicator data unavailable for {symbol} {timeframe} MACD({fast_period},{slow_period},{signal_period})"
 
@@ -1022,6 +1128,24 @@ class RulesEngine:
         if str(condition.get("type")) == "position_in_profit":
             return unrealized_pnl > 0, f"{symbol} unrealized PnL {unrealized_pnl:.2f} > 0"
         return unrealized_pnl < 0, f"{symbol} unrealized PnL {unrealized_pnl:.2f} < 0"
+
+    @staticmethod
+    def _cached_series_value(
+        condition: dict[str, Any],
+        candles: _CandleWindow,
+        indicator_cache: dict[str, Any],
+        *,
+        series_key: str,
+    ) -> float | None:
+        cached_entry = indicator_cache.get(indicator_condition_key(condition))
+        if not isinstance(cached_entry, dict):
+            return None
+        series = cached_entry.get(series_key)
+        current_index = len(candles) - 1
+        if not isinstance(series, list) or current_index < 0 or current_index >= len(series):
+            return None
+        value = series[current_index]
+        return None if value is None else float(value)
 
     def _position_snapshot(
         self,
