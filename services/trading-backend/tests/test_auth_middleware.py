@@ -35,6 +35,7 @@ def _build_request(path: str, method: str, headers: dict[str, str] | None = None
     ("method", "path"),
     [
         ("POST", "/api/bots/validate"),
+        ("POST", "/api/telegram/webhook"),
         ("GET", "/api/builder/templates"),
         ("GET", "/api/builder/markets"),
     ],

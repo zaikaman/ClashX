@@ -6,7 +6,7 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   Activity, BarChart3, LayoutDashboard, Box, Home, X, ShoppingBag,
-  Trophy, Menu, FlaskConical, Bot
+  Trophy, Menu, FlaskConical, Bot, Send
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -23,6 +23,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       items: [
         { href: '/dashboard', label: 'Dashboard', icon: Activity },
         { href: '/analytics', label: 'Analytics', icon: BarChart3 },
+        { href: '/telegram', label: 'Telegram', icon: Send },
       ]
     },
     {

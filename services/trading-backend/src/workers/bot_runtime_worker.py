@@ -26,10 +26,12 @@ from src.services.pacifica_client import PacificaClient, PacificaClientError, ge
 from src.services.pacifica_market_data_service import get_pacifica_market_data_service
 from src.services.rules_engine import RulesEngine
 from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
+from src.services.telegram_service import TelegramService
 from src.services.worker_coordination_service import WorkerCoordinationService
 
 
 logger = logging.getLogger(__name__)
+telegram_service = TelegramService()
 PENDING_ENTRY_TTL_SECONDS = 120
 RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 120
 SKIP_EVENT_DEDUP_SECONDS = 300
@@ -349,6 +351,12 @@ class BotRuntimeWorker:
                 event="bot.runtime.stopped",
                 payload=self._serialize_event_payload(event),
             )
+            with contextlib.suppress(Exception):
+                await telegram_service.notify_user(
+                    user_id=str(runtime["user_id"]),
+                    event="bot.runtime.stopped",
+                    payload=self._serialize_event_payload(event),
+                )
             return runtime
 
         if not evaluation_due:
@@ -377,6 +385,12 @@ class BotRuntimeWorker:
                 event="bot.runtime.authorization_required",
                 payload={"runtime_id": runtime["id"], "bot_id": bot["id"]},
             )
+            with contextlib.suppress(Exception):
+                await telegram_service.notify_user(
+                    user_id=str(runtime["user_id"]),
+                    event="bot.runtime.authorization_required",
+                    payload={"runtime_id": runtime["id"], "bot_id": bot["id"]},
+                )
             return runtime
 
         if self._should_suspend_entry_evaluation(
@@ -589,6 +603,12 @@ class BotRuntimeWorker:
                     event="bot.execution.failed",
                     payload=self._serialize_event_payload(event),
                 )
+                with contextlib.suppress(Exception):
+                    await telegram_service.notify_user(
+                        user_id=str(runtime["user_id"]),
+                        event="bot.execution.failed",
+                        payload=self._serialize_event_payload(event),
+                    )
                 logger.error(
                     "Runtime %s failed action %s for %s: %s",
                     runtime["id"],

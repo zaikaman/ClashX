@@ -14,9 +14,11 @@ from src.services.event_broadcaster import broadcaster
 from src.services.pacifica_auth_service import PacificaAuthService
 from src.services.portfolio_risk_service import PortfolioRiskService
 from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
+from src.services.telegram_service import TelegramService
 
 
 logger = logging.getLogger(__name__)
+telegram_service = TelegramService()
 
 
 class PortfolioAllocatorService:
@@ -229,6 +231,15 @@ class PortfolioAllocatorService:
             event="portfolio.kill_switch",
             payload={"portfolio_id": basket["id"], "engaged": engaged, "reason": reason},
         )
+        if engaged:
+            try:
+                await telegram_service.notify_user(
+                    user_id=str(basket["owner_user_id"]),
+                    event="portfolio.kill_switch",
+                    payload={"portfolio_id": basket["id"], "engaged": engaged, "reason": reason},
+                )
+            except Exception:
+                logger.exception("Failed to deliver Telegram portfolio alert for %s", basket["id"])
         return self.get_portfolio(portfolio_id=basket["id"], wallet_address=basket["wallet_address"])
 
     async def delete_portfolio(self, *, portfolio_id: str, wallet_address: str | None) -> None:

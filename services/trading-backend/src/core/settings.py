@@ -104,6 +104,11 @@ class Settings:
     openai_api_key: str
     openai_base_url: str
     openai_model: str
+    telegram_bot_token: str
+    telegram_bot_username: str
+    telegram_webhook_url: str
+    telegram_webhook_secret: str
+    telegram_link_code_ttl_minutes: int
 
 
 @lru_cache(maxsize=1)
@@ -183,4 +188,9 @@ def get_settings() -> Settings:
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         openai_base_url=os.getenv("OPENAI_BASE_URL", "").strip(),
         openai_model=os.getenv("OPENAI_MODEL", "").strip(),
+        telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
+        telegram_bot_username=os.getenv("TELEGRAM_BOT_USERNAME", "clash_x_bot").strip(),
+        telegram_webhook_url=os.getenv("TELEGRAM_WEBHOOK_URL", "").strip(),
+        telegram_webhook_secret=os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip(),
+        telegram_link_code_ttl_minutes=max(int(os.getenv("TELEGRAM_LINK_CODE_TTL_MINUTES", "20")), 5),
     )

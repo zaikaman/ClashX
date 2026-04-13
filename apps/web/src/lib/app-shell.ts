@@ -65,6 +65,11 @@ export const appNavGroups: AppNavGroup[] = [
         description: "Compare fleet performance, exposure concentration, and action quality.",
       },
       {
+        href: "/telegram",
+        label: "Telegram",
+        description: "Link the bot, route alerts, and use chat as a faster command desk.",
+      },
+      {
         href: "/bots",
         label: "My bots",
         description: "Open drafts, runtimes, and health details.",
@@ -85,6 +90,7 @@ export const appWorkflow = [
   { href: "/bots", label: "Deploy and monitor" },
   { href: "/dashboard", label: "Watch the fleet" },
   { href: "/analytics", label: "Read the analytics" },
+  { href: "/telegram", label: "Link the Telegram bot" },
   { href: "/copy", label: "Follow top traders" },
 ];
 
@@ -273,6 +279,24 @@ export function getAppPageMeta(pathname: string): AppPageMeta {
       actions: [
         { href: "/marketplace", label: "Browse marketplace", tone: "primary" },
         { href: "/dashboard", label: "Open operations", tone: "secondary" },
+      ],
+    };
+  }
+
+  if (normalizedPathname === "/telegram") {
+    return {
+      eyebrow: "Telegram relay",
+      title: "Turn Telegram into your trading alert line",
+      description: "Link one wallet, route the alerts that matter, and keep a faster command surface for fleet status and live positions.",
+      guidanceTitle: "How to use this desk",
+      guidance: [
+        "Generate a secure link from this page before you open the bot so chat binding stays wallet-scoped.",
+        "Keep critical alerts on by default, then decide whether execution failures and copy updates deserve the extra noise.",
+        "Send a test ping after linking so you verify delivery before you trust the next real alert.",
+      ],
+      actions: [
+        { href: "/dashboard", label: "Open dashboard", tone: "primary" },
+        { href: "/bots", label: "Open my bots", tone: "secondary" },
       ],
     };
   }

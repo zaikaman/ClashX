@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -12,9 +13,11 @@ from src.services.event_broadcaster import broadcaster
 from src.services.pacifica_auth_service import PacificaAuthService
 from src.services.pacifica_client import PacificaClient, get_pacifica_client
 from src.services.supabase_rest import SupabaseRestClient
+from src.services.telegram_service import TelegramService
 
 
 SNAPSHOT_TTL_SECONDS = 60
+telegram_service = TelegramService()
 
 
 class BotCopyEngine:
@@ -189,6 +192,18 @@ class BotCopyEngine:
             returning="minimal",
         )
         await broadcaster.publish(channel=f"user:{follower['id']}", event="bot.copy.updated", payload={"relationship_id": relationship["id"], "status": relationship["status"], "source_runtime_id": relationship["source_runtime_id"], "scale_bps": relationship["scale_bps"], "preview": preview})
+        with contextlib.suppress(Exception):
+            await telegram_service.notify_user(
+                user_id=str(follower["id"]),
+                event="bot.copy.updated",
+                payload={
+                    "relationship_id": relationship["id"],
+                    "status": relationship["status"],
+                    "source_runtime_id": relationship["source_runtime_id"],
+                    "scale_bps": relationship["scale_bps"],
+                    "preview": preview,
+                },
+            )
         return self.serialize_relationship(None, relationship)
 
     def create_clone(self, db: Any, *, runtime_id: str, wallet_address: str, name: str | None, description: str | None, visibility: str) -> dict:
@@ -252,6 +267,12 @@ class BotCopyEngine:
             returning="minimal",
         )
         await broadcaster.publish(channel=f"user:{relationship['follower_user_id']}", event="bot.copy.updated", payload={"relationship_id": relationship["id"], "status": relationship["status"], "scale_bps": relationship["scale_bps"]})
+        with contextlib.suppress(Exception):
+            await telegram_service.notify_user(
+                user_id=str(relationship["follower_user_id"]),
+                event="bot.copy.updated",
+                payload={"relationship_id": relationship["id"], "status": relationship["status"], "scale_bps": relationship["scale_bps"]},
+            )
         return self.serialize_relationship(None, relationship)
 
     async def stop_relationship(self, db: Any, *, relationship_id: str) -> dict:

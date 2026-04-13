@@ -539,6 +539,16 @@ CREATE TABLE public.users (
   display_name character varying,
   auth_provider character varying NOT NULL DEFAULT 'privy'::character varying,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  telegram_chat_id bigint,
+  telegram_chat_type character varying,
+  telegram_username character varying,
+  telegram_first_name character varying,
+  telegram_connected_at timestamp with time zone,
+  telegram_last_interaction_at timestamp with time zone,
+  telegram_link_code character varying,
+  telegram_link_code_expires_at timestamp with time zone,
+  telegram_notifications_enabled boolean NOT NULL DEFAULT true,
+  telegram_notification_prefs jsonb NOT NULL DEFAULT '{"copy_activity": true, "critical_alerts": true, "execution_failures": true}'::jsonb,
   CONSTRAINT users_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.worker_leases (

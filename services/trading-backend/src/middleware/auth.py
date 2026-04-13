@@ -17,6 +17,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             ("GET", "/healthz"),
             ("POST", "/api/auth/privy/verify"),
             ("POST", "/api/bots/validate"),
+            ("POST", "/api/telegram/webhook"),
             ("GET", "/docs"),
             ("GET", "/openapi.json"),
         }

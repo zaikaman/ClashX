@@ -53,6 +53,15 @@ class _FakeMarketplaceService:
         self.stop_calls += 1
 
 
+class _FakeTelegramService:
+    def __init__(self) -> None:
+        self.configure_calls = 0
+
+    async def configure_bot(self, *, settings) -> None:
+        del settings
+        self.configure_calls += 1
+
+
 def _build_settings(*, background_workers_enabled: bool) -> SimpleNamespace:
     return SimpleNamespace(
         app_name="Test App",
@@ -65,11 +74,13 @@ def _build_settings(*, background_workers_enabled: bool) -> SimpleNamespace:
 def test_web_startup_skips_pacifica_ws(monkeypatch) -> None:
     market_data_service = _FakeMarketDataService()
     marketplace = _FakeMarketplaceService()
+    telegram = _FakeTelegramService()
 
     monkeypatch.setattr(main, "get_settings", lambda: _build_settings(background_workers_enabled=False))
     monkeypatch.setattr(main, "get_performance_metrics_store", lambda: _FakeMetricsStore())
     monkeypatch.setattr(main, "get_pacifica_market_data_service", lambda: market_data_service)
     monkeypatch.setattr(main, "marketplace_service", marketplace)
+    monkeypatch.setattr(main, "telegram_service", telegram)
     monkeypatch.setattr(main, "BotRuntimeWorker", _FakeWorker)
     monkeypatch.setattr(main, "BotCopyWorker", _FakeWorker)
     monkeypatch.setattr(main, "BotRuntimeSnapshotWorker", _FakeWorker)
@@ -85,16 +96,19 @@ def test_web_startup_skips_pacifica_ws(monkeypatch) -> None:
     assert market_data_service.stop_calls == 1
     assert marketplace.start_calls == 0
     assert marketplace.stop_calls == 1
+    assert telegram.configure_calls == 1
 
 
 def test_worker_enabled_startup_starts_pacifica_ws(monkeypatch) -> None:
     market_data_service = _FakeMarketDataService()
     marketplace = _FakeMarketplaceService()
+    telegram = _FakeTelegramService()
 
     monkeypatch.setattr(main, "get_settings", lambda: _build_settings(background_workers_enabled=True))
     monkeypatch.setattr(main, "get_performance_metrics_store", lambda: _FakeMetricsStore())
     monkeypatch.setattr(main, "get_pacifica_market_data_service", lambda: market_data_service)
     monkeypatch.setattr(main, "marketplace_service", marketplace)
+    monkeypatch.setattr(main, "telegram_service", telegram)
     monkeypatch.setattr(main, "BotRuntimeWorker", _FakeWorker)
     monkeypatch.setattr(main, "BotCopyWorker", _FakeWorker)
     monkeypatch.setattr(main, "BotRuntimeSnapshotWorker", _FakeWorker)
@@ -110,3 +124,4 @@ def test_worker_enabled_startup_starts_pacifica_ws(monkeypatch) -> None:
     assert market_data_service.stop_calls == 1
     assert marketplace.start_calls == 1
     assert marketplace.stop_calls == 1
+    assert telegram.configure_calls == 1

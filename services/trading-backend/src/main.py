@@ -18,6 +18,8 @@ from src.api.pacifica import router as pacifica_router
 from src.api.portfolios import router as portfolios_router
 from src.api.stream import router as stream_router
 from src.api.stream import websocket_fallback
+from src.api.telegram import router as telegram_router
+from src.api.telegram import telegram_service
 from src.api.trading import router as trading_router
 from src.core.performance_metrics import get_performance_metrics_store
 from src.core.settings import get_settings
@@ -73,6 +75,7 @@ def create_app() -> FastAPI:
     app.include_router(pacifica_router)
     app.include_router(portfolios_router)
     app.include_router(stream_router)
+    app.include_router(telegram_router)
     app.include_router(trading_router)
 
     @app.middleware("http")
@@ -91,6 +94,7 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def startup() -> None:
+        await telegram_service.configure_bot(settings=settings)
         if not settings.background_workers_enabled:
             return
         await marketplace_service.start_background_warmup()
