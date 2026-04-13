@@ -176,19 +176,25 @@ class AiJobRunnerService:
                 },
             )
 
+        def run_backtest_in_thread() -> dict[str, Any]:
+            async def execute() -> dict[str, Any]:
+                return await self._bot_backtests.run_backtest(
+                    None,
+                    bot_id=bot_id,
+                    wallet_address=wallet_address,
+                    user_id=user_id,
+                    interval=interval,
+                    start_time=start_time,
+                    end_time=end_time,
+                    initial_capital_usd=initial_capital_usd,
+                    assumptions=assumptions,
+                    progress=progress_callback,
+                )
+
+            return asyncio.run(execute())
+
         try:
-            result = await self._bot_backtests.run_backtest(
-                None,
-                bot_id=bot_id,
-                wallet_address=wallet_address,
-                user_id=user_id,
-                interval=interval,
-                start_time=start_time,
-                end_time=end_time,
-                initial_capital_usd=initial_capital_usd,
-                assumptions=assumptions,
-                progress=progress_callback,
-            )
+            result = await asyncio.to_thread(run_backtest_in_thread)
         except Exception as exc:
             logger.exception("Backtest job %s failed", job_id)
             self._job_service.mark_failed(job_id=job_id, error_detail=str(exc) or "Backtest job failed.")

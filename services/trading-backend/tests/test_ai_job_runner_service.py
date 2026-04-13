@@ -298,3 +298,33 @@ def test_backtest_job_runner_persists_progress_then_result() -> None:
     assert jobs.completed_jobs[0][1]["type"] == "result"
     assert jobs.completed_jobs[0][1]["run"]["id"] == "run-1"
     assert jobs.failed_jobs == []
+
+
+def test_backtest_job_runner_offloads_work_from_server_loop(monkeypatch) -> None:
+    jobs = _FakeJobService()
+    runner = AiJobRunnerService(job_service=jobs, bot_backtest_service=_FakeBacktestService())
+    offloaded: dict[str, bool] = {"used": False}
+    original_to_thread = asyncio.to_thread
+
+    async def fake_to_thread(func, /, *args, **kwargs):
+        offloaded["used"] = True
+        return await original_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr("src.services.ai_job_runner_service.asyncio.to_thread", fake_to_thread)
+
+    asyncio.run(
+        runner._run_backtest_run_job(
+            job_id="job-5",
+            bot_id="bot-1",
+            wallet_address="wallet-abc",
+            user_id="user-123",
+            interval="1m",
+            start_time=1,
+            end_time=2,
+            initial_capital_usd=10_000,
+            assumptions=None,
+        )
+    )
+
+    assert offloaded["used"] is True
+    assert jobs.completed_jobs[0][0] == "job-5"
