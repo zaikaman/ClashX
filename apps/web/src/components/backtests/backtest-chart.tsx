@@ -2,8 +2,8 @@
 
 import { useEffect, useRef } from "react";
 import {
+  AreaSeries,
   createChart,
-  createSeriesMarkers,
   LineSeries,
   type IChartApi,
   type UTCTimestamp,
@@ -62,11 +62,13 @@ export function BacktestChart({
     });
     chartRef.current = chart;
 
-    const seriesRefs = visibleRuns.map((run, index) => {
-      const equitySeries = chart.addSeries(LineSeries, {
+    visibleRuns.forEach((run, index) => {
+      const isPrimarySeries = index === 0;
+      const seriesType = isPrimarySeries ? AreaSeries : LineSeries;
+      const equitySeries = chart.addSeries(seriesType, {
         priceScaleId: "left",
         color: EQUITY_COLORS[index % EQUITY_COLORS.length],
-        lineWidth: index === 0 ? 3 : 2,
+        lineWidth: isPrimarySeries ? 3 : 2,
         lastValueVisible: true,
         crosshairMarkerVisible: true,
         priceFormat: {
@@ -74,6 +76,13 @@ export function BacktestChart({
           precision: 2,
           minMove: 0.01,
         },
+        ...(isPrimarySeries
+          ? {
+              lineColor: EQUITY_COLORS[index % EQUITY_COLORS.length],
+              topColor: "rgba(220,232,93,0.24)",
+              bottomColor: "rgba(220,232,93,0.02)",
+            }
+          : {}),
       });
       equitySeries.setData(
         run.result_json.equity_curve.map((point) => ({
@@ -81,32 +90,7 @@ export function BacktestChart({
           value: point.equity,
         })),
       );
-      return equitySeries;
     });
-
-    const markerPlugin = createSeriesMarkers(seriesRefs[0]);
-    markerPlugin.setMarkers(
-      primaryRun.result_json.trades.flatMap((trade) => {
-        const entryMarker = {
-          time: asUtc(new Date(trade.entry_time).getTime()),
-          position: trade.side === "long" ? "belowBar" : "aboveBar",
-          color: trade.side === "long" ? "#74b97f" : "#e06c6e",
-          shape: trade.side === "long" ? "arrowUp" : "arrowDown",
-          text: trade.side === "long" ? "L" : "S",
-        } as const;
-        if (!trade.exit_time) {
-          return [entryMarker];
-        }
-        const exitMarker = {
-          time: asUtc(new Date(trade.exit_time).getTime()),
-          position: trade.side === "long" ? "aboveBar" : "belowBar",
-          color: "#dce85d",
-          shape: "circle",
-          text: trade.close_reason ? trade.close_reason.slice(0, 2).toUpperCase() : "X",
-        } as const;
-        return [entryMarker, exitMarker];
-      }),
-    );
 
     chart.timeScale().fitContent();
     const resizeObserver = new ResizeObserver(() => {
@@ -116,7 +100,6 @@ export function BacktestChart({
 
     return () => {
       resizeObserver.disconnect();
-      markerPlugin.setMarkers([]);
       chart.remove();
       chartRef.current = null;
     };
