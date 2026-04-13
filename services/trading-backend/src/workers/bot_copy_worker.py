@@ -6,7 +6,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 from time import monotonic
-from decimal import ROUND_DOWN, Decimal
+from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from time import perf_counter
 from typing import Any
 
@@ -263,8 +263,9 @@ class BotCopyWorker:
             "account": credentials["account_address"],
             "agent_wallet": credentials["agent_wallet_address"],
             "__agent_private_key": credentials["agent_private_key"],
-            "symbol": symbol,
         }
+        if symbol:
+            payload["symbol"] = symbol
 
         if action_type in {"open_long", "open_short", "place_market_order"}:
             if not symbol:
@@ -279,6 +280,7 @@ class BotCopyWorker:
             if side not in {"long", "short"}:
                 raise ValueError("Market orders require side to be long or short")
             leverage = max(1, int(float(action.get("leverage") or 1)))
+            self._validate_market_leverage(market_lookup=market_lookup, symbol=symbol, leverage=leverage)
             reduce_only = self._to_bool(action.get("reduce_only"), False)
             mark_price = float((market_lookup.get(symbol) or {}).get("mark_price") or 0)
             amount = self._resolve_order_quantity(
@@ -319,7 +321,14 @@ class BotCopyWorker:
             if price <= 0:
                 raise ValueError("Limit orders require a positive price")
             leverage = max(1, int(float(action.get("leverage") or 1)))
+            self._validate_market_leverage(market_lookup=market_lookup, symbol=symbol, leverage=leverage)
             reduce_only = self._to_bool(action.get("reduce_only"), False)
+            normalized_price = self._build_limit_order_price(
+                symbol=symbol,
+                side=side,
+                price=price,
+                market_lookup=market_lookup,
+            )
             amount = self._resolve_order_quantity(
                 action=action,
                 scale_bps=scale_bps,
@@ -335,7 +344,7 @@ class BotCopyWorker:
                     **payload,
                     "side": "bid" if side == "long" else "ask",
                     "amount": amount,
-                    "price": price,
+                    "price": normalized_price,
                     "tif": str(action.get("tif") or "GTC"),
                     "reduce_only": reduce_only,
                     "client_order_id": self._mirror_client_order_id(relationship=relationship, source_event=source_event),
@@ -346,7 +355,7 @@ class BotCopyWorker:
                 "side": "bid" if side == "long" else "ask",
                 "amount": amount,
                 "reduce_only": reduce_only,
-                "reference_price": price,
+                "reference_price": normalized_price,
             }
             return response
 
@@ -358,6 +367,7 @@ class BotCopyWorker:
                 raise ValueError("TWAP orders require side to be long or short")
             duration_seconds = max(1, int(float(action.get("duration_seconds") or 0)))
             leverage = max(1, int(float(action.get("leverage") or 1)))
+            self._validate_market_leverage(market_lookup=market_lookup, symbol=symbol, leverage=leverage)
             reduce_only = self._to_bool(action.get("reduce_only"), False)
             mark_price = float((market_lookup.get(symbol) or {}).get("mark_price") or 0)
             amount = self._resolve_order_quantity(
@@ -421,7 +431,9 @@ class BotCopyWorker:
             if not isinstance(follower_position, dict):
                 raise ValueError("No follower position available for TP/SL")
             amount = abs(float(follower_position.get("amount") or 0))
-            mark_price = float(follower_position.get("mark_price") or (market_lookup.get(symbol) or {}).get("mark_price") or 0)
+            market = market_lookup.get(symbol) or {}
+            mark_price = float(follower_position.get("mark_price") or market.get("mark_price") or 0)
+            tick_size = float(market.get("tick_size") or 0)
             if amount <= 0 or mark_price <= 0:
                 raise ValueError("Cannot set TP/SL without valid follower position")
             tp_pct = float(action.get("take_profit_pct") or 0)
@@ -429,11 +441,27 @@ class BotCopyWorker:
             side = str(follower_position.get("side") or "").lower()
             close_side = "ask" if side in {"bid", "long"} else "bid"
             if side in {"bid", "long"}:
-                take_profit_price = mark_price * (1 + tp_pct / 100)
-                stop_loss_price = mark_price * (1 - sl_pct / 100)
+                take_profit_price = self._normalize_price_to_tick(
+                    mark_price * (1 + tp_pct / 100),
+                    tick_size=tick_size,
+                    rounding=ROUND_UP,
+                )
+                stop_loss_price = self._normalize_price_to_tick(
+                    mark_price * (1 - sl_pct / 100),
+                    tick_size=tick_size,
+                    rounding=ROUND_DOWN,
+                )
             else:
-                take_profit_price = mark_price * (1 - tp_pct / 100)
-                stop_loss_price = mark_price * (1 + sl_pct / 100)
+                take_profit_price = self._normalize_price_to_tick(
+                    mark_price * (1 - tp_pct / 100),
+                    tick_size=tick_size,
+                    rounding=ROUND_DOWN,
+                )
+                stop_loss_price = self._normalize_price_to_tick(
+                    mark_price * (1 + sl_pct / 100),
+                    tick_size=tick_size,
+                    rounding=ROUND_UP,
+                )
             response = await self._pacifica.place_order(
                 {
                     "type": "set_position_tpsl",
@@ -457,6 +485,7 @@ class BotCopyWorker:
             if not symbol:
                 raise ValueError("Leverage updates require a symbol")
             leverage = max(1, int(float(action.get("leverage") or 1)))
+            self._validate_market_leverage(market_lookup=market_lookup, symbol=symbol, leverage=leverage)
             response = await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
             response["execution_meta"] = {
                 "symbol": symbol,
@@ -588,7 +617,7 @@ class BotCopyWorker:
         symbol: str,
         reference_price: float | None,
     ) -> float:
-        market = market_lookup.get(symbol) or {}
+        market = self._resolve_market(market_lookup, symbol)
         raw_quantity = float(action.get("quantity") or 0)
         scaled_quantity = raw_quantity * (scale_bps / 10_000)
         if scaled_quantity > 0:
@@ -605,12 +634,19 @@ class BotCopyWorker:
         mirrored_size_usd = size_usd * (scale_bps / 10_000)
         if mirrored_size_usd <= 0:
             raise ValueError("Cannot mirror open action without valid mark price and size")
-        leverage = max(1, int(float(action.get("leverage") or 1)))
+        leverage = 1 if self._to_bool(action.get("reduce_only"), False) else max(1, int(float(action.get("leverage") or 1)))
         return self._normalize_order_quantity(
             (mirrored_size_usd * leverage) / resolved_price,
             lot_size=float(market.get("lot_size") or 0),
             symbol=symbol,
         )
+
+    @staticmethod
+    def _resolve_market(market_lookup: dict[str, dict[str, Any]], symbol: str) -> dict[str, Any]:
+        market = market_lookup.get(symbol)
+        if isinstance(market, dict):
+            return market
+        raise ValueError(f"Market price unavailable for {symbol}")
 
     @staticmethod
     def _normalize_order_quantity(quantity: float, *, lot_size: float, symbol: str) -> float:
@@ -622,6 +658,58 @@ class BotCopyWorker:
         if normalized_float <= 0:
             raise ValueError(f"Order size is below the minimum tradable increment for {symbol}.")
         return normalized_float
+
+    @staticmethod
+    def _normalize_price_to_tick(price: float, *, tick_size: float, rounding: str) -> float:
+        normalized = Decimal(str(price))
+        if tick_size > 0:
+            tick = Decimal(str(tick_size))
+            normalized = (normalized / tick).to_integral_value(rounding=rounding) * tick
+        return float(normalized)
+
+    def _build_limit_order_price(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        price: float,
+        market_lookup: dict[str, dict[str, Any]],
+    ) -> float:
+        market = self._resolve_market(market_lookup, symbol)
+        tick_size = float(market.get("tick_size") or 0)
+        rounding = ROUND_DOWN if side == "long" else ROUND_UP
+        return self._normalize_price_to_tick(
+            price,
+            tick_size=tick_size,
+            rounding=rounding,
+        )
+
+    def _validate_market_leverage(
+        self,
+        *,
+        market_lookup: dict[str, dict[str, Any]],
+        symbol: str,
+        leverage: int,
+    ) -> None:
+        market = market_lookup.get(symbol)
+        if not isinstance(market, dict):
+            return
+        market_max_leverage = self._to_int(market.get("max_leverage"))
+        if market_max_leverage is None or market_max_leverage <= 0:
+            return
+        if leverage > market_max_leverage:
+            raise ValueError(
+                f"Requested leverage {leverage} exceeds {symbol} market max leverage {market_max_leverage}."
+            )
+
+    @staticmethod
+    def _to_int(value: Any) -> int | None:
+        try:
+            if value in (None, ""):
+                return None
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _normalize_symbol(value: Any) -> str:

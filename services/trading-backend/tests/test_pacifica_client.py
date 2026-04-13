@@ -224,6 +224,51 @@ class _RetryingFakeHttpClient:
         )
 
 
+class _SplitOnLargeRangeFakeHttpClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def get(self, url: str, *, params: dict[str, Any], headers: dict[str, str]) -> _FakeHttpResponse:
+        self.calls.append({"url": url, "params": params, "headers": headers})
+        start_time = int(params["start_time"])
+        end_time = int(params["end_time"])
+        candle_count = ((end_time // 60_000) - (start_time // 60_000)) + 1
+        if candle_count > 2_000:
+            return _FakeHttpResponse(
+                [],
+                status_code=400,
+                text='{"success":false,"data":null,"error":"Normalized time range too large for 1m interval. Max range: 4000 candles","code":400}',
+            )
+        return _FakeHttpResponse(
+            [
+                {
+                    "symbol": params["symbol"],
+                    "interval": params["interval"],
+                    "openTime": start_time,
+                    "closeTime": start_time + 60_000,
+                    "open": "100000",
+                    "high": "101000",
+                    "low": "99000",
+                    "close": "100500",
+                    "volume": "42",
+                    "tradeCount": 7,
+                },
+                {
+                    "symbol": params["symbol"],
+                    "interval": params["interval"],
+                    "openTime": end_time,
+                    "closeTime": end_time + 60_000,
+                    "open": "100500",
+                    "high": "101500",
+                    "low": "99500",
+                    "close": "101000",
+                    "volume": "43",
+                    "tradeCount": 8,
+                },
+            ]
+        )
+
+
 async def _noop_throttle(**_: Any) -> None:
     return None
 
@@ -386,8 +431,8 @@ def test_get_kline_chunks_long_ranges_into_multiple_requests() -> None:
 
     assert len(client._http.calls) == 2
     assert client._http.calls[0]["params"]["start_time"] == 0
-    assert client._http.calls[0]["params"]["end_time"] == 900_000 * 3_999
-    assert client._http.calls[1]["params"]["start_time"] == 900_000 * 4_000
+    assert client._http.calls[0]["params"]["end_time"] == 900_000 * 3_998
+    assert client._http.calls[1]["params"]["start_time"] == 900_000 * 3_999
     assert client._http.calls[1]["params"]["end_time"] == 900_000 * 4_001
     assert len(candles) == 4
     assert candles[0]["open_time"] == 0
@@ -412,6 +457,27 @@ def test_get_kline_retries_rate_limited_windows() -> None:
     assert len(client._http.calls) == 2
     assert len(candles) == 1
     assert candles[0]["open_time"] == 0
+
+
+def test_get_kline_splits_again_when_provider_rejects_a_chunk_as_too_large() -> None:
+    client = object.__new__(PacificaClient)
+    client.settings = SimpleNamespace(pacifica_rest_url="https://pacifica.test")
+    client._http = _SplitOnLargeRangeFakeHttpClient()
+    client._throttle = _noop_throttle
+
+    candles = asyncio.run(
+        client.get_kline(
+            "BTC",
+            interval="1m",
+            start_time=0,
+            end_time=60_000 * 3_500,
+        )
+    )
+
+    assert len(client._http.calls) >= 3
+    assert len(candles) >= 2
+    assert candles[0]["open_time"] == 0
+    assert candles[-1]["open_time"] == 60_000 * 3_500
 
 
 def test_load_candle_lookup_falls_back_to_mark_candles_when_trade_feed_is_sparse() -> None:

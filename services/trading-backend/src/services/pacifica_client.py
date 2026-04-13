@@ -35,6 +35,7 @@ KLINE_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 KLINE_MAX_RETRY_ATTEMPTS = 5
 KLINE_INITIAL_RETRY_DELAY_SECONDS = 0.75
 KLINE_MAX_RETRY_DELAY_SECONDS = 8.0
+KLINE_SAFE_CANDLES_PER_REQUEST = 3_999
 
 
 class PacificaClientError(RuntimeError):
@@ -761,7 +762,7 @@ class PacificaClient:
         if normalized_end < normalized_start:
             normalized_end = normalized_start
 
-        max_window_span_ms = interval_ms * (MAX_KLINE_CANDLES_PER_REQUEST - 1)
+        max_window_span_ms = interval_ms * (KLINE_SAFE_CANDLES_PER_REQUEST - 1)
         windows: list[tuple[int, int]] = []
         window_start = normalized_start
         while window_start <= normalized_end:
@@ -805,6 +806,16 @@ class PacificaClient:
                 )
             except PacificaClientError as exc:
                 status_code = exc.status_code or 0
+                if self._is_kline_window_too_large_error(exc) and end_time is not None:
+                    split_result = await self._split_kline_window_on_size_error(
+                        symbol,
+                        interval=interval,
+                        start_time=start_time,
+                        end_time=end_time,
+                        endpoint_path=endpoint_path,
+                    )
+                    if split_result is not None:
+                        return split_result
                 if status_code not in KLINE_RETRYABLE_STATUS_CODES or attempt >= (KLINE_MAX_RETRY_ATTEMPTS - 1):
                     raise
                 retry_after = exc.retry_after_seconds
@@ -816,6 +827,59 @@ class PacificaClient:
                 retry_after += 0.15 * attempt
                 await asyncio.sleep(retry_after)
                 attempt += 1
+
+    def _is_kline_window_too_large_error(self, exc: PacificaClientError) -> bool:
+        if exc.status_code != 400:
+            return False
+        return "Normalized time range too large" in str(exc)
+
+    async def _split_kline_window_on_size_error(
+        self,
+        symbol: str,
+        *,
+        interval: str,
+        start_time: int,
+        end_time: int,
+        endpoint_path: str,
+    ) -> list[dict[str, Any]] | None:
+        interval_ms = KLINE_INTERVAL_MS.get(interval)
+        if interval_ms is None:
+            return None
+        normalized_start = (start_time // interval_ms) * interval_ms
+        normalized_end = (end_time // interval_ms) * interval_ms
+        total_candles = ((normalized_end - normalized_start) // interval_ms) + 1
+        if total_candles <= 1:
+            return None
+
+        left_candles = max(1, total_candles // 2)
+        right_start = normalized_start + left_candles * interval_ms
+        if right_start > end_time:
+            return None
+        left_end = min(end_time, right_start - 1)
+
+        left_task = self._get_kline_window_with_retries(
+            symbol,
+            interval=interval,
+            start_time=start_time,
+            end_time=left_end,
+            endpoint_path=endpoint_path,
+        )
+        right_task = self._get_kline_window_with_retries(
+            symbol,
+            interval=interval,
+            start_time=right_start,
+            end_time=end_time,
+            endpoint_path=endpoint_path,
+        )
+        left_candles_result, right_candles_result = await asyncio.gather(left_task, right_task)
+        candles_by_open_time: dict[int, dict[str, Any]] = {}
+        for candle in [*left_candles_result, *right_candles_result]:
+            open_time = self._coerce_int(candle.get("open_time"), -1)
+            if open_time < 0:
+                continue
+            candles_by_open_time[open_time] = candle
+        merged = [candles_by_open_time[key] for key in sorted(candles_by_open_time)]
+        return self._filter_requested_candles(merged, start_time=start_time, end_time=end_time)
 
     async def _get_kline_window(
         self,
