@@ -98,9 +98,9 @@ class Settings:
     pacifica_performance_refresh_seconds: int
     privy_app_id: str
     privy_verification_key: str
-    gemini_api_key: str
-    gemini_base_url: str
-    gemini_model: str
+    trollllm_api_key: str
+    trollllm_base_url: str
+    trollllm_model: str
     openai_api_key: str
     openai_base_url: str
     openai_model: str
@@ -182,9 +182,9 @@ def get_settings() -> Settings:
         ),
         privy_app_id=os.getenv("PRIVY_APP_ID", ""),
         privy_verification_key=os.getenv("PRIVY_VERIFICATION_KEY", ""),
-        gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
-        gemini_base_url=os.getenv("GEMINI_BASE_URL", "").strip(),
-        gemini_model=os.getenv("GEMINI_MODEL", "").strip(),
+        trollllm_api_key=os.getenv("TROLLLLM_API_KEY", "").strip(),
+        trollllm_base_url=os.getenv("TROLLLLM_BASE_URL", "").strip(),
+        trollllm_model=os.getenv("TROLLLLM_MODEL", "").strip(),
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         openai_base_url=os.getenv("OPENAI_BASE_URL", "").strip(),
         openai_model=os.getenv("OPENAI_MODEL", "").strip(),

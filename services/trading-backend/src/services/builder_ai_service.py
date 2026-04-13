@@ -92,7 +92,7 @@ class BuilderAiService:
         )
         if not attempts:
             raise RuntimeError(
-                "Missing Gemini and OpenAI configuration. Set GEMINI_API_KEY, GEMINI_BASE_URL, and GEMINI_MODEL "
+                "Missing TrollLLM and OpenAI configuration. Set TROLLLLM_API_KEY, TROLLLLM_BASE_URL, and TROLLLLM_MODEL "
                 "or OPENAI_API_KEY, OPENAI_BASE_URL, and OPENAI_MODEL."
             )
 
@@ -116,12 +116,12 @@ class BuilderAiService:
     ) -> list[_ProviderAttempt]:
         system_prompt = self._build_system_prompt(available_markets, current_draft)
         attempts: list[_ProviderAttempt] = []
-        if self._has_gemini_config():
+        if self._has_trollllm_config():
             attempts.append(
                 _ProviderAttempt(
-                    name="Gemini",
-                    request_coro=lambda: self._request_gemini(messages, system_prompt),
-                    extract_text=self._extract_gemini_text,
+                    name="TrollLLM",
+                    request_coro=lambda: self._request_trollllm(messages, system_prompt),
+                    extract_text=self._extract_openai_text,
                 )
             )
         if self._has_openai_config():
@@ -134,11 +134,11 @@ class BuilderAiService:
             )
         return attempts
 
-    def _has_gemini_config(self) -> bool:
+    def _has_trollllm_config(self) -> bool:
         return bool(
-            self.settings.gemini_api_key
-            and self.settings.gemini_base_url
-            and self.settings.gemini_model
+            self.settings.trollllm_api_key
+            and self.settings.trollllm_base_url
+            and self.settings.trollllm_model
         )
 
     def _has_openai_config(self) -> bool:
@@ -148,57 +148,53 @@ class BuilderAiService:
             and self.settings.openai_model
         )
 
-    async def _request_gemini(
+    async def _request_trollllm(
         self,
         messages: list[dict[str, str]],
         system_prompt: str,
     ) -> Any:
-        try:
-            response = await self._http.post(
-                self._build_gemini_url(self.settings.gemini_base_url, self.settings.gemini_model),
-                headers={
-                    "Authorization": f"Bearer {self.settings.gemini_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "systemInstruction": {
-                        "parts": [
-                            {
-                                "text": system_prompt,
-                            }
-                        ]
-                    },
-                    "contents": self._build_gemini_contents(messages),
-                    "generationConfig": {
-                        "temperature": 1,
-                        "topP": 1,
-                        "thinkingConfig": {
-                            "includeThoughts": True,
-                            "thinkingBudget": 26240,
-                        },
-                    },
-                },
-            )
-        except httpx.TimeoutException as exc:
-            raise RuntimeError("Gemini request timed out.") from exc
-        except httpx.HTTPError as exc:
-            raise RuntimeError(f"Gemini request failed: {exc}") from exc
-        return self._parse_response_payload(response)
+        return await self._request_chat_completions_compatible(
+            provider_name="TrollLLM",
+            base_url=self.settings.trollllm_base_url,
+            api_key=self.settings.trollllm_api_key,
+            model=self.settings.trollllm_model,
+            messages=messages,
+            system_prompt=system_prompt,
+        )
 
     async def _request_openai(
         self,
         messages: list[dict[str, str]],
         system_prompt: str,
     ) -> Any:
+        return await self._request_openai_compatible(
+            provider_name="OpenAI",
+            base_url=self.settings.openai_base_url,
+            api_key=self.settings.openai_api_key,
+            model=self.settings.openai_model,
+            messages=messages,
+            system_prompt=system_prompt,
+        )
+
+    async def _request_openai_compatible(
+        self,
+        *,
+        provider_name: str,
+        base_url: str,
+        api_key: str,
+        model: str,
+        messages: list[dict[str, str]],
+        system_prompt: str,
+    ) -> Any:
         try:
             response = await self._http.post(
-                self._build_responses_url(self.settings.openai_base_url),
+                self._build_responses_url(base_url),
                 headers={
-                    "Authorization": f"Bearer {self.settings.openai_api_key}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": self.settings.openai_model,
+                    "model": model,
                     "input": [
                         {
                             "role": "system",
@@ -209,9 +205,43 @@ class BuilderAiService:
                 },
             )
         except httpx.TimeoutException as exc:
-            raise RuntimeError("OpenAI request timed out.") from exc
+            raise RuntimeError(f"{provider_name} request timed out.") from exc
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"OpenAI request failed: {exc}") from exc
+            raise RuntimeError(f"{provider_name} request failed: {exc}") from exc
+        return self._parse_response_payload(response)
+
+    async def _request_chat_completions_compatible(
+        self,
+        *,
+        provider_name: str,
+        base_url: str,
+        api_key: str,
+        model: str,
+        messages: list[dict[str, str]],
+        system_prompt: str,
+    ) -> Any:
+        try:
+            response = await self._http.post(
+                self._build_chat_completions_url(base_url),
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": system_prompt,
+                        },
+                        *messages,
+                    ],
+                },
+            )
+        except httpx.TimeoutException as exc:
+            raise RuntimeError(f"{provider_name} request timed out.") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"{provider_name} request failed: {exc}") from exc
         return self._parse_response_payload(response)
 
     def _build_responses_url(self, base_url: str) -> str:
@@ -222,16 +252,13 @@ class BuilderAiService:
             return f"{normalized}/responses"
         return f"{normalized}/v1/responses"
 
-    def _build_gemini_url(self, base_url: str, model: str) -> str:
+    def _build_chat_completions_url(self, base_url: str) -> str:
         normalized = base_url.strip().rstrip("/")
-        if normalized.endswith(":generateContent"):
+        if normalized.endswith("/chat/completions"):
             return normalized
-        model_path = f"/models/{model}"
-        if model_path in normalized:
-            return normalized if normalized.endswith(":generateContent") else f"{normalized}:generateContent"
-        if normalized.endswith("/models"):
-            return f"{normalized}/{model}:generateContent"
-        return f"{normalized}/models/{model}:generateContent"
+        if normalized.endswith("/v1"):
+            return f"{normalized}/chat/completions"
+        return f"{normalized}/v1/chat/completions"
 
     def _build_system_prompt(
         self,
@@ -270,20 +297,6 @@ class BuilderAiService:
             ]
         )
 
-    def _build_gemini_contents(self, messages: list[dict[str, str]]) -> list[dict[str, Any]]:
-        contents: list[dict[str, Any]] = []
-        for message in messages:
-            content = message.get("content", "").strip()
-            if not content:
-                continue
-            contents.append(
-                {
-                    "role": "model" if message.get("role") == "assistant" else "user",
-                    "parts": [{"text": content}],
-                }
-            )
-        return contents
-
     def _parse_response_payload(self, response: Any) -> Any:
         try:
             payload = response.json()
@@ -298,6 +311,50 @@ class BuilderAiService:
     def _extract_openai_text(self, payload: Any) -> str:
         if not isinstance(payload, dict):
             return ""
+        choices = payload.get("choices")
+        if isinstance(choices, list):
+            chunks: list[str] = []
+            for choice in choices:
+                if not isinstance(choice, dict):
+                    continue
+                message = choice.get("message")
+                if not isinstance(message, dict):
+                    continue
+                tool_calls = message.get("tool_calls")
+                if isinstance(tool_calls, list):
+                    for tool_call in tool_calls:
+                        if not isinstance(tool_call, dict):
+                            continue
+                        function = tool_call.get("function")
+                        if isinstance(function, dict) and function.get("name") and function.get("arguments") is not None:
+                            return json.dumps(
+                                {
+                                    "function": {
+                                        "name": function.get("name"),
+                                        "arguments": function.get("arguments"),
+                                    }
+                                }
+                            )
+                function_call = message.get("function_call")
+                if isinstance(function_call, dict) and function_call.get("name") and function_call.get("arguments") is not None:
+                    return json.dumps(
+                        {
+                            "function": {
+                                "name": function_call.get("name"),
+                                "arguments": function_call.get("arguments"),
+                            }
+                        }
+                    )
+                content = message.get("content")
+                if isinstance(content, str) and content.strip():
+                    chunks.append(content)
+                    continue
+                if isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and isinstance(part.get("text"), str):
+                            chunks.append(part["text"])
+            if chunks:
+                return "\n".join(chunks).strip()
         output_text = payload.get("output_text")
         if isinstance(output_text, str) and output_text.strip():
             return output_text
@@ -339,38 +396,6 @@ class BuilderAiService:
             if chunks:
                 return "\n".join(chunks).strip()
         return ""
-
-    def _extract_gemini_text(self, payload: Any) -> str:
-        if not isinstance(payload, dict):
-            return ""
-        candidates = payload.get("candidates")
-        if not isinstance(candidates, list):
-            return ""
-        chunks: list[str] = []
-        for candidate in candidates:
-            if not isinstance(candidate, dict):
-                continue
-            content = candidate.get("content")
-            if not isinstance(content, dict):
-                continue
-            parts = content.get("parts")
-            if not isinstance(parts, list):
-                continue
-            for part in parts:
-                if isinstance(part, dict) and isinstance(part.get("functionCall"), dict):
-                    function_call = part["functionCall"]
-                    if function_call.get("name"):
-                        return json.dumps(
-                            {
-                                "function": {
-                                    "name": function_call.get("name"),
-                                    "arguments": function_call.get("args", {}),
-                                }
-                            }
-                        )
-                if isinstance(part, dict) and isinstance(part.get("text"), str):
-                    chunks.append(part["text"])
-        return "\n".join(chunks).strip()
 
     def _extract_json(self, value: str) -> dict[str, Any]:
         return extract_first_json_object(value)

@@ -54,3 +54,19 @@ def test_get_settings_applies_free_tier_runtime_floors(monkeypatch) -> None:
     assert settings.pacifica_idle_wallet_poll_seconds == 180
     assert settings.pacifica_performance_refresh_seconds == 180
     settings_module.get_settings.cache_clear()
+
+
+def test_get_settings_reads_trollllm_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("SUPABASE_URL", "https://supabase.example")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-role-key")
+    monkeypatch.setenv("TROLLLLM_API_KEY", "troll-key")
+    monkeypatch.setenv("TROLLLLM_BASE_URL", "https://chat.trollllm.xyz/v1")
+    monkeypatch.setenv("TROLLLLM_MODEL", "gemini-3.1-pro-preview")
+    settings_module.get_settings.cache_clear()
+
+    settings = settings_module.get_settings()
+
+    assert settings.trollllm_api_key == "troll-key"
+    assert settings.trollllm_base_url == "https://chat.trollllm.xyz/v1"
+    assert settings.trollllm_model == "gemini-3.1-pro-preview"
+    settings_module.get_settings.cache_clear()

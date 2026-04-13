@@ -108,7 +108,7 @@ ClashX includes a full-featured AI copilot that acts as a conversational trading
 
 **Architecture:**
 
-- **Dual-provider failover**: The copilot attempts requests against both Gemini and OpenAI (configurable), with automatic failover if one provider is unavailable. This ensures high availability of the AI assistant.
+- **Dual-provider failover**: The copilot and builder AI attempt requests against TrollLLM first, then fall back to OpenAI if the primary provider is unavailable. This ensures high availability of the AI assistant.
 - **Tool-calling framework**: The copilot has access to a comprehensive tool catalog that enables it to query the database, inspect bot definitions, review execution history, examine portfolio allocations, and more. All tool calls are scoped to the authenticated user's data.
 - **Conversation persistence**: Full conversation history is stored in Supabase with rolling summarization to manage context window limits. Each conversation tracks message count, token estimates, and summary state.
 - **Scoped database access**: The copilot can query a controlled set of database tables (bot definitions, runtimes, execution events, backtest runs, copy relationships, portfolio baskets, and more) but all queries are automatically filtered to the authenticated user's wallet address.
@@ -357,7 +357,7 @@ ClashX implements a multi-dimensional trust system that helps users evaluate bot
                          +----------------------------------------+-----------------------------+
                          |                |               |               |                     |
               +----------v---+   +--------v------+  +-----v------+  +----v--------+   +--------v-------+
-              | Supabase     |   | Pacifica REST |  | Pacifica   |  | Gemini /    |   | Telegram Bot   |
+              | Supabase     |   | Pacifica REST |  | Pacifica   |  | TrollLLM /  |   | Telegram Bot   |
               | PostgreSQL   |   | API           |  | WebSocket  |  | OpenAI API  |   | API            |
               | (30+ tables) |   | (Orders, Mkt) |  | (Realtime) |  | (Copilot)   |   | (Notifications)|
               +--------------+   +---------------+  +------------+  +-------------+   +----------------+
@@ -989,7 +989,9 @@ cp .env.example .env
 - `PACIFICA_AGENT_ENCRYPTION_KEY` - AES key for agent wallet encryption
 
 **Optional for AI copilot:**
-- `GEMINI_API_KEY` - Google Gemini API key
+- `TROLLLLM_API_KEY` - TrollLLM API key
+- `TROLLLLM_BASE_URL` - TrollLLM OpenAI-compatible base URL
+- `TROLLLLM_MODEL` - TrollLLM primary model name
 - `OPENAI_API_KEY` - OpenAI API key
 
 **Optional for Telegram:**
@@ -1154,8 +1156,9 @@ All configuration is managed through environment variables. The complete list wi
 | `PACIFICA_WARM_WALLET_POLL_SECONDS` | 15 | Warm wallet poll interval |
 | `PACIFICA_IDLE_WALLET_POLL_SECONDS` | 45 | Idle wallet poll interval |
 | `PACIFICA_PERFORMANCE_REFRESH_SECONDS` | 60 | Performance refresh interval |
-| `GEMINI_API_KEY` | (optional) | Google Gemini API key |
-| `GEMINI_MODEL` | gemini-3-flash-preview | Gemini model name |
+| `TROLLLLM_API_KEY` | (optional) | TrollLLM API key |
+| `TROLLLLM_BASE_URL` | https://chat.trollllm.xyz/v1 | TrollLLM OpenAI-compatible base URL |
+| `TROLLLLM_MODEL` | claude-haiku-4.5 | TrollLLM primary model name |
 | `OPENAI_API_KEY` | (optional) | OpenAI API key |
 | `TELEGRAM_BOT_TOKEN` | (optional) | Telegram Bot API token |
 | `TELEGRAM_LINK_CODE_TTL_MINUTES` | 20 | Link code expiry (min 5) |

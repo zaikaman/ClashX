@@ -11,9 +11,9 @@ from src.services.builder_ai_service import BuilderAiService
 
 @dataclass
 class _FakeSettings:
-    gemini_api_key: str = ""
-    gemini_base_url: str = ""
-    gemini_model: str = ""
+    trollllm_api_key: str = ""
+    trollllm_base_url: str = ""
+    trollllm_model: str = ""
     openai_api_key: str = ""
     openai_base_url: str = ""
     openai_model: str = ""
@@ -87,30 +87,26 @@ def _draft_payload(*, symbol: str = "BTC") -> dict[str, Any]:
     }
 
 
-def test_generate_draft_prefers_gemini_and_uses_generate_content_endpoint() -> None:
-    gemini_payload = {
-        "candidates": [
+def test_generate_draft_prefers_trollllm_and_uses_openai_compatible_chat_completions_endpoint() -> None:
+    trollllm_payload = {
+        "choices": [
             {
-                "content": {
-                    "parts": [
-                        {
-                            "text": str(_draft_payload()).replace("'", '"'),
-                        }
-                    ]
+                "message": {
+                    "content": str(_draft_payload()).replace("'", '"'),
                 }
             }
-        ]
+        ],
     }
     service, http_client = _service_with(
         settings=_FakeSettings(
-            gemini_api_key="gem-key",
-            gemini_base_url="https://v98store.com/v1beta",
-            gemini_model="gemini-3-flash-preview",
+            trollllm_api_key="troll-key",
+            trollllm_base_url="https://chat.trollllm.xyz/v1",
+            trollllm_model="gemini-3.1-pro-preview",
             openai_api_key="open-key",
             openai_base_url="https://example.openai.azure.com/openai/v1",
             openai_model="gpt-5-nano",
         ),
-        responses=[_FakeResponse(200, gemini_payload)],
+        responses=[_FakeResponse(200, trollllm_payload)],
     )
 
     result = asyncio.run(
@@ -123,25 +119,25 @@ def test_generate_draft_prefers_gemini_and_uses_generate_content_endpoint() -> N
 
     assert result["draft"]["name"] == "BTC Breakout"
     assert len(http_client.calls) == 1
-    assert http_client.calls[0]["url"] == "https://v98store.com/v1beta/models/gemini-3-flash-preview:generateContent"
-    assert http_client.calls[0]["json"]["contents"][0]["role"] == "user"
+    assert http_client.calls[0]["url"] == "https://chat.trollllm.xyz/v1/chat/completions"
+    assert http_client.calls[0]["json"]["messages"][1]["role"] == "user"
 
 
-def test_generate_draft_falls_back_to_openai_when_gemini_fails() -> None:
+def test_generate_draft_falls_back_to_openai_when_trollllm_fails() -> None:
     openai_payload = {
         "output_text": str(_draft_payload(symbol="ETH")).replace("'", '"'),
     }
     service, http_client = _service_with(
         settings=_FakeSettings(
-            gemini_api_key="gem-key",
-            gemini_base_url="https://v98store.com/v1beta",
-            gemini_model="gemini-3-flash-preview",
+            trollllm_api_key="troll-key",
+            trollllm_base_url="https://chat.trollllm.xyz/v1",
+            trollllm_model="gemini-3.1-pro-preview",
             openai_api_key="open-key",
             openai_base_url="https://example.openai.azure.com/openai/v1",
             openai_model="gpt-5-nano",
         ),
         responses=[
-            _FakeResponse(500, {"error": {"message": "Gemini unavailable"}}),
+            _FakeResponse(500, {"error": {"message": "TrollLLM unavailable"}}),
             _FakeResponse(200, openai_payload),
         ],
     )
@@ -156,38 +152,34 @@ def test_generate_draft_falls_back_to_openai_when_gemini_fails() -> None:
 
     assert result["draft"]["markets"] == ["ETH"]
     assert [call["url"] for call in http_client.calls] == [
-        "https://v98store.com/v1beta/models/gemini-3-flash-preview:generateContent",
+        "https://chat.trollllm.xyz/v1/chat/completions",
         "https://example.openai.azure.com/openai/v1/responses",
     ]
 
 
 def test_generate_draft_accepts_plain_text_function_call_arguments() -> None:
     function_payload = {
-        "candidates": [
+        "choices": [
             {
-                "content": {
-                    "parts": [
-                        {
-                            "text": (
-                                '{"name":"apply_builder_draft","arguments":'
-                                '"{\\"reply\\":\\"Updated BTC draft.\\",\\"name\\":\\"BTC Scalper\\",'
-                                '\\"description\\":\\"Short-term BTC momentum.\\",'
-                                '\\"marketSelection\\":\\"selected\\",\\"markets\\":[\\"BTC\\"],'
-                                '\\"conditions\\":[{\\"type\\":\\"price_above\\",\\"symbol\\":\\"BTC\\",\\"value\\":65000}],'
-                                '\\"actions\\":[{\\"type\\":\\"open_long\\",\\"symbol\\":\\"BTC\\",\\"size_usd\\":200,\\"leverage\\":2}]}"'
-                                "}"
-                            ),
-                        }
-                    ]
+                "message": {
+                    "content": (
+                        '{"name":"apply_builder_draft","arguments":'
+                        '"{\\"reply\\":\\"Updated BTC draft.\\",\\"name\\":\\"BTC Scalper\\",'
+                        '\\"description\\":\\"Short-term BTC momentum.\\",'
+                        '\\"marketSelection\\":\\"selected\\",\\"markets\\":[\\"BTC\\"],'
+                        '\\"conditions\\":[{\\"type\\":\\"price_above\\",\\"symbol\\":\\"BTC\\",\\"value\\":65000}],'
+                        '\\"actions\\":[{\\"type\\":\\"open_long\\",\\"symbol\\":\\"BTC\\",\\"size_usd\\":200,\\"leverage\\":2}]}"'
+                        "}"
+                    ),
                 }
             }
-        ]
+        ],
     }
     service, _ = _service_with(
         settings=_FakeSettings(
-            gemini_api_key="gem-key",
-            gemini_base_url="https://v98store.com/v1beta",
-            gemini_model="gemini-3-flash-preview",
+            trollllm_api_key="troll-key",
+            trollllm_base_url="https://chat.trollllm.xyz/v1",
+            trollllm_model="gemini-3.1-pro-preview",
         ),
         responses=[_FakeResponse(200, function_payload)],
     )
@@ -357,16 +349,16 @@ def test_generate_draft_accepts_openai_function_call_output_items() -> None:
     assert result["draft"]["actions"][0]["type"] == "open_short"
 
 
-def test_generate_draft_accepts_gemini_function_call_parts() -> None:
-    gemini_payload = {
-        "candidates": [
+def test_generate_draft_accepts_trollllm_function_call_output_items() -> None:
+    trollllm_payload = {
+        "choices": [
             {
-                "content": {
-                    "parts": [
+                "message": {
+                    "tool_calls": [
                         {
-                            "functionCall": {
+                            "function": {
                                 "name": "apply_builder_draft",
-                                "args": {
+                                "arguments": {
                                     "reply": "Built BTC route draft.",
                                     "name": "BTC Routed Draft",
                                     "description": "Structured route draft.",
@@ -382,17 +374,17 @@ def test_generate_draft_accepts_gemini_function_call_parts() -> None:
                             }
                         }
                     ]
-                }
+                },
             }
         ]
     }
     service, _ = _service_with(
         settings=_FakeSettings(
-            gemini_api_key="gem-key",
-            gemini_base_url="https://v98store.com/v1beta",
-            gemini_model="gemini-3-flash-preview",
+            trollllm_api_key="troll-key",
+            trollllm_base_url="https://chat.trollllm.xyz/v1",
+            trollllm_model="gemini-3.1-pro-preview",
         ),
-        responses=[_FakeResponse(200, gemini_payload)],
+        responses=[_FakeResponse(200, trollllm_payload)],
     )
 
     result = asyncio.run(

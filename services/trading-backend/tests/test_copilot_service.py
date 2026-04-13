@@ -12,9 +12,9 @@ from src.services.copilot_service import CopilotService
 
 @dataclass
 class _FakeSettings:
-    gemini_api_key: str = ""
-    gemini_base_url: str = ""
-    gemini_model: str = ""
+    trollllm_api_key: str = ""
+    trollllm_base_url: str = ""
+    trollllm_model: str = ""
     openai_api_key: str = ""
     openai_base_url: str = ""
     openai_model: str = ""
@@ -104,32 +104,24 @@ def _service_with(
     return service, service._http
 
 
-def _gemini_text_payload(text: str) -> dict[str, Any]:
-    return {
-        "candidates": [
-            {
-                "content": {
-                    "parts": [
-                        {
-                            "text": text,
-                        }
-                    ]
-                }
-            }
-        ]
-    }
+def _openai_text_payload(text: str) -> dict[str, Any]:
+    return {"output_text": text}
+
+
+def _chat_text_payload(text: str) -> dict[str, Any]:
+    return {"choices": [{"message": {"content": text}}]}
 
 
 def test_copilot_executes_plain_text_tool_calls_and_returns_final_answer() -> None:
     service, http_client = _service_with(
         settings=_FakeSettings(
-            gemini_api_key="gem-key",
-            gemini_base_url="https://example.test/v1beta",
-            gemini_model="gemini-3-flash-preview",
+            trollllm_api_key="troll-key",
+            trollllm_base_url="https://chat.trollllm.xyz/v1",
+            trollllm_model="gemini-3.1-pro-preview",
         ),
         responses=[
-            _FakeResponse(200, _gemini_text_payload('{"type":"tool_call","tool":"list_bots","arguments":{"wallet_address":"wallet-abc"}}')),
-            _FakeResponse(200, _gemini_text_payload('{"type":"final","reply":"You have 2 bots and 1 active runtime.","followUps":["Show the most recent bot events"]}')),
+            _FakeResponse(200, _chat_text_payload('{"type":"tool_call","tool":"list_bots","arguments":{"wallet_address":"wallet-abc"}}')),
+            _FakeResponse(200, _chat_text_payload('{"type":"final","reply":"You have 2 bots and 1 active runtime.","followUps":["Show the most recent bot events"]}')),
         ],
     )
 
@@ -157,26 +149,26 @@ def test_copilot_executes_plain_text_tool_calls_and_returns_final_answer() -> No
         )
     )
 
-    assert result["provider"] == "Gemini"
+    assert result["provider"] == "TrollLLM"
     assert result["reply"] == "You have 2 bots and 1 active runtime."
     assert result["followUps"] == ["Show the most recent bot events"]
     assert len(result["toolCalls"]) == 1
     assert result["toolCalls"][0]["tool"] == "list_bots"
-    assert "TOOL_RESULT" in http_client.calls[1]["json"]["contents"][-1]["parts"][0]["text"]
+    assert "TOOL_RESULT" in http_client.calls[1]["json"]["messages"][-1]["content"]
 
 
 def test_copilot_accepts_function_wrapper_and_falls_back_to_openai() -> None:
     service, http_client = _service_with(
         settings=_FakeSettings(
-            gemini_api_key="gem-key",
-            gemini_base_url="https://example.test/v1beta",
-            gemini_model="gemini-3-flash-preview",
+            trollllm_api_key="troll-key",
+            trollllm_base_url="https://chat.trollllm.xyz/v1",
+            trollllm_model="gemini-3.1-pro-preview",
             openai_api_key="open-key",
             openai_base_url="https://example.openai.test/v1",
             openai_model="gpt-5-mini",
         ),
         responses=[
-            _FakeResponse(500, {"error": {"message": "Gemini unavailable"}}),
+            _FakeResponse(500, {"error": {"message": "TrollLLM unavailable"}}),
             _FakeResponse(
                 200,
                 {
@@ -202,7 +194,7 @@ def test_copilot_accepts_function_wrapper_and_falls_back_to_openai() -> None:
     assert result["reply"] == "Pacifica authorization is inactive."
     assert result["followUps"] == ["Check readiness for my wallet"]
     assert [call["url"] for call in http_client.calls] == [
-        "https://example.test/v1beta/models/gemini-3-flash-preview:generateContent",
+        "https://chat.trollllm.xyz/v1/chat/completions",
         "https://example.openai.test/v1/responses",
     ]
 
@@ -210,14 +202,14 @@ def test_copilot_accepts_function_wrapper_and_falls_back_to_openai() -> None:
 def test_copilot_ignores_extra_json_after_first_object() -> None:
     service, _ = _service_with(
         settings=_FakeSettings(
-            gemini_api_key="gem-key",
-            gemini_base_url="https://example.test/v1beta",
-            gemini_model="gemini-3-flash-preview",
+            trollllm_api_key="troll-key",
+            trollllm_base_url="https://chat.trollllm.xyz/v1",
+            trollllm_model="gemini-3.1-pro-preview",
         ),
         responses=[
             _FakeResponse(
                 200,
-                _gemini_text_payload(
+                _chat_text_payload(
                     '{"type":"final","reply":"Here is the summary.","followUps":["Show recent activity"]}'
                     '\n{"debug":"ignore me"}'
                 ),
@@ -240,19 +232,19 @@ def test_copilot_ignores_extra_json_after_first_object() -> None:
 def test_copilot_retries_when_final_reply_claims_fetching_without_tool_call() -> None:
     service, http_client = _service_with(
         settings=_FakeSettings(
-            gemini_api_key="gem-key",
-            gemini_base_url="https://example.test/v1beta",
-            gemini_model="gemini-3-flash-preview",
+            trollllm_api_key="troll-key",
+            trollllm_base_url="https://chat.trollllm.xyz/v1",
+            trollllm_model="gemini-3.1-pro-preview",
         ),
         responses=[
             _FakeResponse(
                 200,
-                _gemini_text_payload(
+                _chat_text_payload(
                     '{"type":"final","reply":"I\\u2019m pulling your recent runtime events. Fetching your bots and their latest events now.","followUps":["Would you like me to summarize only the most recent event per bot, or provide a full list of the last 20 events per bot?"]}'
                 ),
             ),
-            _FakeResponse(200, _gemini_text_payload('{"type":"tool_call","tool":"list_bots","arguments":{"wallet_address":"wallet-abc"}}')),
-            _FakeResponse(200, _gemini_text_payload('{"type":"final","reply":"You have 2 bots. The newest runtime event was a rebalance on Momentum.","followUps":["Show the full event timeline"]}')),
+            _FakeResponse(200, _chat_text_payload('{"type":"tool_call","tool":"list_bots","arguments":{"wallet_address":"wallet-abc"}}')),
+            _FakeResponse(200, _chat_text_payload('{"type":"final","reply":"You have 2 bots. The newest runtime event was a rebalance on Momentum.","followUps":["Show the full event timeline"]}')),
         ],
     )
 
@@ -284,27 +276,27 @@ def test_copilot_retries_when_final_reply_claims_fetching_without_tool_call() ->
     assert result["followUps"] == ["Show the full event timeline"]
     assert len(result["toolCalls"]) == 1
     assert result["toolCalls"][0]["tool"] == "list_bots"
-    assert "SYSTEM_RETRY" in http_client.calls[1]["json"]["contents"][-1]["parts"][0]["text"]
+    assert "SYSTEM_RETRY" in http_client.calls[1]["json"]["messages"][-1]["content"]
 
 
 def test_copilot_retries_when_final_reply_after_tool_call_is_only_a_placeholder() -> None:
     service, http_client = _service_with(
         settings=_FakeSettings(
-            gemini_api_key="gem-key",
-            gemini_base_url="https://example.test/v1beta",
-            gemini_model="gemini-3-flash-preview",
+            trollllm_api_key="troll-key",
+            trollllm_base_url="https://chat.trollllm.xyz/v1",
+            trollllm_model="gemini-3.1-pro-preview",
         ),
         responses=[
-            _FakeResponse(200, _gemini_text_payload('{"type":"tool_call","tool":"list_bots","arguments":{"wallet_address":"wallet-abc"}}')),
+            _FakeResponse(200, _chat_text_payload('{"type":"tool_call","tool":"list_bots","arguments":{"wallet_address":"wallet-abc"}}')),
             _FakeResponse(
                 200,
-                _gemini_text_payload(
+                _chat_text_payload(
                     '{"type":"final","reply":"Tool call issued for live trading account health check. Waiting for results to summarize health status and any action items.","followUps":["Would you like me to also fetch bot status and portfolio health in the same check?"]}'
                 ),
             ),
             _FakeResponse(
                 200,
-                _gemini_text_payload(
+                _chat_text_payload(
                     '{"type":"final","reply":"You have 2 bots. Momentum is active, Mean Revert is idle, and no critical runtime issues are visible from the current bot snapshot.","followUps":["Show the latest bot events"]}'
                 ),
             ),
@@ -342,7 +334,7 @@ def test_copilot_retries_when_final_reply_after_tool_call_is_only_a_placeholder(
     assert result["followUps"] == ["Show the latest bot events"]
     assert len(result["toolCalls"]) == 1
     assert result["toolCalls"][0]["tool"] == "list_bots"
-    assert "SYSTEM_RETRY" in http_client.calls[2]["json"]["contents"][-1]["parts"][0]["text"]
+    assert "SYSTEM_RETRY" in http_client.calls[2]["json"]["messages"][-1]["content"]
 
 
 def test_copilot_executes_new_trading_tools() -> None:
