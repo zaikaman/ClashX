@@ -114,7 +114,11 @@ def _resolve_wallet_user_id(user: AuthenticatedUser, wallet_address: str | None)
 
 def _serialize_backtest_job(job: dict[str, Any]) -> BacktestRunJobStatusResponse:
     result_payload = job.get("result_payload_json") if isinstance(job.get("result_payload_json"), dict) else {}
-    progress_payload = result_payload if result_payload.get("type") == "progress" else {}
+    progress_payload = (
+        {key: value for key, value in result_payload.items() if key != "checkpoint"}
+        if result_payload.get("type") == "progress"
+        else {}
+    )
     run_payload = result_payload.get("run") if result_payload.get("type") == "result" and isinstance(result_payload.get("run"), dict) else None
     return BacktestRunJobStatusResponse(
         id=str(job.get("id") or ""),

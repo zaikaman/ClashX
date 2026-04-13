@@ -282,6 +282,81 @@ def test_backtest_emits_progress_updates_during_execution() -> None:
     assert events[-1]["progress"] == 100.0
 
 
+def test_backtest_can_resume_from_checkpoint_and_match_full_result() -> None:
+    rules_json = _graph_rules(
+        nodes=[
+            {"id": "condition-open", "kind": "condition", "position": {"x": 120, "y": 80}, "config": {"type": "price_above", "symbol": "BTC", "value": 90}},
+            {"id": "action-open", "kind": "action", "position": {"x": 320, "y": 80}, "config": {"type": "open_long", "symbol": "BTC", "size_usd": 100, "leverage": 1}},
+        ],
+        edges=[
+            {"id": "edge-open-1", "source": "builder-entry", "target": "condition-open"},
+            {"id": "edge-open-2", "source": "condition-open", "target": "action-open"},
+        ],
+    )
+    candles = [_candle(index, 99 + index, 101 + index, 98 + index, 100 + index) for index in range(48)]
+
+    baseline_service, _ = _service(rules_json, candles)
+    baseline_run = asyncio.run(
+        baseline_service.run_backtest(
+            None,
+            bot_id="bot-a",
+            wallet_address="wallet-a",
+            user_id="user-a",
+            interval="15m",
+            start_time=BASE_TIME_MS,
+            end_time=BASE_TIME_MS + 49 * FIFTEEN_MINUTES_MS,
+            initial_capital_usd=10_000,
+        )
+    )
+
+    checkpoint_service, _ = _service(rules_json, candles)
+    progress_events: list[dict[str, Any]] = []
+
+    async def collect_progress(payload: dict[str, Any]) -> None:
+        progress_events.append(deepcopy(payload))
+
+    asyncio.run(
+        checkpoint_service.run_backtest(
+            None,
+            bot_id="bot-a",
+            wallet_address="wallet-a",
+            user_id="user-a",
+            interval="15m",
+            start_time=BASE_TIME_MS,
+            end_time=BASE_TIME_MS + 49 * FIFTEEN_MINUTES_MS,
+            initial_capital_usd=10_000,
+            progress=collect_progress,
+        )
+    )
+
+    resume_checkpoint = next(
+        event["checkpoint"]
+        for event in progress_events
+        if event["stage"] == "Simulating strategy" and int(event.get("metrics", {}).get("processed_bars", 0)) >= 12
+    )
+
+    resumed_service, _ = _service(rules_json, candles)
+    resumed_run = asyncio.run(
+        resumed_service.run_backtest(
+            None,
+            bot_id="bot-a",
+            wallet_address="wallet-a",
+            user_id="user-a",
+            interval="15m",
+            start_time=BASE_TIME_MS,
+            end_time=BASE_TIME_MS + 49 * FIFTEEN_MINUTES_MS,
+            initial_capital_usd=10_000,
+            resume_checkpoint=resume_checkpoint,
+        )
+    )
+
+    assert resumed_run["status"] == baseline_run["status"]
+    assert resumed_run["trade_count"] == baseline_run["trade_count"]
+    assert resumed_run["pnl_total"] == baseline_run["pnl_total"]
+    assert resumed_run["max_drawdown_pct"] == baseline_run["max_drawdown_pct"]
+    assert resumed_run["result_json"] == baseline_run["result_json"]
+
+
 def test_backtest_persists_history_row_with_snapshots_and_inputs() -> None:
     rules_json = _graph_rules(
         nodes=[

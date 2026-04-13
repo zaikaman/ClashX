@@ -81,6 +81,7 @@ class AiJobRunnerService:
         end_time: int,
         initial_capital_usd: float,
         assumptions: dict[str, Any] | None,
+        resume_checkpoint: dict[str, Any] | None = None,
     ) -> None:
         self._launch(
             self._run_backtest_run_job(
@@ -93,6 +94,7 @@ class AiJobRunnerService:
                 end_time=end_time,
                 initial_capital_usd=initial_capital_usd,
                 assumptions=dict(assumptions) if isinstance(assumptions, dict) else None,
+                resume_checkpoint=dict(resume_checkpoint) if isinstance(resume_checkpoint, dict) else None,
             ),
             name=f"backtest-run-job:{job_id}",
         )
@@ -166,6 +168,7 @@ class AiJobRunnerService:
         end_time: int,
         initial_capital_usd: float,
         assumptions: dict[str, Any] | None,
+        resume_checkpoint: dict[str, Any] | None = None,
         heartbeat: Callable[[], None] | None = None,
     ) -> None:
         self._job_service.mark_running(job_id=job_id)
@@ -205,6 +208,7 @@ class AiJobRunnerService:
                         initial_capital_usd=initial_capital_usd,
                         assumptions=assumptions,
                         progress=progress_callback,
+                        resume_checkpoint=resume_checkpoint,
                     )
                 finally:
                     if background_pacifica_client is not None:

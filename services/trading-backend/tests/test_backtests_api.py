@@ -143,6 +143,7 @@ def test_get_backtest_run_job_returns_live_progress(monkeypatch) -> None:
                 "stage": "Preparing replay timeline",
                 "detail": "Aligned 100 replay bars across 2 active markets.",
                 "interval": "1m",
+                "checkpoint": {"processed_bars": 12},
                 "metrics": {
                     "processed_bars": 0,
                     "total_bars": 100,
@@ -160,6 +161,7 @@ def test_get_backtest_run_job_returns_live_progress(monkeypatch) -> None:
     assert response.id == "job-1"
     assert response.status == "running"
     assert response.progress["stage"] == "Preparing replay timeline"
+    assert "checkpoint" not in response.progress
     assert response.result is None
 
 

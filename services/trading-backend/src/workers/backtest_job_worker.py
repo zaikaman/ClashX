@@ -120,6 +120,8 @@ class BacktestJobWorker:
     async def _process_job(self, job: dict[str, Any]) -> None:
         job_id = str(job.get("id") or "").strip()
         request_payload = job.get("request_payload_json") if isinstance(job.get("request_payload_json"), dict) else {}
+        result_payload = job.get("result_payload_json") if isinstance(job.get("result_payload_json"), dict) else {}
+        resume_checkpoint = result_payload.get("checkpoint") if isinstance(result_payload.get("checkpoint"), dict) else None
         lease_key = self._lease_key(job_id)
 
         def heartbeat() -> None:
@@ -142,6 +144,7 @@ class BacktestJobWorker:
                 end_time=int(request_payload.get("end_time") or 0),
                 initial_capital_usd=float(request_payload.get("initial_capital_usd") or 0),
                 assumptions=request_payload.get("assumptions") if isinstance(request_payload.get("assumptions"), dict) else None,
+                resume_checkpoint=resume_checkpoint,
                 heartbeat=heartbeat,
             )
         except ValueError as exc:

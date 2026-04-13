@@ -121,8 +121,9 @@ class _FakeBacktestService:
         initial_capital_usd: float,
         assumptions: dict[str, Any] | None,
         progress,
+        resume_checkpoint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        del db, assumptions
+        del db, assumptions, resume_checkpoint
         if progress is not None:
             await progress(
                 {

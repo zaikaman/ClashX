@@ -78,6 +78,14 @@ def test_backtest_job_worker_processes_job_payload_and_releases_lease() -> None:
         worker._process_job(
             {
                 "id": "job-7",
+                "result_payload_json": {
+                    "type": "progress",
+                    "checkpoint": {
+                        "version": 1,
+                        "interval": "1m",
+                        "processed_bars": 2,
+                    },
+                },
                 "request_payload_json": {
                     "bot_id": "bot-1",
                     "wallet_address": "wallet-abc",
@@ -95,6 +103,7 @@ def test_backtest_job_worker_processes_job_payload_and_releases_lease() -> None:
     assert runner.calls[0]["job_id"] == "job-7"
     assert runner.calls[0]["bot_id"] == "bot-1"
     assert runner.calls[0]["interval"] == "1m"
+    assert runner.calls[0]["resume_checkpoint"]["processed_bars"] == 2
     assert callable(runner.calls[0]["heartbeat"])
     assert coordination.released == [lease_key]
     assert lease_key not in worker._held_leases

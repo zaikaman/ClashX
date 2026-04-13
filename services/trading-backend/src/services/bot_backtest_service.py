@@ -6,6 +6,7 @@ from bisect import bisect_right
 from copy import deepcopy
 from datetime import UTC, datetime
 from inspect import isawaitable
+from time import monotonic
 from typing import Any, Awaitable, Callable
 
 from src.services.indicator_context_service import extract_candle_requests, normalize_symbol
@@ -46,6 +47,7 @@ DEFAULT_BACKTEST_ASSUMPTIONS = {
 }
 DEFAULT_BACKTEST_INTERVAL = "15m"
 MAX_BACKTEST_CONCURRENT_CANDLE_REQUESTS = 3
+BACKTEST_CHECKPOINT_INTERVAL_SECONDS = 5.0
 ProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 
 
@@ -89,6 +91,7 @@ class BotBacktestService:
         initial_capital_usd: float,
         assumptions: dict[str, Any] | None = None,
         progress: ProgressCallback | None = None,
+        resume_checkpoint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         del db
         bot = self._resolve_bot(bot_id=bot_id, wallet_address=wallet_address, user_id=user_id)
@@ -151,6 +154,7 @@ class BotBacktestService:
                     assumptions=normalized_assumptions,
                     placeholder_symbols=placeholder_symbols,
                     progress=progress,
+                    resume_checkpoint=resume_checkpoint,
                 )
         except (PacificaClientError, ValueError) as exc:
             status = "failed"
@@ -254,6 +258,7 @@ class BotBacktestService:
         assumptions: dict[str, float],
         placeholder_symbols: list[str],
         progress: ProgressCallback | None = None,
+        resume_checkpoint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         evaluation_rulesets = self._build_evaluation_rulesets(rules_snapshot, placeholder_symbols)
         active_symbols = sorted(
@@ -359,17 +364,6 @@ class BotBacktestService:
         )
         if not timeline:
             raise ValueError("No main replay bars were returned for this backtest range.")
-        await self._emit_progress(
-            progress,
-            stage="Preparing replay timeline",
-            detail=f"Aligned {len(timeline)} replay bars across {len(active_symbols)} active market{'s' if len(active_symbols) != 1 else ''}.",
-            progress_value=56.0,
-            interval=interval,
-            total_bars=len(timeline),
-            processed_bars=0,
-            active_symbol_count=len(active_symbols),
-        )
-
         current_candle_by_symbol: dict[str, dict[str, Any]] = {}
         candle_index_by_symbol = {symbol: -1 for symbol in active_symbols}
         positions: dict[str, dict[str, Any]] = {}
@@ -379,9 +373,68 @@ class BotBacktestService:
         last_executed_at: str | None = None
         cumulative_realized = 0.0
         trade_counter = 0
+        processed_bars = 0
         progress_report_stride = max(1, len(timeline) // 24)
+        last_checkpoint = self._build_resume_checkpoint(
+            interval=interval,
+            requested_symbols=requested_symbols,
+            active_symbols=active_symbols,
+            missing_main_symbols=missing_main_symbols,
+            processed_bars=processed_bars,
+            positions=positions,
+            trigger_events=trigger_events,
+            closed_trades=closed_trades,
+            equity_curve=equity_curve,
+            last_executed_at=last_executed_at,
+            cumulative_realized=cumulative_realized,
+            trade_counter=trade_counter,
+        )
+        resumed = self._apply_resume_checkpoint(
+            checkpoint=resume_checkpoint,
+            interval=interval,
+            requested_symbols=requested_symbols,
+            active_symbols=active_symbols,
+            missing_main_symbols=missing_main_symbols,
+            timeline=timeline,
+            main_candles=main_candles,
+            current_candle_by_symbol=current_candle_by_symbol,
+            candle_index_by_symbol=candle_index_by_symbol,
+            positions=positions,
+            trigger_events=trigger_events,
+            closed_trades=closed_trades,
+            equity_curve=equity_curve,
+        )
+        if resumed is not None:
+            processed_bars, cumulative_realized, trade_counter, last_executed_at, last_checkpoint = resumed
+            await self._emit_progress(
+                progress,
+                stage="Resuming replay",
+                detail=f"Recovered {processed_bars} replay bars from the last checkpoint.",
+                progress_value=60.0 + (processed_bars / len(timeline)) * 36.0,
+                interval=interval,
+                checkpoint=last_checkpoint,
+                total_bars=len(timeline),
+                processed_bars=processed_bars,
+                trade_count=len(closed_trades),
+                active_symbol_count=len(active_symbols),
+            )
+        else:
+            await self._emit_progress(
+                progress,
+                stage="Preparing replay timeline",
+                detail=f"Aligned {len(timeline)} replay bars across {len(active_symbols)} active market{'s' if len(active_symbols) != 1 else ''}.",
+                progress_value=56.0,
+                interval=interval,
+                checkpoint=last_checkpoint,
+                total_bars=len(timeline),
+                processed_bars=0,
+                active_symbol_count=len(active_symbols),
+            )
 
-        for index, timestamp in enumerate(timeline, start=1):
+        next_checkpoint_at = monotonic() + BACKTEST_CHECKPOINT_INTERVAL_SECONDS
+        total_bars = len(timeline)
+
+        for processed_bars, timestamp in enumerate(timeline[processed_bars:], start=processed_bars + 1):
             timestamp_iso = self._iso_from_ms(timestamp)
             for symbol in active_symbols:
                 symbol_candles = main_candles.get(symbol, [])
@@ -389,9 +442,9 @@ class BotBacktestService:
                 while next_index < len(symbol_candles) and int(symbol_candles[next_index].get("close_time") or 0) <= timestamp:
                     candle_index_by_symbol[symbol] = next_index
                     next_index += 1
-                index = candle_index_by_symbol[symbol]
-                if index >= 0:
-                    current_candle_by_symbol[symbol] = symbol_candles[index]
+                symbol_index = candle_index_by_symbol[symbol]
+                if symbol_index >= 0:
+                    current_candle_by_symbol[symbol] = symbol_candles[symbol_index]
 
             self._accrue_funding(
                 positions=positions,
@@ -512,16 +565,36 @@ class BotBacktestService:
                     "unrealized_pnl": round(unrealized_pnl, 8),
                 }
             )
-            if index == len(timeline) or index % progress_report_stride == 0:
-                replay_progress = 60.0 + (index / len(timeline)) * 36.0
+            checkpoint_due = monotonic() >= next_checkpoint_at or processed_bars == total_bars
+            progress_due = processed_bars == total_bars or processed_bars % progress_report_stride == 0 or checkpoint_due
+            if checkpoint_due or progress_due:
+                last_checkpoint = self._build_resume_checkpoint(
+                    interval=interval,
+                    requested_symbols=requested_symbols,
+                    active_symbols=active_symbols,
+                    missing_main_symbols=missing_main_symbols,
+                    processed_bars=processed_bars,
+                    positions=positions,
+                    trigger_events=trigger_events,
+                    closed_trades=closed_trades,
+                    equity_curve=equity_curve,
+                    last_executed_at=last_executed_at,
+                    cumulative_realized=cumulative_realized,
+                    trade_counter=trade_counter,
+                )
+            if checkpoint_due:
+                next_checkpoint_at = monotonic() + BACKTEST_CHECKPOINT_INTERVAL_SECONDS
+            if progress_due:
+                replay_progress = 60.0 + (processed_bars / total_bars) * 36.0
                 await self._emit_progress(
                     progress,
                     stage="Simulating strategy",
-                    detail=f"Processed {index} of {len(timeline)} replay bars.",
+                    detail=f"Processed {processed_bars} of {total_bars} replay bars.",
                     progress_value=replay_progress,
                     interval=interval,
-                    total_bars=len(timeline),
-                    processed_bars=index,
+                    checkpoint=last_checkpoint,
+                    total_bars=total_bars,
+                    processed_bars=processed_bars,
                     trade_count=len(closed_trades),
                     active_symbol_count=len(active_symbols),
                 )
@@ -579,6 +652,7 @@ class BotBacktestService:
             detail=f"Compiling {trade_count} closed trade{'s' if trade_count != 1 else ''} and the equity curve.",
             progress_value=98.0,
             interval=interval,
+            checkpoint=last_checkpoint,
             total_bars=len(timeline),
             processed_bars=len(timeline),
             trade_count=trade_count,
@@ -621,6 +695,7 @@ class BotBacktestService:
         detail: str,
         progress_value: float,
         interval: str,
+        checkpoint: dict[str, Any] | None = None,
         **metrics: Any,
     ) -> None:
         if progress is None:
@@ -633,9 +708,121 @@ class BotBacktestService:
         }
         if metrics:
             payload["metrics"] = metrics
+        if checkpoint is not None:
+            payload["checkpoint"] = checkpoint
         maybe_awaitable = progress(payload)
         if isawaitable(maybe_awaitable):
             await maybe_awaitable
+
+    def _build_resume_checkpoint(
+        self,
+        *,
+        interval: str,
+        requested_symbols: list[str],
+        active_symbols: list[str],
+        missing_main_symbols: set[str],
+        processed_bars: int,
+        positions: dict[str, dict[str, Any]],
+        trigger_events: list[dict[str, Any]],
+        closed_trades: list[dict[str, Any]],
+        equity_curve: list[dict[str, Any]],
+        last_executed_at: str | None,
+        cumulative_realized: float,
+        trade_counter: int,
+    ) -> dict[str, Any]:
+        return {
+            "version": 1,
+            "interval": interval,
+            "requested_symbols": deepcopy(requested_symbols),
+            "active_symbols": deepcopy(active_symbols),
+            "missing_main_symbols": sorted(missing_main_symbols),
+            "processed_bars": max(0, processed_bars),
+            "positions": deepcopy(positions),
+            "trigger_events": deepcopy(trigger_events),
+            "closed_trades": deepcopy(closed_trades),
+            "equity_curve": deepcopy(equity_curve),
+            "last_executed_at": last_executed_at,
+            "cumulative_realized": round(cumulative_realized, 8),
+            "trade_counter": int(trade_counter),
+        }
+
+    def _apply_resume_checkpoint(
+        self,
+        *,
+        checkpoint: dict[str, Any] | None,
+        interval: str,
+        requested_symbols: list[str],
+        active_symbols: list[str],
+        missing_main_symbols: set[str],
+        timeline: list[int],
+        main_candles: dict[str, list[dict[str, Any]]],
+        current_candle_by_symbol: dict[str, dict[str, Any]],
+        candle_index_by_symbol: dict[str, int],
+        positions: dict[str, dict[str, Any]],
+        trigger_events: list[dict[str, Any]],
+        closed_trades: list[dict[str, Any]],
+        equity_curve: list[dict[str, Any]],
+    ) -> tuple[int, float, int, str | None, dict[str, Any]] | None:
+        if not isinstance(checkpoint, dict):
+            return None
+        if int(self._to_float(checkpoint.get("version"), 0.0)) != 1:
+            return None
+        if str(checkpoint.get("interval") or "").strip().lower() != interval:
+            return None
+
+        checkpoint_requested_symbols = [str(symbol) for symbol in checkpoint.get("requested_symbols", []) if str(symbol).strip()]
+        if "requested_symbols" in checkpoint and checkpoint_requested_symbols != requested_symbols:
+            return None
+        checkpoint_active_symbols = [str(symbol) for symbol in checkpoint.get("active_symbols", []) if str(symbol).strip()]
+        if "active_symbols" in checkpoint and checkpoint_active_symbols != active_symbols:
+            return None
+        checkpoint_missing_symbols = {str(symbol) for symbol in checkpoint.get("missing_main_symbols", []) if str(symbol).strip()}
+        if "missing_main_symbols" in checkpoint and checkpoint_missing_symbols != missing_main_symbols:
+            return None
+
+        processed_bars = int(self._to_float(checkpoint.get("processed_bars"), 0.0))
+        if processed_bars < 0 or processed_bars > len(timeline):
+            return None
+
+        if isinstance(checkpoint.get("positions"), dict):
+            positions.update(deepcopy(checkpoint["positions"]))
+        if isinstance(checkpoint.get("trigger_events"), list):
+            trigger_events.extend(deepcopy(checkpoint["trigger_events"]))
+        if isinstance(checkpoint.get("closed_trades"), list):
+            closed_trades.extend(deepcopy(checkpoint["closed_trades"]))
+        if isinstance(checkpoint.get("equity_curve"), list):
+            equity_curve.extend(deepcopy(checkpoint["equity_curve"]))
+
+        if processed_bars > 0:
+            resumed_timestamp = timeline[processed_bars - 1]
+            for symbol in active_symbols:
+                symbol_candles = main_candles.get(symbol, [])
+                close_times = [int(candle.get("close_time") or 0) for candle in symbol_candles]
+                symbol_index = bisect_right(close_times, resumed_timestamp) - 1
+                candle_index_by_symbol[symbol] = symbol_index
+                if symbol_index >= 0:
+                    current_candle_by_symbol[symbol] = symbol_candles[symbol_index]
+
+        return (
+            processed_bars,
+            self._to_float(checkpoint.get("cumulative_realized"), 0.0),
+            int(self._to_float(checkpoint.get("trade_counter"), 0.0)),
+            str(checkpoint.get("last_executed_at") or "").strip() or None,
+            self._build_resume_checkpoint(
+                interval=interval,
+                requested_symbols=requested_symbols,
+                active_symbols=active_symbols,
+                missing_main_symbols=missing_main_symbols,
+                processed_bars=processed_bars,
+                positions=positions,
+                trigger_events=trigger_events,
+                closed_trades=closed_trades,
+                equity_curve=equity_curve,
+                last_executed_at=str(checkpoint.get("last_executed_at") or "").strip() or None,
+                cumulative_realized=self._to_float(checkpoint.get("cumulative_realized"), 0.0),
+                trade_counter=int(self._to_float(checkpoint.get("trade_counter"), 0.0)),
+            ),
+        )
 
     @staticmethod
     def _create_candle_request_task(
