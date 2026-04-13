@@ -84,11 +84,24 @@ type ComposerState = "idle" | "creating" | "sending";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const QUICK_PROMPTS = [
-  "What are my active bots doing right now?",
-  "Am I ready to trade on Pacifica?",
-  "Show my open order exposure",
-  "What happened in my recent runtime events?",
+  {
+    title: "Give me a quick account health check and call out anything that needs attention.",
+    description: "A strong first prompt for balances, bot status, open risk, and urgent issues.",
+  },
+  {
+    title: "What are my active bots doing right now?",
+    description: "Get a live snapshot of running strategies, positions, and recent actions.",
+  },
+  {
+    title: "Am I ready to trade on Pacifica?",
+    description: "Check account readiness, balances, and anything blocking a new trade.",
+  },
+  {
+    title: "Show my open order exposure",
+    description: "Review active orders, side concentration, and where risk is currently sitting.",
+  },
 ];
+const LOADING_MESSAGES = ["Thinking...", "Reviewing your account context...", "Checking recent activity...", "Putting the answer together..."];
 const JOB_POLL_VISIBLE_MS = 1800;
 const JOB_POLL_HIDDEN_MS = 6000;
 
@@ -166,6 +179,7 @@ export function CopilotPage() {
   const [pendingChatJob, setPendingChatJob] = useState<{ jobId: string; optimisticMessageId: string } | null>(null);
   const [resolvedWallet, setResolvedWallet] = useState<string | null>(walletAddress ?? null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
   const historyRequestRef = useRef<AbortController | null>(null);
   const conversationRequestRef = useRef<AbortController | null>(null);
@@ -380,6 +394,21 @@ export function CopilotPage() {
       }
     };
   }, [authenticated, getAuthHeaders, pendingChatJob, walletAddress]);
+
+  useEffect(() => {
+    if (!isSending) {
+      setLoadingMessageIndex(0);
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setLoadingMessageIndex((current) => (current + 1) % LOADING_MESSAGES.length);
+    }, 1600);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [isSending]);
 
   async function openConversation(conversationId: string) {
     if (!authenticated || isSending) {
@@ -772,15 +801,15 @@ export function CopilotPage() {
                 <div className="grid w-full max-w-3xl gap-3 md:grid-cols-2">
                   {QUICK_PROMPTS.map((prompt) => (
                     <button
-                      key={prompt}
+                      key={prompt.title}
                       type="button"
-                      onClick={() => void sendMessage(prompt)}
+                      onClick={() => void sendMessage(prompt.title)}
                       disabled={isBusy || isConversationLoading}
                       className="rounded-[1.6rem] border border-white/[0.05] bg-white/[0.025] px-5 py-5 text-left transition hover:border-[#dce85d]/30 hover:bg-[#dce85d]/[0.04] disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <p className="text-sm font-medium text-neutral-100">{prompt}</p>
+                      <p className="text-sm font-medium text-neutral-100">{prompt.title}</p>
                       <p className="mt-2 text-xs leading-relaxed text-neutral-400">
-                        Use this as your first message.
+                        {prompt.description}
                       </p>
                     </button>
                   ))}
@@ -865,7 +894,9 @@ export function CopilotPage() {
                         <span className="h-2 w-2 animate-bounce rounded-full bg-neutral-500 [animation-delay:-0.15s]" />
                         <span className="h-2 w-2 animate-bounce rounded-full bg-neutral-500" />
                       </div>
-                      <p className="mt-3 text-xs uppercase tracking-[0.22em] text-neutral-500">queued on backend</p>
+                      <p className="mt-3 text-xs tracking-[0.04em] text-neutral-400">
+                        {LOADING_MESSAGES[loadingMessageIndex]}
+                      </p>
                     </div>
                   </article>
                 ) : null}
