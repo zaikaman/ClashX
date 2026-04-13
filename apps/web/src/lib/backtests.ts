@@ -132,6 +132,30 @@ export type BacktestRunRequestPayload = {
   assumptions?: BacktestAssumptionConfig;
 };
 
+export type BacktestRunJobProgress = {
+  type?: "progress";
+  progress: number;
+  stage: string;
+  detail: string;
+  interval: string;
+  metrics?: Record<string, number | string>;
+};
+
+export type BacktestRunJobCreateResponse = {
+  id: string;
+  jobType: "backtest_run";
+  status: "queued" | "running" | "completed" | "failed";
+};
+
+export type BacktestRunJobStatusResponse = {
+  id: string;
+  jobType: "backtest_run";
+  status: "queued" | "running" | "completed" | "failed";
+  progress?: BacktestRunJobProgress;
+  result?: BacktestRunDetail | null;
+  errorDetail?: string | null;
+};
+
 export type BacktestsBootstrapPayload = {
   bots: Array<{
     id: string;

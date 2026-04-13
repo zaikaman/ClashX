@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from src.services.supabase_rest import SupabaseRestClient
 
-AiJobType = Literal["builder_ai_chat", "copilot_chat"]
+AiJobType = Literal["builder_ai_chat", "copilot_chat", "backtest_run"]
 AiJobStatus = Literal["queued", "running", "completed", "failed"]
 
 
@@ -68,6 +68,18 @@ class AiJobService:
                 "started_at": now,
                 "updated_at": now,
                 "error_detail": None,
+            },
+            filters={"id": job_id},
+        )
+        return updated[0] if updated else None
+
+    def update_progress(self, *, job_id: str, progress_payload: dict[str, Any]) -> dict[str, Any] | None:
+        now = _utc_now()
+        updated = self._supabase.update(
+            "ai_job_runs",
+            {
+                "result_payload_json": progress_payload,
+                "updated_at": now,
             },
             filters={"id": job_id},
         )

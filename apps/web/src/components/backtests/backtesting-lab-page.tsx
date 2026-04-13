@@ -10,6 +10,9 @@ import { useClashxAuth } from "@/lib/clashx-auth";
 import type {
   BacktestAssumptionConfig,
   BacktestRunDetail,
+  BacktestRunJobCreateResponse,
+  BacktestRunJobProgress,
+  BacktestRunJobStatusResponse,
   BacktestRunRequestPayload,
   BacktestRunSummary,
   BacktestTriggerEvent,
@@ -40,6 +43,8 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8
 const INSPECTOR_PAGE_SIZE = 12;
 const COMPARE_COLORS = ["#dce85d", "#74b97f", "#8ec5ff", "#f59e0b"];
 const MAX_KLINE_CANDLES_PER_REQUEST = 4000;
+const BACKTEST_JOB_POLL_VISIBLE_MS = 1800;
+const BACKTEST_JOB_POLL_HIDDEN_MS = 6000;
 const TIMEFRAME_TO_MS: Record<string, number> = {
   "1m": 60_000,
   "5m": 300_000,
@@ -118,43 +123,14 @@ function estimateBacktestWorkload(startDate: string, endDate: string, interval: 
   };
 }
 
-type BacktestProgressEvent = {
-  progress: number;
-  stage: string;
-  detail: string;
-  interval: string;
-  metrics?: Record<string, number | string>;
-};
-
-type BacktestStreamEvent =
-  | { event: "progress"; data: BacktestProgressEvent }
-  | { event: "complete"; data: BacktestRunDetail }
-  | { event: "error"; data: { detail?: string } };
-
-function parseSseChunk(rawEvent: string): BacktestStreamEvent | null {
-  const lines = rawEvent
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter(Boolean);
-  if (!lines.length) {
-    return null;
-  }
-  const eventLine = lines.find((line) => line.startsWith("event:"));
-  const dataLines = lines.filter((line) => line.startsWith("data:"));
-  if (!eventLine || !dataLines.length) {
-    return null;
-  }
-  const event = eventLine.slice("event:".length).trim();
-  const dataText = dataLines.map((line) => line.slice("data:".length).trim()).join("\n");
-  try {
-    const data = JSON.parse(dataText) as BacktestProgressEvent | BacktestRunDetail | { detail?: string };
-    if (event === "progress" || event === "complete" || event === "error") {
-      return { event, data } as BacktestStreamEvent;
-    }
-  } catch {
-    return null;
-  }
-  return null;
+function toRunProgressState(progressPayload: BacktestRunJobProgress): RunProgressState {
+  return {
+    progress: clampNumber(progressPayload.progress, 0, 100),
+    stage: progressPayload.stage,
+    detail: progressPayload.detail,
+    interval: progressPayload.interval,
+    metrics: progressPayload.metrics,
+  };
 }
 
 function formatDuration(seconds: number) {
@@ -241,6 +217,7 @@ export function BacktestingLabPage() {
   const [historyScope, setHistoryScope] = useState<HistoryScope>("all");
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
+  const [pendingBacktestJobId, setPendingBacktestJobId] = useState<string | null>(null);
   const [runProgress, setRunProgress] = useState<RunProgressState | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -276,6 +253,9 @@ export function BacktestingLabPage() {
       setSelectedBotId(queryBotId ?? "");
       setActiveRunId(null);
       setCompareIds([]);
+      setPendingBacktestJobId(null);
+      setRunning(false);
+      setRunProgress(null);
       setLoading(false);
       return;
     }
@@ -425,6 +405,100 @@ export function BacktestingLabPage() {
     };
   }, [authenticated, compareIds, getAuthHeaders, runCache, walletAddress]);
 
+  useEffect(() => {
+    if (!authenticated || !pendingBacktestJobId) {
+      return;
+    }
+
+    let cancelled = false;
+    let timeoutId: number | null = null;
+
+    const scheduleNextPoll = () => {
+      if (cancelled) {
+        return;
+      }
+      const delay = typeof document !== "undefined" && document.visibilityState === "hidden"
+        ? BACKTEST_JOB_POLL_HIDDEN_MS
+        : BACKTEST_JOB_POLL_VISIBLE_MS;
+      timeoutId = window.setTimeout(() => {
+        void pollJob();
+      }, delay);
+    };
+
+    const clearProgressSoon = () => {
+      window.setTimeout(() => {
+        setRunProgress(null);
+      }, 700);
+    };
+
+    const pollJob = async () => {
+      try {
+        const headers = await getAuthHeaders();
+        const response = await fetch(`${API_BASE_URL}/api/backtests/runs/jobs/${encodeURIComponent(pendingBacktestJobId)}`, {
+          cache: "no-store",
+          headers,
+        });
+        const payload = (await response.json()) as BacktestRunJobStatusResponse | { detail?: string };
+        if (!response.ok) {
+          throw new Error("detail" in payload ? payload.detail ?? "Could not poll backtest job." : "Could not poll backtest job.");
+        }
+        if (cancelled) {
+          return;
+        }
+
+        const job = payload as BacktestRunJobStatusResponse;
+        if (job.progress) {
+          setRunProgress(toRunProgressState(job.progress));
+        }
+
+        if (job.status === "completed" && job.result) {
+          const finalRun = job.result;
+          setRunProgress({
+            progress: 100,
+            stage: finalRun.status === "completed" ? "Replay complete" : "Run finished with issues",
+            detail: finalRun.status === "completed" ? "The result set is ready." : "The replay finished with issue details.",
+            interval: finalRun.interval,
+            metrics: job.progress?.metrics,
+          });
+          setRuns((current) => [finalRun, ...current.filter((run) => run.id !== finalRun.id)]);
+          setRunCache((current) => ({ ...current, [finalRun.id]: finalRun }));
+          setActiveRunId(finalRun.id);
+          setPendingBacktestJobId(null);
+          setRunning(false);
+          clearProgressSoon();
+          return;
+        }
+
+        if (job.status === "failed") {
+          setPendingBacktestJobId(null);
+          setRunning(false);
+          setPageError(job.errorDetail ?? "Backtest failed.");
+          clearProgressSoon();
+          return;
+        }
+
+        scheduleNextPoll();
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        setPendingBacktestJobId(null);
+        setRunning(false);
+        setPageError(error instanceof Error ? error.message : "Could not poll backtest job.");
+        clearProgressSoon();
+      }
+    };
+
+    void pollJob();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [authenticated, getAuthHeaders, pendingBacktestJobId]);
+
   const filteredRuns = useMemo(() => {
     const query = deferredHistoryQuery.trim().toLowerCase();
     return runs.filter((run) => {
@@ -490,8 +564,8 @@ export function BacktestingLabPage() {
     setPageError(null);
     setRunProgress({
       progress: 8,
-      stage: "Opening stream",
-      detail: "Waiting for the backtest worker to start emitting progress.",
+      stage: "Queueing backtest",
+      detail: "Submitting the replay job and waiting for the worker to begin.",
       interval: pendingWorkload.interval,
       metrics: {
         estimated_bars: pendingWorkload.estimatedBars,
@@ -499,72 +573,20 @@ export function BacktestingLabPage() {
       },
     });
     try {
-      const response = await fetch(`${API_BASE_URL}/api/backtests/runs/stream`, {
+      const response = await fetch(`${API_BASE_URL}/api/backtests/runs/jobs`, {
         method: "POST",
         headers: await getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(payload),
       });
-      if (!response.ok) {
-        const result = (await response.json()) as { detail?: string };
+      const result = (await response.json()) as BacktestRunJobCreateResponse | { detail?: string };
+      if (!response.ok || !("id" in result)) {
         throw new Error("detail" in result ? result.detail ?? "Backtest failed." : "Backtest failed.");
       }
-      if (!response.body) {
-        throw new Error("Backtest stream did not return a readable body.");
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let completedRun: BacktestRunDetail | null = null;
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) {
-          break;
-        }
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split("\n\n");
-        buffer = events.pop() ?? "";
-        for (const rawEvent of events) {
-          const parsed = parseSseChunk(rawEvent);
-          if (!parsed) {
-            continue;
-          }
-          if (parsed.event === "progress") {
-            setRunProgress({
-              progress: clampNumber(parsed.data.progress, 0, 100),
-              stage: parsed.data.stage,
-              detail: parsed.data.detail,
-              interval: parsed.data.interval,
-              metrics: parsed.data.metrics,
-            });
-            continue;
-          }
-          if (parsed.event === "error") {
-            throw new Error(parsed.data.detail ?? "Backtest failed while streaming progress.");
-          }
-          completedRun = parsed.data;
-        }
-      }
-
-      if (!completedRun) {
-        throw new Error("Backtest stream ended before a final result arrived.");
-      }
-
-      setRunProgress({
-        progress: 100,
-        stage: completedRun.status === "completed" ? "Replay complete" : "Run finished with issues",
-        detail: completedRun.status === "completed" ? "The result set is ready." : "The replay finished with issue details.",
-        interval: completedRun.interval,
-      });
-      setRuns((current) => [completedRun, ...current.filter((run) => run.id !== completedRun.id)]);
-      setRunCache((current) => ({ ...current, [completedRun.id]: completedRun }));
-      setActiveRunId(completedRun.id);
+      setPendingBacktestJobId(result.id);
     } catch (error) {
       setPageError(error instanceof Error ? error.message : "Backtest failed.");
-    } finally {
       setRunning(false);
-      window.setTimeout(() => setRunProgress(null), 220);
+      window.setTimeout(() => setRunProgress(null), 700);
     }
   }
 
@@ -867,7 +889,7 @@ export function BacktestingLabPage() {
                 </span>
               </button>
             </div>
-            {running && runProgress ? (
+            {runProgress ? (
               <article className="grid gap-3 rounded-[1.6rem] border border-[#8ec5ff]/20 bg-[linear-gradient(135deg,rgba(142,197,255,0.12),rgba(220,232,93,0.08))] p-4 text-neutral-50">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="grid gap-1">
@@ -891,7 +913,7 @@ export function BacktestingLabPage() {
                   </span>
                   <span>
                     {Number(runProgress.metrics?.completed_requests ?? 0).toLocaleString()} /{" "}
-                    {Number(runProgress.metrics?.total_requests ?? runProgress.metrics?.estimated_requests ?? pendingWorkload.estimatedRequests).toLocaleString()} streams
+                    {Number(runProgress.metrics?.total_requests ?? runProgress.metrics?.estimated_requests ?? pendingWorkload.estimatedRequests).toLocaleString()} requests
                   </span>
                   <span>{runProgress.interval} cadence</span>
                 </div>

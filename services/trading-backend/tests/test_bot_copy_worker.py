@@ -11,6 +11,7 @@ class FakePacificaClient:
     def __init__(self) -> None:
         self.orders: list[dict] = []
         self._positions: dict[str, list[dict]] = {}
+        self._margin_settings: dict[str, dict[str, int]] = {}
 
     async def get_markets(self) -> list[dict]:
         return [{"symbol": "BTC", "mark_price": 105000, "tick_size": 0.5, "lot_size": 0.001, "min_order_size": 10.0, "max_leverage": 20}]
@@ -18,8 +19,18 @@ class FakePacificaClient:
     async def get_positions(self, wallet_address: str) -> list[dict]:
         return [dict(position) for position in self._positions.get(wallet_address, [])]
 
+    async def get_account_settings(self, wallet_address: str) -> list[dict]:
+        wallet_settings = self._margin_settings.get(wallet_address, {})
+        return [
+            {"symbol": symbol, "isolated": False, "leverage": leverage}
+            for symbol, leverage in wallet_settings.items()
+        ]
+
     async def place_order(self, payload: dict) -> dict:
         self.orders.append(dict(payload))
+        if payload["type"] == "update_leverage":
+            wallet_settings = self._margin_settings.setdefault(payload["account"], {})
+            wallet_settings[payload["symbol"]] = int(payload["leverage"])
         if payload["type"] == "create_market_order" and not payload.get("reduce_only"):
             wallet_positions = self._positions.setdefault(payload["account"], [])
             wallet_positions[:] = [
@@ -248,6 +259,64 @@ def test_copy_worker_sets_tpsl_with_required_close_side() -> None:
     assert fake_pacifica.orders[0]["stop_loss"]["stop_price"] == 83.25
 
 
+def test_copy_worker_mirrors_exact_source_tpsl_prices_and_client_order_ids() -> None:
+    worker = BotCopyWorker(poll_interval_seconds=0.01)
+    fake_pacifica = FakePacificaClient()
+    worker._pacifica = fake_pacifica
+
+    asyncio.run(
+        worker._execute_action(
+            relationship={"id": "cc3d63e8-504f-41c6-b71c-34f7d5a1d343"},
+            source_event={
+                "id": "evt-source-tpsl",
+                "request_payload": {"type": "set_tpsl", "symbol": "BTC"},
+                "result_payload": {
+                    "payload": {
+                        "side": "bid",
+                        "symbol": "BTC",
+                        "stop_loss": {
+                            "amount": "0.00845",
+                            "stop_price": "71684.0",
+                            "client_order_id": "8e1fbbec-a47b-53c4-9d6d-c5ac17f57b73",
+                        },
+                        "take_profit": {
+                            "amount": "0.00845",
+                            "stop_price": "69554.0",
+                            "client_order_id": "7eea60ea-6aa9-5117-8973-54060cf78745",
+                        },
+                    }
+                },
+            },
+            action={
+                "type": "set_tpsl",
+                "symbol": "BTC",
+                "take_profit_pct": 2.0,
+                "stop_loss_pct": 1.0,
+            },
+            scale_bps=10_000,
+            credentials={
+                "account_address": "wallet-1",
+                "agent_wallet_address": "agent-1",
+                "agent_private_key": "secret",
+            },
+            market_lookup={"BTC": {"mark_price": 70958.5, "tick_size": 1.0, "lot_size": 0.00001, "max_leverage": 20}},
+            position_lookup={
+                "BTC": {
+                    "symbol": "BTC",
+                    "side": "ask",
+                    "amount": 0.00845,
+                    "mark_price": 70958.5,
+                }
+            },
+        )
+    )
+
+    assert fake_pacifica.orders[0]["take_profit"]["stop_price"] == 69554.0
+    assert fake_pacifica.orders[0]["stop_loss"]["stop_price"] == 71684.0
+    assert fake_pacifica.orders[0]["take_profit"]["client_order_id"] == "mirror-cc3d63e8504f-7eea60ea6aa95117897354060cf78745"
+    assert fake_pacifica.orders[0]["stop_loss"]["client_order_id"] == "mirror-cc3d63e8504f-8e1fbbeca47b53c49d6dc5ac17f57b73"
+
+
 def test_copy_worker_reduce_only_size_ignores_leverage_multiplier() -> None:
     worker = BotCopyWorker(poll_interval_seconds=0.01)
     fake_pacifica = FakePacificaClient()
@@ -278,6 +347,36 @@ def test_copy_worker_reduce_only_size_ignores_leverage_multiplier() -> None:
 
     assert [order["type"] for order in fake_pacifica.orders] == ["create_market_order"]
     assert fake_pacifica.orders[0]["amount"] == 1.0
+
+
+def test_copy_worker_skips_update_leverage_when_setting_already_matches() -> None:
+    worker = BotCopyWorker(poll_interval_seconds=0.01)
+    fake_pacifica = FakePacificaClient()
+    fake_pacifica._margin_settings["wallet-1"] = {"BTC": 8}
+    worker._pacifica = fake_pacifica
+
+    asyncio.run(
+        worker._execute_action(
+            relationship={"id": "rel-match"},
+            source_event={"id": "evt-match", "request_payload": {}, "result_payload": {}},
+            action={
+                "type": "open_short",
+                "symbol": "BTC",
+                "size_usd": 75,
+                "leverage": 8,
+            },
+            scale_bps=10_000,
+            credentials={
+                "account_address": "wallet-1",
+                "agent_wallet_address": "agent-1",
+                "agent_private_key": "secret",
+            },
+            market_lookup={"BTC": {"mark_price": 105000, "tick_size": 0.5, "lot_size": 0.001, "max_leverage": 20}},
+            position_lookup={},
+        )
+    )
+
+    assert [order["type"] for order in fake_pacifica.orders] == ["create_market_order"]
 
 
 def test_copy_worker_rejects_leverage_above_market_max() -> None:

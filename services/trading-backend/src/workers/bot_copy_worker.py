@@ -291,7 +291,12 @@ class BotCopyWorker:
                 reference_price=None,
             )
             if not reduce_only:
-                await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
+                await self._ensure_leverage(
+                    wallet_address=credentials["account_address"],
+                    credentials=credentials,
+                    symbol=symbol,
+                    leverage=leverage,
+                )
             response = await self._pacifica.place_order(
                 {
                     "type": "create_market_order",
@@ -337,7 +342,12 @@ class BotCopyWorker:
                 reference_price=price,
             )
             if not reduce_only:
-                await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
+                await self._ensure_leverage(
+                    wallet_address=credentials["account_address"],
+                    credentials=credentials,
+                    symbol=symbol,
+                    leverage=leverage,
+                )
             response = await self._pacifica.place_order(
                 {
                     "type": "create_order",
@@ -378,7 +388,12 @@ class BotCopyWorker:
                 reference_price=None,
             )
             if not reduce_only:
-                await self._pacifica.place_order({"type": "update_leverage", **payload, "leverage": leverage})
+                await self._ensure_leverage(
+                    wallet_address=credentials["account_address"],
+                    credentials=credentials,
+                    symbol=symbol,
+                    leverage=leverage,
+                )
             response = await self._pacifica.place_order(
                 {
                     "type": "create_twap_order",
@@ -440,7 +455,13 @@ class BotCopyWorker:
             sl_pct = float(action.get("stop_loss_pct") or 0)
             side = str(follower_position.get("side") or "").lower()
             close_side = "ask" if side in {"bid", "long"} else "bid"
-            if side in {"bid", "long"}:
+            source_take_profit, source_stop_loss = self._extract_source_tpsl_orders(source_event=source_event)
+            source_take_profit_price = self._to_float((source_take_profit or {}).get("stop_price"), 0.0)
+            source_stop_loss_price = self._to_float((source_stop_loss or {}).get("stop_price"), 0.0)
+            if source_take_profit_price > 0 and source_stop_loss_price > 0:
+                take_profit_price = source_take_profit_price
+                stop_loss_price = source_stop_loss_price
+            elif side in {"bid", "long"}:
                 take_profit_price = self._normalize_price_to_tick(
                     mark_price * (1 + tp_pct / 100),
                     tick_size=tick_size,
@@ -462,13 +483,27 @@ class BotCopyWorker:
                     tick_size=tick_size,
                     rounding=ROUND_UP,
                 )
+            take_profit_request = {"stop_price": take_profit_price, "amount": amount}
+            stop_loss_request = {"stop_price": stop_loss_price, "amount": amount}
+            mirrored_take_profit_client_order_id = self._mirror_nested_client_order_id(
+                relationship=relationship,
+                source_order=source_take_profit,
+            )
+            mirrored_stop_loss_client_order_id = self._mirror_nested_client_order_id(
+                relationship=relationship,
+                source_order=source_stop_loss,
+            )
+            if mirrored_take_profit_client_order_id:
+                take_profit_request["client_order_id"] = mirrored_take_profit_client_order_id
+            if mirrored_stop_loss_client_order_id:
+                stop_loss_request["client_order_id"] = mirrored_stop_loss_client_order_id
             response = await self._pacifica.place_order(
                 {
                     "type": "set_position_tpsl",
                     **payload,
                     "side": close_side,
-                    "take_profit": {"stop_price": take_profit_price, "amount": amount},
-                    "stop_loss": {"stop_price": stop_loss_price, "amount": amount},
+                    "take_profit": take_profit_request,
+                    "stop_loss": stop_loss_request,
                 }
             )
             response["execution_meta"] = {
@@ -478,6 +513,8 @@ class BotCopyWorker:
                 "amount": amount,
                 "reduce_only": False,
                 "reference_price": mark_price,
+                "take_profit_client_order_id": mirrored_take_profit_client_order_id,
+                "stop_loss_client_order_id": mirrored_stop_loss_client_order_id,
             }
             return response
 
@@ -565,6 +602,51 @@ class BotCopyWorker:
             return await loader()
         except PacificaClientError:
             return fallback
+
+    async def _ensure_leverage(
+        self,
+        *,
+        wallet_address: str,
+        credentials: dict[str, str],
+        symbol: str,
+        leverage: int,
+    ) -> None:
+        settings = await self._safe_load(lambda: self._pacifica.get_account_settings(wallet_address), [])
+        current = next(
+            (
+                item
+                for item in settings
+                if self._normalize_symbol(item.get("symbol")) == symbol
+            ),
+            None,
+        )
+        if isinstance(current, dict) and int(current.get("leverage") or 0) == leverage:
+            return
+        await self._pacifica.place_order(
+            {
+                "type": "update_leverage",
+                "account": credentials["account_address"],
+                "agent_wallet": credentials["agent_wallet_address"],
+                "__agent_private_key": credentials["agent_private_key"],
+                "symbol": symbol,
+                "leverage": leverage,
+            }
+        )
+        for attempt in range(4):
+            settings = await self._safe_load(lambda: self._pacifica.get_account_settings(wallet_address), [])
+            current = next(
+                (
+                    item
+                    for item in settings
+                    if self._normalize_symbol(item.get("symbol")) == symbol
+                ),
+                None,
+            )
+            if isinstance(current, dict) and int(current.get("leverage") or 0) == leverage:
+                return
+            if attempt < 3:
+                await asyncio.sleep(0.25)
+        raise ValueError(f"Failed to confirm {symbol} leverage is set to {leverage}x before mirroring the order.")
 
     @classmethod
     def _build_symbol_lookup(cls, rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -712,8 +794,41 @@ class BotCopyWorker:
             return None
 
     @staticmethod
+    def _to_float(value: Any, default: float = 0.0) -> float:
+        try:
+            if value in (None, ""):
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
     def _normalize_symbol(value: Any) -> str:
         return str(value or "").upper().replace("-PERP", "").strip()
+
+    @staticmethod
+    def _extract_source_tpsl_orders(source_event: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        result_payload = source_event.get("result_payload") if isinstance(source_event.get("result_payload"), dict) else {}
+        request_payload = result_payload.get("payload") if isinstance(result_payload.get("payload"), dict) else {}
+        take_profit = request_payload.get("take_profit") if isinstance(request_payload.get("take_profit"), dict) else None
+        stop_loss = request_payload.get("stop_loss") if isinstance(request_payload.get("stop_loss"), dict) else None
+        return take_profit, stop_loss
+
+    def _mirror_nested_client_order_id(
+        self,
+        *,
+        relationship: dict[str, Any],
+        source_order: dict[str, Any] | None,
+    ) -> str | None:
+        if not isinstance(source_order, dict):
+            return None
+        source_identifier = self._source_order_identifier(source_order)
+        if not source_identifier:
+            return None
+        return self._mirrored_order_key(
+            relationship_id=str(relationship["id"]),
+            source_identifier=source_identifier,
+        )
 
     def _extract_mirrored_order_identifier(
         self,

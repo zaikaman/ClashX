@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-import asyncio
-from contextlib import suppress
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Any as Session
 
 from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authenticated_user, resolve_app_user_id
 from src.db.session import get_db
+from src.services.ai_job_runner_service import AiJobRunnerService
+from src.services.ai_job_service import AiJobStatus, AiJobType, AiJobService
 from src.services.bot_builder_service import BotBuilderService
 from src.services.bot_backtest_service import BotBacktestService
-from src.services.event_broadcaster import format_sse
 
 router = APIRouter(prefix="/api/backtests", tags=["backtests"])
 bot_backtest_service = BotBacktestService()
 bot_builder_service = BotBuilderService()
+ai_job_service = AiJobService()
+ai_job_runner = AiJobRunnerService(job_service=ai_job_service, bot_backtest_service=bot_backtest_service)
 
 
 class BacktestAssumptionConfigRequest(BaseModel):
@@ -82,6 +82,24 @@ class BacktestsBootstrapResponse(BaseModel):
     runs: list[BacktestRunSummaryResponse]
 
 
+class BacktestRunJobCreateResponse(BaseModel):
+    id: str
+    jobType: AiJobType
+    status: AiJobStatus
+
+
+class BacktestRunJobStatusResponse(BaseModel):
+    id: str
+    jobType: AiJobType
+    status: AiJobStatus
+    progress: dict[str, Any] = Field(default_factory=dict)
+    result: BacktestRunDetailResponse | None = None
+    errorDetail: str | None = None
+    createdAt: str | None = None
+    updatedAt: str | None = None
+    completedAt: str | None = None
+
+
 def _resolve_wallet(user: AuthenticatedUser, wallet_address: str | None) -> str:
     resolved = wallet_address or (user.wallet_addresses[0] if user.wallet_addresses else None)
     if not resolved:
@@ -119,66 +137,63 @@ async def create_backtest_run(
     return BacktestRunDetailResponse.model_validate(run)
 
 
-@router.post("/runs/stream")
-async def create_backtest_run_stream(
+@router.post("/runs/jobs", response_model=BacktestRunJobCreateResponse)
+async def create_backtest_run_job(
     payload: BacktestRunRequest,
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
-) -> StreamingResponse:
+) -> BacktestRunJobCreateResponse:
+    del db
     resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, payload.wallet_address)
-    queue: asyncio.Queue[str | None] = asyncio.Queue()
-
-    async def emit_event(event: str, data: dict[str, Any]) -> None:
-        await queue.put(format_sse(event=event, data=data))
-
-    async def progress_callback(progress_payload: dict[str, Any]) -> None:
-        await emit_event("progress", progress_payload)
-
-    async def run_backtest_job() -> None:
-        try:
-            run = await bot_backtest_service.run_backtest(
-                db,
-                bot_id=payload.bot_id,
-                wallet_address=resolved_wallet,
-                user_id=resolved_user_id,
-                interval=payload.interval,
-                start_time=payload.start_time,
-                end_time=payload.end_time,
-                initial_capital_usd=payload.initial_capital_usd,
-                assumptions=payload.assumptions.model_dump() if payload.assumptions is not None else None,
-                progress=progress_callback,
-            )
-        except ValueError as exc:
-            await emit_event("error", {"detail": str(exc)})
-        except Exception:
-            await emit_event("error", {"detail": "Backtest failed while streaming progress."})
-        else:
-            await emit_event("complete", BacktestRunDetailResponse.model_validate(run).model_dump(mode="json"))
-        finally:
-            await queue.put(None)
-
-    async def event_stream():
-        task = asyncio.create_task(run_backtest_job())
-        try:
-            while True:
-                item = await queue.get()
-                if item is None:
-                    break
-                yield item
-        finally:
-            if not task.done():
-                task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
+    job = ai_job_service.create_job(
+        job_type="backtest_run",
+        wallet_address=resolved_wallet,
+        request_payload={
+            "bot_id": payload.bot_id,
+            "wallet_address": resolved_wallet,
+            "user_id": resolved_user_id,
+            "interval": payload.interval,
+            "start_time": payload.start_time,
+            "end_time": payload.end_time,
+            "initial_capital_usd": payload.initial_capital_usd,
+            "assumptions": payload.assumptions.model_dump() if payload.assumptions is not None else None,
         },
+    )
+    ai_job_runner.start_backtest_run_job(
+        job_id=job["id"],
+        bot_id=payload.bot_id,
+        wallet_address=resolved_wallet,
+        user_id=resolved_user_id,
+        interval=payload.interval,
+        start_time=payload.start_time,
+        end_time=payload.end_time,
+        initial_capital_usd=payload.initial_capital_usd,
+        assumptions=payload.assumptions.model_dump() if payload.assumptions is not None else None,
+    )
+    return BacktestRunJobCreateResponse(id=job["id"], jobType="backtest_run", status="queued")
+
+
+@router.get("/runs/jobs/{job_id}", response_model=BacktestRunJobStatusResponse)
+async def get_backtest_run_job(
+    job_id: str,
+    user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> BacktestRunJobStatusResponse:
+    job = ai_job_service.get_job_for_wallets(job_id=job_id, wallet_addresses=user.wallet_addresses)
+    if job is None or job.get("job_type") != "backtest_run":
+        raise HTTPException(status_code=404, detail="Backtest job not found.")
+    result_payload = job.get("result_payload_json") if isinstance(job.get("result_payload_json"), dict) else {}
+    progress_payload = result_payload if result_payload.get("type") == "progress" else {}
+    run_payload = result_payload.get("run") if result_payload.get("type") == "result" and isinstance(result_payload.get("run"), dict) else None
+    return BacktestRunJobStatusResponse(
+        id=str(job.get("id") or ""),
+        jobType="backtest_run",
+        status=str(job.get("status") or "queued"),
+        progress=progress_payload,
+        result=BacktestRunDetailResponse.model_validate(run_payload) if run_payload is not None else None,
+        errorDetail=str(job.get("error_detail") or "") or None,
+        createdAt=job.get("created_at"),
+        updatedAt=job.get("updated_at"),
+        completedAt=job.get("completed_at"),
     )
 
 
