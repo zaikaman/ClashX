@@ -17,12 +17,20 @@ if (existsSync(workspaceEnvPath)) {
 const nextBin = path.resolve(appDir, "node_modules/next/dist/bin/next");
 const [, , ...nextArgs] = process.argv;
 const [command] = nextArgs;
+const hasBundlerFlag = nextArgs.some(
+  (arg) => arg === "--webpack" || arg === "--turbo" || arg === "--turbopack",
+);
 
 if (command === "dev" && !process.env.NEXT_DEV_POLL_INTERVAL) {
   process.env.NEXT_DEV_POLL_INTERVAL = "300";
 }
 
-const child = spawn(process.execPath, [nextBin, ...nextArgs], {
+const resolvedNextArgs =
+  command === "dev" && !hasBundlerFlag
+    ? ["dev", "--webpack", ...nextArgs.slice(1)]
+    : nextArgs;
+
+const child = spawn(process.execPath, [nextBin, ...resolvedNextArgs], {
   cwd: appDir,
   env: process.env,
   stdio: "inherit",
