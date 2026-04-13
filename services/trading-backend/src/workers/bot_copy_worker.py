@@ -427,6 +427,7 @@ class BotCopyWorker:
             tp_pct = float(action.get("take_profit_pct") or 0)
             sl_pct = float(action.get("stop_loss_pct") or 0)
             side = str(follower_position.get("side") or "").lower()
+            close_side = "ask" if side in {"bid", "long"} else "bid"
             if side in {"bid", "long"}:
                 take_profit_price = mark_price * (1 + tp_pct / 100)
                 stop_loss_price = mark_price * (1 - sl_pct / 100)
@@ -437,6 +438,7 @@ class BotCopyWorker:
                 {
                     "type": "set_position_tpsl",
                     **payload,
+                    "side": close_side,
                     "take_profit": {"stop_price": take_profit_price, "amount": amount},
                     "stop_loss": {"stop_price": stop_loss_price, "amount": amount},
                 }

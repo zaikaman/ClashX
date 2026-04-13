@@ -203,6 +203,45 @@ def test_copy_worker_allows_small_mirrored_market_sizes() -> None:
     assert fake_pacifica.orders[1]["amount"] == 0.005
 
 
+def test_copy_worker_sets_tpsl_with_required_close_side() -> None:
+    worker = BotCopyWorker(poll_interval_seconds=0.01)
+    fake_pacifica = FakePacificaClient()
+    worker._pacifica = fake_pacifica
+
+    asyncio.run(
+        worker._execute_action(
+            relationship={"id": "rel-tpsl"},
+            source_event={"id": "evt-tpsl", "request_payload": {}, "result_payload": {}},
+            action={
+                "type": "set_tpsl",
+                "symbol": "BTC",
+                "take_profit_pct": 2.0,
+                "stop_loss_pct": 1.0,
+            },
+            scale_bps=10_000,
+            credentials={
+                "account_address": "wallet-1",
+                "agent_wallet_address": "agent-1",
+                "agent_private_key": "secret",
+            },
+            market_lookup={"BTC": {"mark_price": 105000, "lot_size": 0.001, "min_order_size": 10.0}},
+            position_lookup={
+                "BTC": {
+                    "symbol": "BTC",
+                    "side": "ask",
+                    "amount": 0.005,
+                    "mark_price": 105000,
+                }
+            },
+        )
+    )
+
+    assert fake_pacifica.orders[0]["type"] == "set_position_tpsl"
+    assert fake_pacifica.orders[0]["side"] == "bid"
+    assert fake_pacifica.orders[0]["take_profit"]["amount"] == 0.005
+    assert fake_pacifica.orders[0]["stop_loss"]["amount"] == 0.005
+
+
 class FakeSupabaseForProcessRelationship:
     def __init__(self, source_events: list[dict] | None = None) -> None:
         self.insert_calls: list[tuple[str, dict, str]] = []
