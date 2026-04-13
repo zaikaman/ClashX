@@ -26,16 +26,6 @@ function toneForPnl(value: number) {
   return value >= 0 ? "text-[#74b97f]" : "text-[#ff8a9b]";
 }
 
-function alertTone(severity: string) {
-  if (severity === "critical") {
-    return "border-[#ff8a9b]/30 bg-[#ff8a9b]/10 text-[#ffd0d7]";
-  }
-  if (severity === "warning") {
-    return "border-[#dce85d]/30 bg-[#dce85d]/10 text-[#f3f0bf]";
-  }
-  return "border-[rgba(255,255,255,0.08)] bg-[#101214] text-neutral-300";
-}
-
 type CopyTradingOverviewProps = {
   dashboard: CopyTradingDashboard;
   refreshing: boolean;
@@ -133,18 +123,6 @@ export function CopyTradingOverview({
               Open operations
             </Link>
           </div>
-        </section>
-      ) : null}
-
-      {dashboard.alerts.length > 0 ? (
-        <section className="grid gap-3 lg:grid-cols-2">
-          {dashboard.alerts.map((alert) => (
-            <article key={`${alert.kind}-${alert.title}`} className={`grid gap-2 rounded-[1.5rem] border p-4 ${alertTone(alert.severity)}`}>
-              <span className="text-[0.6rem] font-semibold uppercase tracking-[0.18em]">{alert.kind.replaceAll("_", " ")}</span>
-              <h2 className="font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">{alert.title}</h2>
-              <p className="text-sm leading-6">{alert.detail}</p>
-            </article>
-          ))}
         </section>
       ) : null}
 
