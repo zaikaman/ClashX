@@ -340,67 +340,46 @@ export function TelegramPage() {
   ];
 
   return (
-    <main className="shell grid gap-0 pb-10 md:pb-16">
+    <main className="shell grid gap-6 pb-10 md:gap-8 md:pb-12">
 
       {/* ── Hero banner ───────────────────────────────────────── */}
-      <section className="relative overflow-hidden rounded-b-[2.4rem] pb-10 pt-2 md:pb-14">
-        {/* Ambient glow */}
-        <div
-          className="pointer-events-none absolute -right-20 -top-20 h-[360px] w-[360px] rounded-full opacity-20 blur-[100px]"
-          style={{ background: "radial-gradient(circle, #dce85d 0%, transparent 70%)" }}
-        />
-
-        <div className="relative z-10 flex flex-col gap-8 md:flex-row md:items-end md:justify-between">
-          {/* Left: icon + text */}
-          <div className="flex items-start gap-5">
-            {/* Telegram icon bubble */}
-            <div
-              className="flex h-[4.5rem] w-[4.5rem] shrink-0 items-center justify-center rounded-[1.4rem]"
+      <section className="flex flex-wrap items-end justify-between gap-4 border-b border-[rgba(255,255,255,0.08)] pb-6 md:pb-8">
+        <div className="grid gap-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="font-mono text-[clamp(2rem,4vw,2.8rem)] font-bold uppercase tracking-tight text-neutral-50">
+              Telegram
+            </h1>
+            {/* Inline connection badge */}
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.14em]"
               style={{
-                background: "linear-gradient(135deg, rgba(84,180,255,0.14) 0%, rgba(84,180,255,0.04) 100%)",
-                border: "1px solid rgba(84,180,255,0.18)",
+                background: status?.connected
+                  ? "rgba(116,185,127,0.1)"
+                  : "rgba(255,255,255,0.04)",
+                border: `1px solid ${status?.connected ? "rgba(116,185,127,0.25)" : "rgba(255,255,255,0.08)"}`,
+                color: status?.connected ? "#9fcca7" : "#71717a",
               }}
             >
-              <Send className="h-7 w-7 text-[#9fd3ff]" style={{ transform: "rotate(-12deg)" }} />
-            </div>
-            <div className="grid gap-2 pt-1">
-              <div className="flex flex-wrap items-center gap-3">
-                <h1 className="font-mono text-[clamp(2rem,4vw,2.8rem)] font-bold uppercase tracking-tight text-neutral-50">
-                  Telegram
-                </h1>
-                {/* Inline connection badge */}
-                <span
-                  className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[0.58rem] font-semibold uppercase tracking-[0.14em]"
-                  style={{
-                    background: status?.connected
-                      ? "rgba(116,185,127,0.1)"
-                      : "rgba(255,255,255,0.04)",
-                    border: `1px solid ${status?.connected ? "rgba(116,185,127,0.25)" : "rgba(255,255,255,0.08)"}`,
-                    color: status?.connected ? "#9fcca7" : "#71717a",
-                  }}
-                >
-                  <span
-                    className="h-[5px] w-[5px] rounded-full"
-                    style={{
-                      background: status?.connected ? "#74b97f" : "#52525b",
-                      boxShadow: status?.connected ? "0 0 6px #74b97f" : "none",
-                    }}
-                  />
-                  {status?.connected
-                    ? status.telegram_username
-                      ? `@${status.telegram_username}`
-                      : "Connected"
-                    : "Not linked"}
-                </span>
-              </div>
-              <p className="max-w-lg text-sm leading-7 text-neutral-400">
-                Link one wallet, send runtime alerts there, and keep Telegram ready for fast checks.
-              </p>
-            </div>
+              <span
+                className="h-[5px] w-[5px] rounded-full"
+                style={{
+                  background: status?.connected ? "#74b97f" : "#52525b",
+                  boxShadow: status?.connected ? "0 0 6px #74b97f" : "none",
+                }}
+              />
+              {status?.connected
+                ? status.telegram_username
+                  ? `@${status.telegram_username}`
+                  : "Connected"
+                : "Not linked"}
+            </span>
           </div>
+          <p className="max-w-2xl text-sm leading-7 text-neutral-400">
+            Link one wallet, send runtime alerts there, and keep Telegram ready for fast checks.
+          </p>
+        </div>
 
-          {/* Right: actions */}
-          <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
               onClick={handleGenerateLink}
@@ -427,11 +406,7 @@ export function TelegramPage() {
             >
               <RefreshCcw className={`h-3.5 w-3.5 ${actionLoading === "refresh" ? "animate-spin" : ""}`} />
             </button>
-          </div>
         </div>
-
-        {/* Divider */}
-        <div className="mt-8 h-px w-full" style={{ background: "linear-gradient(90deg, rgba(84,180,255,0.2) 0%, rgba(255,255,255,0.06) 50%, transparent 100%)" }} />
       </section>
 
       {/* ── Notices ───────────────────────────────────────────── */}
