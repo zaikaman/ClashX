@@ -20,8 +20,9 @@ class FakeSupabaseRestClient:
         filters: dict[str, Any] | None = None,
         order: str | None = None,
         limit: int | None = None,
+        cache_ttl_seconds: float | None = None,
     ) -> list[dict[str, Any]]:
-        del columns
+        del columns, cache_ttl_seconds
         rows = [deepcopy(row) for row in self.tables.get(table, []) if self._matches(row, filters)]
         if order:
             field, _, direction = order.partition(".")
@@ -37,8 +38,16 @@ class FakeSupabaseRestClient:
         columns: str = "*",
         filters: dict[str, Any] | None = None,
         order: str | None = None,
+        cache_ttl_seconds: float | None = None,
     ) -> dict[str, Any] | None:
-        rows = self.select(table, columns=columns, filters=filters, order=order, limit=1)
+        rows = self.select(
+            table,
+            columns=columns,
+            filters=filters,
+            order=order,
+            limit=1,
+            cache_ttl_seconds=cache_ttl_seconds,
+        )
         return rows[0] if rows else None
 
     def insert(
@@ -48,8 +57,9 @@ class FakeSupabaseRestClient:
         *,
         upsert: bool = False,
         on_conflict: str | None = None,
+        returning: str = "representation",
     ) -> list[dict[str, Any]]:
-        del upsert, on_conflict
+        del upsert, on_conflict, returning
         items = payload if isinstance(payload, list) else [payload]
         stored = [deepcopy(item) for item in items]
         self.tables.setdefault(table, []).extend(stored)

@@ -121,3 +121,18 @@ def test_normalize_policy_includes_runtime_sizing_fields() -> None:
     assert policy["sizing_mode"] == "risk_adjusted"
     assert policy["fixed_usd_amount"] == 125.0
     assert policy["risk_per_trade_pct"] == 1.5
+
+
+def test_assess_action_blocks_new_entry_when_live_allowed_symbol_position_consumes_capacity() -> None:
+    service = BotRiskService()
+
+    issues = service.assess_action(
+        policy={"max_open_positions": 1, "allowed_symbols": ["BTC", "ETH", "SOL"]},
+        action={"type": "open_long", "symbol": "BTC", "size_usd": 100, "leverage": 2},
+        runtime_state={},
+        position_lookup={"ETH": {"symbol": "ETH", "amount": 0.25}},
+        open_order_lookup={},
+        market_lookup={"BTC": {"mark_price": 100_000.0, "max_leverage": 5}},
+    )
+
+    assert "max_open_positions 1 reached" in issues

@@ -1128,6 +1128,46 @@ def test_runtime_worker_skips_market_evaluation_for_entry_only_bot_at_position_c
     assert fake_supabase.tables["bot_execution_events"] == []
 
 
+def test_runtime_worker_skips_new_entry_when_live_allowed_symbol_position_consumes_capacity() -> None:
+    tables = _seed_tables()
+    tables["bot_runtimes"][0]["risk_policy_json"]["max_open_positions"] = 1
+    tables["bot_runtimes"][0]["risk_policy_json"]["allowed_symbols"] = ["BTC", "ETH", "SOL"]
+
+    fake_supabase = FakeSupabaseRestClient(tables)
+    fake_pacifica = FakePacificaClient(
+        positions=[
+            {
+                "symbol": "ETH",
+                "amount": 0.25,
+                "side": "ask",
+                "entry_price": 2200,
+                "mark_price": 2190,
+                "created_at": "2026-03-16T00:05:00+00:00",
+                "updated_at": "2026-03-16T00:06:00+00:00",
+            }
+        ]
+    )
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+    worker._supabase = fake_supabase
+    worker._engine._supabase = fake_supabase
+    worker._auth = FakeAuthService()
+    worker._pacifica = fake_pacifica
+    worker._indicator_context = FakeIndicatorContextService()
+    worker._calculate_runtime_performance = _fake_runtime_performance  # type: ignore[method-assign]
+
+    asyncio.run(worker._process_runtime(None, fake_supabase.tables["bot_runtimes"][0]))
+
+    skipped_events = [
+        event
+        for event in fake_supabase.tables["bot_execution_events"]
+        if event["event_type"] == "action.skipped"
+    ]
+
+    assert fake_pacifica.orders == []
+    assert len(skipped_events) == 1
+    assert skipped_events[0]["result_payload"] == {"issues": ["max_open_positions 1 reached"]}
+
+
 def test_runtime_worker_skips_market_evaluation_for_unrelated_entry_plus_tpsl_routes_at_position_capacity() -> None:
     tables = _seed_tables()
     tables["bot_definitions"][0]["rules_json"] = {
