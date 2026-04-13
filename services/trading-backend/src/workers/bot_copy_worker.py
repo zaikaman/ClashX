@@ -572,8 +572,10 @@ class BotCopyWorker:
                     tick_size=tick_size,
                     rounding=ROUND_UP,
                 )
-            take_profit_request = {"stop_price": take_profit_price, "amount": amount}
-            stop_loss_request = {"stop_price": stop_loss_price, "amount": amount}
+            # Mirror the follower's full position protection and avoid serializing a stop amount
+            # that may fail Pacifica validation after position-size normalization.
+            take_profit_request = {"stop_price": take_profit_price}
+            stop_loss_request = {"stop_price": stop_loss_price}
             mirrored_take_profit_client_order_id = self._mirror_nested_client_order_id(
                 relationship=relationship,
                 source_order=source_take_profit,

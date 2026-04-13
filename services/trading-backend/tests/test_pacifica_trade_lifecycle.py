@@ -496,8 +496,8 @@ def test_bot_runtime_worker_caps_tpsl_amount_to_live_position_size() -> None:
     )
 
     assert pacifica.order_calls[0]["type"] == "set_position_tpsl"
-    assert pacifica.order_calls[0]["take_profit"]["amount"] == 0.01212
-    assert pacifica.order_calls[0]["stop_loss"]["amount"] == 0.01212
+    assert "amount" not in pacifica.order_calls[0]["take_profit"]
+    assert "amount" not in pacifica.order_calls[0]["stop_loss"]
 
 
 def test_bot_runtime_worker_does_not_reject_small_btc_quantity_from_min_order_size_metadata() -> None:
@@ -1130,8 +1130,8 @@ def test_two_bots_can_manage_separate_btc_slices_on_the_same_wallet(monkeypatch:
         "create_market_order",
         "set_position_tpsl",
     ]
-    assert pacifica.order_calls[1]["take_profit"]["amount"] == 0.003
-    assert pacifica.order_calls[3]["take_profit"]["amount"] == 0.003
+    assert "amount" not in pacifica.order_calls[1]["take_profit"]
+    assert "amount" not in pacifica.order_calls[3]["take_profit"]
     assert pacifica._position is not None
     assert pacifica._position["amount"] == 0.006
 

@@ -253,8 +253,8 @@ def test_copy_worker_sets_tpsl_with_required_close_side() -> None:
 
     assert fake_pacifica.orders[0]["type"] == "set_position_tpsl"
     assert fake_pacifica.orders[0]["side"] == "bid"
-    assert fake_pacifica.orders[0]["take_profit"]["amount"] == 0.005
-    assert fake_pacifica.orders[0]["stop_loss"]["amount"] == 0.005
+    assert "amount" not in fake_pacifica.orders[0]["take_profit"]
+    assert "amount" not in fake_pacifica.orders[0]["stop_loss"]
     assert fake_pacifica.orders[0]["take_profit"]["stop_price"] == 81.59
     assert fake_pacifica.orders[0]["stop_loss"]["stop_price"] == 83.25
 

@@ -1046,14 +1046,14 @@ class BotRuntimeWorker:
                     "type": "set_position_tpsl",
                     **payload,
                     "side": close_side,
+                    # Let Pacifica bind protective orders to the full live position instead of
+                    # sending a separately rounded stop amount that can be rejected.
                     "take_profit": {
                         "stop_price": take_profit_price,
-                        "amount": amount,
                         "client_order_id": take_profit_client_order_id,
                     },
                     "stop_loss": {
                         "stop_price": stop_loss_price,
-                        "amount": amount,
                         "client_order_id": stop_loss_client_order_id,
                     },
                 }
