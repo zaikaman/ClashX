@@ -167,7 +167,13 @@ export function TelegramPage() {
       setStatus(payload);
       setPrefs(payload.notification_prefs);
       setNotificationsEnabled(payload.notifications_enabled);
-      setNotice("Secure Telegram link refreshed. Open it and press Start in the bot.");
+      const linkToCopy = payload.deeplink_url ?? payload.bot_link;
+      try {
+        await navigator.clipboard.writeText(linkToCopy);
+        setNotice("Secure Telegram link refreshed and copied to your clipboard.");
+      } catch {
+        setNotice("Secure Telegram link refreshed. Copy it manually if the clipboard prompt was blocked.");
+      }
     } catch (linkError) {
       setError(linkError instanceof Error ? linkError.message : "Could not generate a Telegram link");
     } finally {
