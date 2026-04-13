@@ -77,6 +77,14 @@ def _completed_run_payload() -> dict[str, object]:
 
 def test_create_backtest_run_job_returns_queued_job(monkeypatch) -> None:
     created: dict[str, object] = {}
+    monkeypatch.setattr(
+        "src.api.backtests.bot_builder_service.get_bot",
+        lambda db, bot_id, wallet_address: {
+            "id": bot_id,
+            "wallet_address": wallet_address,
+            "rules_json": {"graph": {"version": 1, "entry": "builder-entry", "nodes": [], "edges": []}},
+        },
+    )
 
     monkeypatch.setattr(
         "src.api.backtests.ai_job_service.create_job",
@@ -103,6 +111,9 @@ def test_create_backtest_run_job_returns_queued_job(monkeypatch) -> None:
     assert created["job"]["wallet_address"] == "wallet-abc"
     assert created["job"]["request_payload"]["bot_id"] == "bot-1"
     assert created["job"]["request_payload"]["interval"] == "1m"
+    assert created["job"]["result_payload"]["type"] == "progress"
+    assert created["job"]["result_payload"]["stage"] == "Queued on worker"
+    assert created["job"]["result_payload"]["metrics"]["processed_bars"] == 0
 
 
 def test_list_backtest_run_jobs_returns_recent_wallet_jobs(monkeypatch) -> None:

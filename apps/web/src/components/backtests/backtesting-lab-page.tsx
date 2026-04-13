@@ -108,6 +108,11 @@ function clampNumber(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
+function toFiniteNumber(value: unknown, fallback: number) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function estimateBacktestWorkload(startDate: string, endDate: string, interval: string | null | undefined) {
   const { start, end } = toTimestampBounds(startDate, endDate);
   const resolvedInterval = interval && interval in TIMEFRAME_TO_MS ? interval : "15m";
@@ -125,12 +130,28 @@ function estimateBacktestWorkload(startDate: string, endDate: string, interval: 
 
 function toRunProgressState(progressPayload: BacktestRunJobProgress): RunProgressState {
   return {
-    progress: clampNumber(progressPayload.progress, 0, 100),
-    stage: progressPayload.stage,
-    detail: progressPayload.detail,
-    interval: progressPayload.interval,
+    progress: clampNumber(toFiniteNumber(progressPayload.progress, 0), 0, 100),
+    stage: String(progressPayload.stage ?? "").trim() || "Backtest update",
+    detail: String(progressPayload.detail ?? "").trim() || "The worker has not emitted a detailed progress message yet.",
+    interval: String(progressPayload.interval ?? "").trim() || "15m",
     metrics: progressPayload.metrics,
   };
+}
+
+function hasLiveJobProgress(
+  progressPayload: BacktestRunJobStatusResponse["progress"] | null | undefined,
+): progressPayload is BacktestRunJobProgress {
+  if (!progressPayload || typeof progressPayload !== "object") {
+    return false;
+  }
+  const progressValue = toFiniteNumber(progressPayload.progress, Number.NaN);
+  if (!Number.isFinite(progressValue)) {
+    return false;
+  }
+  const stage = String(progressPayload.stage ?? "").trim();
+  const detail = String(progressPayload.detail ?? "").trim();
+  const interval = String(progressPayload.interval ?? "").trim();
+  return Boolean(stage && detail && interval);
 }
 
 function formatDuration(seconds: number) {
@@ -210,7 +231,7 @@ function toResumedRunProgress(
   job: BacktestRunJobStatusResponse,
   fallbackInterval: string,
 ): RunProgressState {
-  if (job.progress) {
+  if (hasLiveJobProgress(job.progress)) {
     return toRunProgressState(job.progress);
   }
   return {
@@ -509,7 +530,7 @@ export function BacktestingLabPage() {
 
         const job = payload as BacktestRunJobStatusResponse;
         setBacktestJobs((current) => upsertBacktestJob(current, job));
-        if (job.progress) {
+        if (hasLiveJobProgress(job.progress)) {
           setRunProgress(toRunProgressState(job.progress));
         }
 
@@ -647,16 +668,7 @@ export function BacktestingLabPage() {
 
     setRunning(true);
     setPageError(null);
-    setRunProgress({
-      progress: 8,
-      stage: "Queueing backtest",
-      detail: "Submitting the replay job and waiting for the worker to begin.",
-      interval: pendingWorkload.interval,
-      metrics: {
-        estimated_bars: pendingWorkload.estimatedBars,
-        estimated_requests: pendingWorkload.estimatedRequests,
-      },
-    });
+    setRunProgress(null);
     try {
       const response = await fetch(`${API_BASE_URL}/api/backtests/runs/jobs`, {
         method: "POST",
@@ -992,13 +1004,13 @@ export function BacktestingLabPage() {
                     <p className="text-sm leading-6 text-neutral-200">{runProgress.detail}</p>
                   </div>
                   <div className="rounded-full border border-[rgba(255,255,255,0.12)] bg-[rgba(9,10,10,0.45)] px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-neutral-200">
-                    {Math.round(runProgress.progress)}%
+            {Math.round(toFiniteNumber(runProgress.progress, 0))}%
                   </div>
                 </div>
                 <div className="h-2 overflow-hidden rounded-full bg-[rgba(255,255,255,0.08)]">
                   <div
                     className="h-full rounded-full bg-[linear-gradient(90deg,#8ec5ff_0%,#dce85d_55%,#74b97f_100%)] transition-[width] duration-300 ease-out"
-                    style={{ width: `${runProgress.progress}%` }}
+                    style={{ width: `${clampNumber(toFiniteNumber(runProgress.progress, 0), 0, 100)}%` }}
                   />
                 </div>
                 <div className="flex flex-wrap gap-3 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-neutral-300">

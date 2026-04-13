@@ -26,6 +26,7 @@ class AiJobService:
         *,
         job_type: AiJobType,
         request_payload: dict[str, Any],
+        result_payload: dict[str, Any] | None = None,
         wallet_address: str | None = None,
         conversation_id: str | None = None,
     ) -> dict[str, Any]:
@@ -37,7 +38,7 @@ class AiJobService:
             "wallet_address": (wallet_address or "").strip() or None,
             "conversation_id": (conversation_id or "").strip() or None,
             "request_payload_json": request_payload,
-            "result_payload_json": {},
+            "result_payload_json": dict(result_payload) if isinstance(result_payload, dict) else {},
             "error_detail": None,
             "started_at": None,
             "completed_at": None,
@@ -103,16 +104,19 @@ class AiJobService:
             limit=limit,
         )
 
-    def mark_running(self, *, job_id: str) -> dict[str, Any] | None:
+    def mark_running(self, *, job_id: str, progress_payload: dict[str, Any] | None = None) -> dict[str, Any] | None:
         now = _utc_now()
+        values: dict[str, Any] = {
+            "status": "running",
+            "started_at": now,
+            "updated_at": now,
+            "error_detail": None,
+        }
+        if isinstance(progress_payload, dict):
+            values["result_payload_json"] = progress_payload
         self._supabase.update(
             "ai_job_runs",
-            {
-                "status": "running",
-                "started_at": now,
-                "updated_at": now,
-                "error_detail": None,
-            },
+            values,
             filters={"id": job_id},
             returning="minimal",
         )

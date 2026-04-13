@@ -10,7 +10,7 @@ from src.api.auth import AuthenticatedUser, ensure_wallet_owned, require_authent
 from src.db.session import get_db
 from src.services.ai_job_service import AiJobStatus, AiJobType, AiJobService, JOB_STATUS_COLUMNS
 from src.services.bot_builder_service import BotBuilderService
-from src.services.bot_backtest_service import BotBacktestService
+from src.services.bot_backtest_service import BotBacktestService, MAIN_TIMEFRAME_MS, infer_backtest_interval_from_rules
 
 router = APIRouter(prefix="/api/backtests", tags=["backtests"])
 bot_backtest_service = BotBacktestService()
@@ -19,6 +19,7 @@ ai_job_service = AiJobService()
 ACTIVE_BACKTEST_JOB_STATUSES: list[AiJobStatus] = ["queued", "running", "failed"]
 DEFAULT_BACKTEST_RUN_HISTORY_LIMIT = 50
 BOOTSTRAP_BACKTEST_RUN_HISTORY_LIMIT = 40
+MAX_BACKTEST_JOB_REQUEST_WINDOW = 4_000
 
 
 class BacktestAssumptionConfigRequest(BaseModel):
@@ -142,6 +143,31 @@ def _serialize_backtest_job(
     )
 
 
+def _estimate_backtest_bar_count(*, start_time: int, end_time: int, interval: str) -> int:
+    interval_ms = MAIN_TIMEFRAME_MS.get(interval)
+    if interval_ms is None or end_time <= start_time:
+        return 0
+    return max(1, ((end_time - start_time) + interval_ms) // interval_ms)
+
+
+def _build_initial_backtest_job_progress(*, interval: str, start_time: int, end_time: int) -> dict[str, Any]:
+    total_bars = _estimate_backtest_bar_count(start_time=start_time, end_time=end_time, interval=interval)
+    total_requests = max(1, (total_bars + MAX_BACKTEST_JOB_REQUEST_WINDOW - 1) // MAX_BACKTEST_JOB_REQUEST_WINDOW) if total_bars > 0 else 1
+    return {
+        "type": "progress",
+        "progress": 0.0,
+        "stage": "Queued on worker",
+        "detail": "The replay is queued and waiting for a worker slot.",
+        "interval": interval,
+        "metrics": {
+            "processed_bars": 0,
+            "total_bars": total_bars,
+            "completed_requests": 0,
+            "total_requests": total_requests,
+        },
+    }
+
+
 @router.post("/runs", response_model=BacktestRunDetailResponse)
 async def create_backtest_run(
     payload: BacktestRunRequest,
@@ -172,6 +198,13 @@ async def create_backtest_run_job(
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> BacktestRunJobCreateResponse:
     resolved_wallet, resolved_user_id = _resolve_wallet_user_id(user, payload.wallet_address)
+    try:
+        bot = bot_builder_service.get_bot(None, bot_id=payload.bot_id, wallet_address=resolved_wallet)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    resolved_interval = str(payload.interval or "").strip().lower() or infer_backtest_interval_from_rules(
+        bot.get("rules_json") if isinstance(bot.get("rules_json"), dict) else {}
+    )
     job = ai_job_service.create_job(
         job_type="backtest_run",
         wallet_address=resolved_wallet,
@@ -185,6 +218,11 @@ async def create_backtest_run_job(
             "initial_capital_usd": payload.initial_capital_usd,
             "assumptions": payload.assumptions.model_dump() if payload.assumptions is not None else None,
         },
+        result_payload=_build_initial_backtest_job_progress(
+            interval=resolved_interval,
+            start_time=payload.start_time,
+            end_time=payload.end_time,
+        ),
     )
     return BacktestRunJobCreateResponse(id=job["id"], jobType="backtest_run", status="queued")
 

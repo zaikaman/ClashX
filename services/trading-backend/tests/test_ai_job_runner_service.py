@@ -16,9 +16,9 @@ class _FakeJobService:
     failed_jobs: list[tuple[str, str]] = field(default_factory=list)
     fail_complete: bool = False
 
-    def mark_running(self, *, job_id: str) -> dict[str, Any] | None:
+    def mark_running(self, *, job_id: str, progress_payload: dict[str, Any] | None = None) -> dict[str, Any] | None:
         self.running_jobs.append(job_id)
-        return {"id": job_id, "status": "running"}
+        return {"id": job_id, "status": "running", "progress_payload": progress_payload}
 
     def mark_completed(self, *, job_id: str, result_payload: dict[str, Any]) -> dict[str, Any] | None:
         if self.fail_complete:
@@ -279,6 +279,7 @@ def test_backtest_job_runner_persists_progress_then_result() -> None:
     )
 
     assert jobs.running_jobs == ["job-4"]
+    assert jobs.progress_jobs[0][0] == "job-4"
     assert jobs.progress_jobs == [
         (
             "job-4",
