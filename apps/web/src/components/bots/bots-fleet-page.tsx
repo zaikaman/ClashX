@@ -55,6 +55,10 @@ type Feedback = {
   message: string;
 };
 
+type RuntimeOverviewSnapshot = {
+  performance: BotPerformance | null;
+};
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const PAGE_SIZE = 10;
 const DEFAULT_RISK_POLICY_JSON = JSON.stringify(
@@ -133,6 +137,45 @@ function formatSignedUsd(value: number) {
 
 function performanceTone(value: number) {
   return value >= 0 ? "text-[#74b97f]" : "text-[#dce85d]";
+}
+
+async function unwrapResponse<T>(response: Response, fallback: string): Promise<T> {
+  const payload = (await response.json()) as unknown;
+  if (!response.ok) {
+    if (payload && typeof payload === "object" && "detail" in payload) {
+      const detail = payload.detail;
+      throw new Error(typeof detail === "string" && detail.length > 0 ? detail : fallback);
+    }
+    throw new Error(fallback);
+  }
+  return payload as T;
+}
+
+function preserveBotPerformance(currentBots: BotFleetItem[], nextBots: BotFleetItem[]) {
+  const performanceByBotId = new Map(
+    currentBots.map((bot) => [bot.id, bot.performance ?? null] as const),
+  );
+
+  return nextBots.map((bot) => ({
+    ...bot,
+    performance: performanceByBotId.get(bot.id) ?? bot.performance ?? null,
+  }));
+}
+
+function mergeSnapshotPerformance(
+  currentBots: BotFleetItem[],
+  overviewByBot: Record<string, RuntimeOverviewSnapshot>,
+) {
+  return currentBots.map((bot) => {
+    const overview = overviewByBot[bot.id];
+    if (!overview) {
+      return bot;
+    }
+    return {
+      ...bot,
+      performance: overview.performance ?? null,
+    };
+  });
 }
 
 function getBotStatus(bot: BotFleetItem): Exclude<StatusFilter, "all"> {
@@ -300,33 +343,55 @@ export function BotsFleetPage() {
 
     async function loadBots() {
       setLoading(true);
+      setError(null);
       try {
         const headers = await getAuthHeaders();
         const walletParam = encodeURIComponent(resolvedWallet ?? "");
 
         const listResponse = await fetch(
-          `${API_BASE_URL}/api/bots?wallet_address=${walletParam}&include_performance=true&performance_mode=fast`,
+          `${API_BASE_URL}/api/bots?wallet_address=${walletParam}&include_performance=false`,
           {
             headers,
             signal: controller.signal,
           },
         );
-        const listPayload = (await listResponse.json()) as BotFleetItem[] | { detail?: string };
-        if (!listResponse.ok) {
-          throw new Error(
-            "detail" in listPayload ? listPayload.detail ?? "Could not load bots" : "Could not load bots",
-          );
-        }
+        const listPayload = await unwrapResponse<BotFleetItem[]>(listResponse, "Could not load bots");
 
         if (cancelled || controller.signal.aborted) {
           return;
         }
 
-        setBots(listPayload as BotFleetItem[]);
+        setBots((current) => preserveBotPerformance(current, listPayload));
         setError(null);
+        setLoading(false);
+
+        try {
+          const overviewResponse = await fetch(
+            `${API_BASE_URL}/api/bots/runtime-overviews?wallet_address=${walletParam}&include_performance=true&performance_mode=fast`,
+            {
+              headers,
+              signal: controller.signal,
+            },
+          );
+          const overviewPayload = await unwrapResponse<Record<string, RuntimeOverviewSnapshot>>(
+            overviewResponse,
+            "Could not load runtime snapshots",
+          );
+
+          if (cancelled || controller.signal.aborted) {
+            return;
+          }
+
+          setBots((current) => mergeSnapshotPerformance(current, overviewPayload));
+        } catch {
+          if (cancelled || controller.signal.aborted) {
+            return;
+          }
+        }
       } catch (loadError) {
         if (!cancelled && !controller.signal.aborted) {
           setError(loadError instanceof Error ? loadError.message : "Could not load bots");
+          setBots([]);
         }
       } finally {
         if (!cancelled && !controller.signal.aborted) {

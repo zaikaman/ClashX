@@ -484,9 +484,11 @@ def create_bot(
 
 
 @router.get("/runtime-overviews", response_model=dict[str, RuntimeOverviewResponse])
-def list_runtime_overviews(
+async def list_runtime_overviews(
     response: Response,
     wallet_address: str | None = Query(default=None, min_length=8),
+    include_performance: bool = Query(default=False),
+    performance_mode: Literal["full", "fast"] = Query(default="fast"),
     db: Session = Depends(get_db),
     user: AuthenticatedUser = Depends(require_authenticated_user),
 ) -> dict[str, RuntimeOverviewResponse]:
@@ -528,8 +530,58 @@ def list_runtime_overviews(
             bot_id = str(definition.get("id") or "").strip()
             if bot_id and bot_id not in payload:
                 payload[bot_id] = live_payload.get(bot_id) or runtime_observability_service.draft_overview_payload()
+    performance_by_bot: dict[str, RuntimePerformanceResponse | None] = {
+        bot_id: None
+        for bot_id in payload
+    }
+    if include_performance and runtimes_for_wallet:
+        if performance_mode == "fast":
+            performance_by_bot.update(
+                {
+                    bot_id: (
+                        RuntimePerformanceResponse.model_validate(snapshot_payload)
+                        if (snapshot_payload := _snapshot_performance_payload(snapshots_by_bot.get(bot_id)))
+                        is not None
+                        else _build_fast_runtime_performance(runtime)
+                    )
+                    for runtime in runtimes_for_wallet
+                    if (bot_id := str(runtime.get("bot_definition_id") or "").strip())
+                }
+            )
+        else:
+            performance_by_runtime: dict[str, dict[str, Any]] = {}
+            missing_runtimes: list[dict[str, Any]] = []
+            for runtime in runtimes_for_wallet:
+                bot_id = str(runtime.get("bot_definition_id") or "").strip()
+                runtime_id = str(runtime.get("id") or "").strip()
+                snapshot_payload = _snapshot_performance_payload(snapshots_by_bot.get(bot_id))
+                if snapshot_payload is not None and runtime_id:
+                    performance_by_runtime[runtime_id] = snapshot_payload
+                else:
+                    missing_runtimes.append(runtime)
+            if missing_runtimes:
+                performance_by_runtime.update(
+                    await bot_performance_service.get_cached_runtimes_performance_map(missing_runtimes)
+                )
+            performance_by_bot.update(
+                {
+                    bot_id: (
+                        RuntimePerformanceResponse.model_validate(payload_by_runtime)
+                        if (payload_by_runtime := performance_by_runtime.get(str(runtime.get("id") or "").strip()))
+                        is not None
+                        else None
+                    )
+                    for runtime in runtimes_for_wallet
+                    if (bot_id := str(runtime.get("bot_definition_id") or "").strip())
+                }
+            )
     return {
-        bot_id: RuntimeOverviewResponse.model_validate({**overview, "performance": None})
+        bot_id: RuntimeOverviewResponse.model_validate(
+            {
+                **overview,
+                "performance": performance_by_bot.get(bot_id),
+            }
+        )
         for bot_id, overview in payload.items()
     }
 
