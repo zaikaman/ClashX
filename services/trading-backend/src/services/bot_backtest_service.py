@@ -112,7 +112,7 @@ class BotBacktestService:
                     end_time=end_time,
                     initial_capital_usd=initial_capital_usd,
                     assumptions=normalized_assumptions,
-                    issues=preflight_issues,
+                    preflight_issues=preflight_issues,
                 )
             else:
                 result_json = await self._simulate(
@@ -134,7 +134,7 @@ class BotBacktestService:
                 end_time=end_time,
                 initial_capital_usd=initial_capital_usd,
                 assumptions=normalized_assumptions,
-                issues=[str(exc)],
+                execution_issues=[str(exc)],
             )
 
         summary = result_json.get("summary") if isinstance(result_json.get("summary"), dict) else {}
@@ -544,10 +544,17 @@ class BotBacktestService:
         end_time: int,
         initial_capital_usd: float,
         assumptions: dict[str, float],
-        issues: list[str],
+        preflight_issues: list[str] | None = None,
+        execution_issues: list[str] | None = None,
     ) -> dict[str, Any]:
         symbols = sorted(self._extract_symbols(bot.get("rules_json") if isinstance(bot.get("rules_json"), dict) else {}))
         primary_symbol = symbols[0] if symbols else None
+        issues_are_preflight = bool(preflight_issues)
+        failed_assumption = (
+            "This run failed during preflight and did not execute the replay engine."
+            if issues_are_preflight
+            else "This run failed while loading market data or replaying the strategy."
+        )
         return {
             "equity_curve": [],
             "price_series": {"primary_symbol": primary_symbol, "series_by_symbol": {}},
@@ -575,9 +582,10 @@ class BotBacktestService:
             },
             "assumption_config": assumptions,
             "assumptions": [
-                "This run failed during preflight and did not execute the replay engine.",
+                failed_assumption,
             ],
-            "preflight_issues": issues,
+            "preflight_issues": preflight_issues or [],
+            "execution_issues": execution_issues or [],
             "requested_range": {
                 "start_time": start_time,
                 "end_time": end_time,
@@ -1016,8 +1024,10 @@ class BotBacktestService:
     def _extract_failure_reason(self, *, result_json: dict[str, Any], status: str) -> str | None:
         if status != "failed":
             return None
-        issues = result_json.get("preflight_issues")
-        if isinstance(issues, list):
+        for issue_key in ("preflight_issues", "execution_issues"):
+            issues = result_json.get(issue_key)
+            if not isinstance(issues, list):
+                continue
             for issue in issues:
                 text = str(issue).strip()
                 if text:

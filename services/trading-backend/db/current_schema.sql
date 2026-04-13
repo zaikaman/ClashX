@@ -52,7 +52,7 @@ CREATE TABLE public.bot_backtest_runs (
   max_drawdown_pct double precision NOT NULL DEFAULT 0,
   win_rate double precision NOT NULL DEFAULT 0,
   trade_count integer NOT NULL DEFAULT 0,
-  status character varying NOT NULL DEFAULT 'completed'::character varying,
+  status character varying NOT NULL DEFAULT 'queued'::character varying,
   result_json jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   completed_at timestamp with time zone,
@@ -61,6 +61,7 @@ CREATE TABLE public.bot_backtest_runs (
   strategy_type_snapshot character varying NOT NULL DEFAULT 'rules'::character varying,
   assumption_config_json jsonb NOT NULL DEFAULT '{}'::jsonb,
   failure_reason text,
+  started_at timestamp with time zone,
   CONSTRAINT bot_backtest_runs_pkey PRIMARY KEY (id),
   CONSTRAINT bot_backtest_runs_bot_definition_id_fkey FOREIGN KEY (bot_definition_id) REFERENCES public.bot_definitions(id),
   CONSTRAINT bot_backtest_runs_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)

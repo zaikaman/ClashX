@@ -5,6 +5,8 @@ import uuid
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
+
 from src.services.pacifica_client import PacificaClient
 from src.services.pacifica_market_data_service import PacificaMarketDataService
 from src.workers.bot_runtime_worker import BotRuntimeWorker
@@ -97,12 +99,24 @@ async def _noop_ensure_leverage(**_: Any) -> None:
 
 
 class _FakeHttpResponse:
-    def __init__(self, payload: list[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        payload: list[dict[str, Any]],
+        *,
+        status_code: int = 200,
+        text: str = "ok",
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self._payload = payload
-        self.status_code = 200
-        self.text = "ok"
+        self.status_code = status_code
+        self.text = text
+        self.headers = headers or {}
 
     def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            request = httpx.Request("GET", "https://pacifica.test")
+            response = httpx.Response(self.status_code, request=request, text=self.text, headers=self.headers)
+            raise httpx.HTTPStatusError("request failed", request=request, response=response)
         return None
 
     def json(self) -> list[dict[str, Any]]:
@@ -115,13 +129,15 @@ class _FakeHttpClient:
 
     async def get(self, url: str, *, params: dict[str, Any], headers: dict[str, str]) -> _FakeHttpResponse:
         self.calls.append({"url": url, "params": params, "headers": headers})
+        interval_ms = 60_000 if params["interval"] == "1m" else 900_000
+        start_time = int(params["start_time"])
         return _FakeHttpResponse(
             [
                 {
-                    "symbol": "BTC",
-                    "interval": "15m",
-                    "openTime": 1,
-                    "closeTime": 2,
+                    "symbol": params["symbol"],
+                    "interval": params["interval"],
+                    "openTime": start_time,
+                    "closeTime": start_time + interval_ms,
                     "open": "100000",
                     "high": "101000",
                     "low": "99000",
@@ -167,6 +183,43 @@ class _ChunkedFakeHttpClient:
                     "volume": "43",
                     "tradeCount": 8,
                 },
+            ]
+        )
+
+
+class _RetryingFakeHttpClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self._attempts_by_window: dict[tuple[int, int], int] = {}
+
+    async def get(self, url: str, *, params: dict[str, Any], headers: dict[str, str]) -> _FakeHttpResponse:
+        self.calls.append({"url": url, "params": params, "headers": headers})
+        start_time = int(params["start_time"])
+        end_time = int(params["end_time"])
+        window_key = (start_time, end_time)
+        attempt = self._attempts_by_window.get(window_key, 0)
+        self._attempts_by_window[window_key] = attempt + 1
+        if attempt == 0:
+            return _FakeHttpResponse(
+                [],
+                status_code=429,
+                text='{"success":false,"error":"rate limited"}',
+                headers={"Retry-After": "0"},
+            )
+        return _FakeHttpResponse(
+            [
+                {
+                    "symbol": params["symbol"],
+                    "interval": params["interval"],
+                    "openTime": start_time,
+                    "closeTime": start_time + 60_000,
+                    "open": "100000",
+                    "high": "101000",
+                    "low": "99000",
+                    "close": "100500",
+                    "volume": "42",
+                    "tradeCount": 7,
+                }
             ]
         )
 
@@ -289,10 +342,10 @@ def test_get_kline_sends_snake_case_and_legacy_camel_case_query_params() -> None
     assert client._http.calls[0]["params"] == {
         "symbol": "BTC",
         "interval": "15m",
-        "start_time": 1_000,
-        "startTime": 1_000,
-        "end_time": 2_000,
-        "endTime": 2_000,
+        "start_time": 0,
+        "startTime": 0,
+        "end_time": 0,
+        "endTime": 0,
     }
     assert candles[0]["trade_count"] == 7
 
@@ -334,11 +387,31 @@ def test_get_kline_chunks_long_ranges_into_multiple_requests() -> None:
     assert len(client._http.calls) == 2
     assert client._http.calls[0]["params"]["start_time"] == 0
     assert client._http.calls[0]["params"]["end_time"] == 900_000 * 3_999
-    assert client._http.calls[1]["params"]["start_time"] == 900_000 * 3_999 + 1
+    assert client._http.calls[1]["params"]["start_time"] == 900_000 * 4_000
     assert client._http.calls[1]["params"]["end_time"] == 900_000 * 4_001
     assert len(candles) == 4
     assert candles[0]["open_time"] == 0
     assert candles[-1]["open_time"] == 900_000 * 4_001
+
+
+def test_get_kline_retries_rate_limited_windows() -> None:
+    client = object.__new__(PacificaClient)
+    client.settings = SimpleNamespace(pacifica_rest_url="https://pacifica.test")
+    client._http = _RetryingFakeHttpClient()
+    client._throttle = _noop_throttle
+
+    candles = asyncio.run(
+        client.get_kline(
+            "BTC",
+            interval="15m",
+            start_time=0,
+            end_time=900_000,
+        )
+    )
+
+    assert len(client._http.calls) == 2
+    assert len(candles) == 1
+    assert candles[0]["open_time"] == 0
 
 
 def test_load_candle_lookup_falls_back_to_mark_candles_when_trade_feed_is_sparse() -> None:

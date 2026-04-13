@@ -28,10 +28,29 @@ type SavedBot = {
 
 type HistoryFilter = "all" | "completed" | "failed";
 type HistoryScope = "all" | "selected";
+type RunProgressState = {
+  progress: number;
+  stage: string;
+  detail: string;
+  estimatedBars: number;
+  estimatedRequests: number;
+  estimatedDurationMs: number;
+  startedAt: number;
+};
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const INSPECTOR_PAGE_SIZE = 12;
 const COMPARE_COLORS = ["#dce85d", "#74b97f", "#8ec5ff", "#f59e0b"];
+const MAX_KLINE_CANDLES_PER_REQUEST = 4000;
+const TIMEFRAME_TO_MS: Record<string, number> = {
+  "1m": 60_000,
+  "5m": 300_000,
+  "15m": 900_000,
+  "30m": 1_800_000,
+  "1h": 3_600_000,
+  "4h": 14_400_000,
+  "1d": 86_400_000,
+};
 const DATE_PRESETS = [
   { id: "7d", label: "7D", days: 7 },
   { id: "30d", label: "30D", days: 30 },
@@ -80,6 +99,53 @@ function toTimestampBounds(startDate: string, endDate: string) {
   const start = new Date(`${startDate}T00:00:00`).getTime();
   const end = new Date(`${endDate}T23:59:59.999`).getTime();
   return { start, end };
+}
+
+function clampNumber(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function estimateBacktestWorkload(startDate: string, endDate: string, interval: string | null | undefined) {
+  const { start, end } = toTimestampBounds(startDate, endDate);
+  const resolvedInterval = interval && interval in TIMEFRAME_TO_MS ? interval : "15m";
+  const intervalMs = TIMEFRAME_TO_MS[resolvedInterval];
+  const estimatedBars = Math.max(1, Math.ceil((end - start + 1) / intervalMs));
+  const estimatedRequests = Math.max(1, Math.ceil(estimatedBars / MAX_KLINE_CANDLES_PER_REQUEST));
+  const estimatedDurationMs = clampNumber(3500 + estimatedRequests * 1800 + estimatedBars * 0.55, 5000, 28000);
+  return {
+    interval: resolvedInterval,
+    estimatedBars,
+    estimatedRequests,
+    estimatedDurationMs,
+  };
+}
+
+function describeRunPhase(progress: number, estimatedRequests: number, interval: string) {
+  if (progress < 22) {
+    return {
+      stage: "Staging replay",
+      detail: `Locking the ${interval} timeline and sizing the market-data pull.`,
+    };
+  }
+  if (progress < 68) {
+    return {
+      stage: "Loading candle windows",
+      detail:
+        estimatedRequests > 1
+          ? `Fetching ${estimatedRequests} Pacifica windows in parallel with rate-limit backoff.`
+          : "Fetching the replay window from Pacifica.",
+    };
+  }
+  if (progress < 88) {
+    return {
+      stage: "Merging history",
+      detail: "Deduplicating windows and aligning candles for the replay engine.",
+    };
+  }
+  return {
+    stage: "Simulating strategy",
+    detail: "Walking the replay bars and evaluating every rule transition.",
+  };
 }
 
 function formatDuration(seconds: number) {
@@ -166,6 +232,7 @@ export function BacktestingLabPage() {
   const [historyScope, setHistoryScope] = useState<HistoryScope>("all");
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
+  const [runProgress, setRunProgress] = useState<RunProgressState | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
 
@@ -173,6 +240,10 @@ export function BacktestingLabPage() {
   const currentRun = activeRunId ? runCache[activeRunId] ?? null : null;
   const compareRuns = compareIds.map((runId) => runCache[runId]).filter(Boolean) as BacktestRunDetail[];
   const selectedBot = bots.find((bot) => bot.id === selectedBotId) ?? null;
+  const pendingWorkload = useMemo(
+    () => estimateBacktestWorkload(startDate, endDate, selectedBot?.inferred_backtest_interval),
+    [endDate, selectedBot?.inferred_backtest_interval, startDate],
+  );
   const comparisonRuns = useMemo(() => {
     const next: BacktestRunDetail[] = [];
     const seen = new Set<string>();
@@ -187,6 +258,29 @@ export function BacktestingLabPage() {
 
     return next;
   }, [compareRuns, currentRun]);
+
+  useEffect(() => {
+    if (!running) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setRunProgress((current) => {
+        if (!current) {
+          return current;
+        }
+        const elapsedMs = Date.now() - current.startedAt;
+        const normalized = clampNumber(elapsedMs / current.estimatedDurationMs, 0, 0.98);
+        const eased = 1 - Math.pow(1 - normalized, 3);
+        const nextProgress = clampNumber(8 + eased * 88, current.progress, 96);
+        return {
+          ...current,
+          progress: nextProgress,
+          ...describeRunPhase(nextProgress, current.estimatedRequests, pendingWorkload.interval),
+        };
+      });
+    }, 180);
+    return () => window.clearInterval(timer);
+  }, [pendingWorkload.interval, running]);
 
   useEffect(() => {
     if (!authenticated || !walletAddress) {
@@ -408,6 +502,14 @@ export function BacktestingLabPage() {
 
     setRunning(true);
     setPageError(null);
+    setRunProgress({
+      progress: 8,
+      estimatedBars: pendingWorkload.estimatedBars,
+      estimatedRequests: pendingWorkload.estimatedRequests,
+      estimatedDurationMs: pendingWorkload.estimatedDurationMs,
+      startedAt: Date.now(),
+      ...describeRunPhase(8, pendingWorkload.estimatedRequests, pendingWorkload.interval),
+    });
     try {
       const response = await fetch(`${API_BASE_URL}/api/backtests/runs`, {
         method: "POST",
@@ -419,6 +521,19 @@ export function BacktestingLabPage() {
         throw new Error("detail" in result ? result.detail ?? "Backtest failed." : "Backtest failed.");
       }
       const detail = result as BacktestRunDetail;
+      setRunProgress((current) =>
+        current
+          ? {
+              ...current,
+              progress: 100,
+              stage: detail.status === "completed" ? "Replay complete" : "Run finished with issues",
+              detail:
+                detail.status === "completed"
+                  ? "The result set is ready."
+                  : "The replay returned an issue summary instead of a completed equity curve.",
+            }
+          : current,
+      );
       setRuns((current) => [detail, ...current.filter((run) => run.id !== detail.id)]);
       setRunCache((current) => ({ ...current, [detail.id]: detail }));
       setActiveRunId(detail.id);
@@ -426,6 +541,7 @@ export function BacktestingLabPage() {
       setPageError(error instanceof Error ? error.message : "Backtest failed.");
     } finally {
       setRunning(false);
+      window.setTimeout(() => setRunProgress(null), 220);
     }
   }
 
@@ -460,6 +576,7 @@ export function BacktestingLabPage() {
     funding_bps_per_interval: readNumericInput(fundingBpsPerInterval),
   };
   const preflightIssues = useMemo(() => currentRun?.result_json.preflight_issues ?? [], [currentRun]);
+  const executionIssues = useMemo(() => currentRun?.result_json.execution_issues ?? [], [currentRun]);
   const trades = useMemo(() => currentRun?.result_json.trades ?? [], [currentRun]);
   const triggerEvents = useMemo(() => currentRun?.result_json.trigger_events ?? [], [currentRun]);
   const tradePageCount = Math.max(1, Math.ceil(trades.length / INSPECTOR_PAGE_SIZE));
@@ -702,10 +819,18 @@ export function BacktestingLabPage() {
               </label>
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[rgba(255,255,255,0.06)] pt-4">
-              <div className="text-sm text-neutral-500">
-                {selectedBot
-                  ? `${selectedBot.strategy_type} / ${selectedBot.market_scope} / ${selectedBot.inferred_backtest_interval} replay`
-                  : "Pick a bot to unlock the replay settings."}
+              <div className="grid gap-1 text-sm text-neutral-500">
+                <span>
+                  {selectedBot
+                    ? `${selectedBot.strategy_type} / ${selectedBot.market_scope} / ${selectedBot.inferred_backtest_interval} replay`
+                    : "Pick a bot to unlock the replay settings."}
+                </span>
+                {selectedBot ? (
+                  <span className="text-xs uppercase tracking-[0.16em] text-neutral-600">
+                    {pendingWorkload.estimatedBars.toLocaleString()} bars / {pendingWorkload.estimatedRequests}{" "}
+                    Pacifica {pendingWorkload.estimatedRequests === 1 ? "window" : "windows"}
+                  </span>
+                ) : null}
               </div>
               <button
                 type="button"
@@ -719,6 +844,30 @@ export function BacktestingLabPage() {
                 </span>
               </button>
             </div>
+            {running && runProgress ? (
+              <article className="grid gap-3 rounded-[1.6rem] border border-[#8ec5ff]/20 bg-[linear-gradient(135deg,rgba(142,197,255,0.12),rgba(220,232,93,0.08))] p-4 text-neutral-50">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="grid gap-1">
+                    <span className="label text-[#8ec5ff]">{runProgress.stage}</span>
+                    <p className="text-sm leading-6 text-neutral-200">{runProgress.detail}</p>
+                  </div>
+                  <div className="rounded-full border border-[rgba(255,255,255,0.12)] bg-[rgba(9,10,10,0.45)] px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-neutral-200">
+                    {Math.round(runProgress.progress)}%
+                  </div>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-[rgba(255,255,255,0.08)]">
+                  <div
+                    className="h-full rounded-full bg-[linear-gradient(90deg,#8ec5ff_0%,#dce85d_55%,#74b97f_100%)] transition-[width] duration-300 ease-out"
+                    style={{ width: `${runProgress.progress}%` }}
+                  />
+                </div>
+                <div className="flex flex-wrap gap-3 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-neutral-300">
+                  <span>{runProgress.estimatedBars.toLocaleString()} replay bars</span>
+                  <span>{runProgress.estimatedRequests} Pacifica windows</span>
+                  <span>{pendingWorkload.interval} cadence</span>
+                </div>
+              </article>
+            ) : null}
           </section>
 
           {summary ? (
@@ -746,6 +895,14 @@ export function BacktestingLabPage() {
             <article className="grid gap-2 rounded-[1.8rem] border border-[#dce85d]/30 bg-[#dce85d]/10 p-5 text-sm leading-7 text-neutral-50">
               <span className="label text-[#dce85d]">Preflight warning</span>
               {preflightIssues.map((issue) => (
+                <p key={issue}>{issue}</p>
+              ))}
+            </article>
+          ) : null}
+          {executionIssues.length > 0 ? (
+            <article className="grid gap-2 rounded-[1.8rem] border border-[#8ec5ff]/30 bg-[#8ec5ff]/10 p-5 text-sm leading-7 text-neutral-50">
+              <span className="label text-[#8ec5ff]">Run issue</span>
+              {executionIssues.map((issue) => (
                 <p key={issue}>{issue}</p>
               ))}
             </article>

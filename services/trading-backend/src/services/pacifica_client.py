@@ -1,4 +1,5 @@
 import asyncio
+import math
 import uuid
 from functools import lru_cache
 from time import time
@@ -29,12 +30,24 @@ KLINE_INTERVAL_MS: dict[str, int] = {
     "1d": 86_400_000,
 }
 MAX_KLINE_CANDLES_PER_REQUEST = 4_000
+MAX_KLINE_PARALLEL_WINDOWS = 3
+KLINE_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+KLINE_MAX_RETRY_ATTEMPTS = 5
+KLINE_INITIAL_RETRY_DELAY_SECONDS = 0.75
+KLINE_MAX_RETRY_DELAY_SECONDS = 8.0
 
 
 class PacificaClientError(RuntimeError):
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
 
 
 class PacificaClient:
@@ -310,7 +323,18 @@ class PacificaClient:
     def _raise_http_error(context: str, exc: httpx.HTTPStatusError) -> None:
         status_code = exc.response.status_code
         body = exc.response.text
-        raise PacificaClientError(f"Pacifica {context} request failed ({status_code}): {body}", status_code=status_code) from exc
+        retry_after_header = exc.response.headers.get("Retry-After")
+        retry_after_seconds: float | None = None
+        if retry_after_header is not None:
+            try:
+                retry_after_seconds = max(0.0, float(retry_after_header))
+            except (TypeError, ValueError):
+                retry_after_seconds = None
+        raise PacificaClientError(
+            f"Pacifica {context} request failed ({status_code}): {body}",
+            status_code=status_code,
+            retry_after_seconds=retry_after_seconds,
+        ) from exc
 
     @staticmethod
     def _coerce_float(value: Any, default: float = 0.0) -> float:
@@ -683,47 +707,115 @@ class PacificaClient:
         interval_ms = KLINE_INTERVAL_MS.get(interval)
         resolved_end_time = end_time if end_time is not None else int(time() * 1000)
         if interval_ms is None or resolved_end_time <= start_time:
-            return await self._get_kline_window(
+            return await self._get_kline_window_with_retries(
                 symbol,
                 interval=interval,
                 start_time=start_time,
                 end_time=end_time,
                 endpoint_path=endpoint_path,
             )
-
-        estimated_candles = ((resolved_end_time - start_time) // interval_ms) + 1
-        if estimated_candles <= MAX_KLINE_CANDLES_PER_REQUEST:
-            return await self._get_kline_window(
+        windows = self._build_kline_windows(
+            start_time=start_time,
+            end_time=resolved_end_time,
+            interval_ms=interval_ms,
+        )
+        if len(windows) == 1:
+            candles = await self._get_kline_window_with_retries(
                 symbol,
                 interval=interval,
-                start_time=start_time,
-                end_time=end_time,
+                start_time=windows[0][0],
+                end_time=windows[0][1],
                 endpoint_path=endpoint_path,
             )
+            return self._filter_requested_candles(candles, start_time=start_time, end_time=resolved_end_time)
 
-        chunk_span_ms = interval_ms * (MAX_KLINE_CANDLES_PER_REQUEST - 1)
+        semaphore = asyncio.Semaphore(min(MAX_KLINE_PARALLEL_WINDOWS, len(windows)))
+
+        async def load_window(window_start: int, window_end: int) -> list[dict[str, Any]]:
+            async with semaphore:
+                return await self._get_kline_window_with_retries(
+                    symbol,
+                    interval=interval,
+                    start_time=window_start,
+                    end_time=window_end,
+                    endpoint_path=endpoint_path,
+                )
+
+        resolved_windows = await asyncio.gather(
+            *(load_window(window_start, window_end) for window_start, window_end in windows)
+        )
         candles_by_open_time: dict[int, dict[str, Any]] = {}
-        chunk_start = start_time
-
-        while chunk_start <= resolved_end_time:
-            chunk_end = min(resolved_end_time, chunk_start + chunk_span_ms)
-            chunk_candles = await self._get_kline_window(
-                symbol,
-                interval=interval,
-                start_time=chunk_start,
-                end_time=chunk_end,
-                endpoint_path=endpoint_path,
-            )
+        for chunk_candles in resolved_windows:
             for candle in chunk_candles:
                 open_time = self._coerce_int(candle.get("open_time"), -1)
                 if open_time < 0:
                     continue
                 candles_by_open_time[open_time] = candle
-            if chunk_end >= resolved_end_time:
-                break
-            chunk_start = chunk_end + 1
 
-        return [candles_by_open_time[key] for key in sorted(candles_by_open_time)]
+        merged = [candles_by_open_time[key] for key in sorted(candles_by_open_time)]
+        return self._filter_requested_candles(merged, start_time=start_time, end_time=resolved_end_time)
+
+    def _build_kline_windows(self, *, start_time: int, end_time: int, interval_ms: int) -> list[tuple[int, int]]:
+        normalized_start = (start_time // interval_ms) * interval_ms
+        normalized_end = (end_time // interval_ms) * interval_ms
+        if normalized_end < normalized_start:
+            normalized_end = normalized_start
+
+        max_window_span_ms = interval_ms * (MAX_KLINE_CANDLES_PER_REQUEST - 1)
+        windows: list[tuple[int, int]] = []
+        window_start = normalized_start
+        while window_start <= normalized_end:
+            window_end = min(normalized_end, window_start + max_window_span_ms)
+            windows.append((window_start, window_end))
+            window_start = window_end + interval_ms
+        return windows
+
+    def _filter_requested_candles(
+        self,
+        candles: list[dict[str, Any]],
+        *,
+        start_time: int,
+        end_time: int,
+    ) -> list[dict[str, Any]]:
+        return [
+            candle
+            for candle in candles
+            if self._coerce_int(candle.get("close_time"), -1) >= start_time
+            and self._coerce_int(candle.get("open_time"), -1) <= end_time
+        ]
+
+    async def _get_kline_window_with_retries(
+        self,
+        symbol: str,
+        *,
+        interval: str,
+        start_time: int,
+        end_time: int | None,
+        endpoint_path: str,
+    ) -> list[dict[str, Any]]:
+        attempt = 0
+        while True:
+            try:
+                return await self._get_kline_window(
+                    symbol,
+                    interval=interval,
+                    start_time=start_time,
+                    end_time=end_time,
+                    endpoint_path=endpoint_path,
+                )
+            except PacificaClientError as exc:
+                status_code = exc.status_code or 0
+                if status_code not in KLINE_RETRYABLE_STATUS_CODES or attempt >= (KLINE_MAX_RETRY_ATTEMPTS - 1):
+                    raise
+                retry_after = exc.retry_after_seconds
+                if retry_after is None:
+                    retry_after = min(
+                        KLINE_MAX_RETRY_DELAY_SECONDS,
+                        KLINE_INITIAL_RETRY_DELAY_SECONDS * math.pow(2, attempt),
+                    )
+                retry_after += 0.15 * attempt
+                await asyncio.sleep(retry_after)
+                attempt += 1
 
     async def _get_kline_window(
         self,

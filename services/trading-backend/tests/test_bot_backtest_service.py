@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from src.services.bot_backtest_service import BotBacktestService, MARKET_UNIVERSE_SYMBOL
+from src.services.pacifica_client import PacificaClientError
 
 
 BASE_TIME_MS = 1_710_000_000_000
@@ -142,6 +143,22 @@ class FakePacificaClient:
             for row in rows
             if int(row.get("close_time") or 0) >= start_time and int(row.get("close_time") or 0) <= resolved_end
         ]
+
+
+class FailingPacificaClient(FakePacificaClient):
+    async def get_kline(
+        self,
+        symbol: str,
+        *,
+        interval: str = "15m",
+        start_time: int,
+        end_time: int | None = None,
+    ) -> list[dict[str, Any]]:
+        del symbol, interval, start_time, end_time
+        raise PacificaClientError(
+            'Pacifica kline request failed (429): {"success":false,"error":"rate limited"}',
+            status_code=429,
+        )
 
 
 def _tables(rules_json: dict[str, Any], *, wallet_address: str = "wallet-a", user_id: str = "user-a", bot_id: str = "bot-a") -> dict[str, list[dict[str, Any]]]:
@@ -683,8 +700,42 @@ def test_backtest_returns_failed_run_for_unsupported_actions() -> None:
 
     assert run["status"] == "failed"
     assert run["result_json"]["preflight_issues"]
+    assert run["result_json"]["execution_issues"] == []
     assert run["failure_reason"] == run["result_json"]["preflight_issues"][0]
     assert supabase.tables["bot_backtest_runs"][0]["failure_reason"] == run["failure_reason"]
+
+
+def test_backtest_runtime_failures_are_reported_as_execution_issues() -> None:
+    rules_json = _graph_rules(
+        nodes=[
+            {"id": "condition-open", "kind": "condition", "position": {"x": 120, "y": 80}, "config": {"type": "price_above", "symbol": "BTC", "value": 90}},
+            {"id": "action-open", "kind": "action", "position": {"x": 320, "y": 80}, "config": {"type": "open_long", "symbol": "BTC", "size_usd": 100, "leverage": 1}},
+        ],
+        edges=[
+            {"id": "edge-open-1", "source": "builder-entry", "target": "condition-open"},
+            {"id": "edge-open-2", "source": "condition-open", "target": "action-open"},
+        ],
+    )
+    supabase = FakeSupabaseRestClient(_tables(rules_json))
+    service = BotBacktestService(pacifica_client=FailingPacificaClient({}), supabase=supabase)
+
+    run = asyncio.run(
+        service.run_backtest(
+            None,
+            bot_id="bot-a",
+            wallet_address="wallet-a",
+            user_id="user-a",
+            interval="15m",
+            start_time=BASE_TIME_MS,
+            end_time=BASE_TIME_MS + 2 * FIFTEEN_MINUTES_MS,
+            initial_capital_usd=10_000,
+        )
+    )
+
+    assert run["status"] == "failed"
+    assert run["result_json"]["preflight_issues"] == []
+    assert run["result_json"]["execution_issues"]
+    assert run["failure_reason"] == run["result_json"]["execution_issues"][0]
 
 
 def test_backtest_allows_ranges_longer_than_two_thousand_bars() -> None:

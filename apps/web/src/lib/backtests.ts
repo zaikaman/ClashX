@@ -84,6 +84,7 @@ export type BacktestResult = {
   assumption_config?: BacktestAssumptionConfig;
   assumptions: string[];
   preflight_issues?: string[];
+  execution_issues?: string[];
   requested_range?: {
     start_time: number;
     end_time: number;
