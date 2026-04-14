@@ -161,12 +161,17 @@ class BotBuilderService:
             rules_version=int(next_payload["rules_version"]),
             rules_json=next_payload["rules_json"],
         )
-        runtime = self.supabase.maybe_one(
+        runtimes = self.supabase.select(
             "bot_runtimes",
             filters={"bot_definition_id": bot_id, "wallet_address": wallet_address},
+            order="updated_at.desc",
         )
-        runtime_policy = runtime.get("risk_policy_json") if isinstance(runtime, dict) and isinstance(runtime.get("risk_policy_json"), dict) else {}
-        if str(runtime_policy.get("sizing_mode") or "fixed_usd") == "risk_adjusted":
+        if any(
+            str((runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {}).get("sizing_mode") or "fixed_usd")
+            == "risk_adjusted"
+            for runtime in runtimes
+            if isinstance(runtime, dict)
+        ):
             issues.extend(self.rules_engine.risk_adjusted_sizing_issues(rules_json=next_payload["rules_json"]))
         if issues:
             raise ValueError("Invalid bot definition: " + "; ".join(issues))
@@ -185,7 +190,7 @@ class BotBuilderService:
             },
             filters={"id": bot_id},
         )[0]
-        self._sync_runtime_allowed_symbols_if_derived(runtime=runtime, previous_bot=bot, next_bot=row)
+        self._sync_runtime_allowed_symbols_if_derived(runtimes=runtimes, previous_bot=bot, next_bot=row)
         self._record_strategy_history(bot=row, created_by_user_id=str(bot["user_id"]), previous_bot=bot)
         return self.serialize(row)
 
@@ -323,34 +328,46 @@ class BotBuilderService:
     def _sync_runtime_allowed_symbols_if_derived(
         self,
         *,
-        runtime: dict[str, Any] | None,
+        runtimes: list[dict[str, Any]],
         previous_bot: dict[str, Any],
         next_bot: dict[str, Any],
     ) -> None:
-        if not isinstance(runtime, dict):
+        if not isinstance(runtimes, list) or not runtimes:
             return
-        policy = runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {}
-        allowed_symbols = policy.get("allowed_symbols")
-        current_allowed = (
-            BotRuntimeEngine._normalize_symbols(allowed_symbols)
-            if isinstance(allowed_symbols, list)
-            else []
-        )
         previous_allowed = BotRuntimeEngine._derive_allowed_symbols_from_bot(previous_bot)
         next_allowed = BotRuntimeEngine._derive_allowed_symbols_from_bot(next_bot)
-        if current_allowed != previous_allowed or current_allowed == next_allowed:
+        if self._symbols_equivalent(previous_allowed, next_allowed):
             return
-        updated_policy = dict(policy)
-        updated_policy["allowed_symbols"] = next_allowed
-        self.supabase.update(
-            "bot_runtimes",
-            {
-                "risk_policy_json": updated_policy,
-                "updated_at": datetime.now(tz=UTC).isoformat(),
-            },
-            filters={"id": runtime["id"]},
-            returning="minimal",
-        )
+
+        for runtime in runtimes:
+            if not isinstance(runtime, dict):
+                continue
+            policy = runtime.get("risk_policy_json") if isinstance(runtime.get("risk_policy_json"), dict) else {}
+            allowed_symbols = policy.get("allowed_symbols")
+            current_allowed = (
+                BotRuntimeEngine._normalize_symbols(allowed_symbols)
+                if isinstance(allowed_symbols, list)
+                else []
+            )
+            if not self._symbols_equivalent(current_allowed, previous_allowed):
+                continue
+            if self._symbols_equivalent(current_allowed, next_allowed):
+                continue
+            updated_policy = dict(policy)
+            updated_policy["allowed_symbols"] = next_allowed
+            self.supabase.update(
+                "bot_runtimes",
+                {
+                    "risk_policy_json": updated_policy,
+                    "updated_at": datetime.now(tz=UTC).isoformat(),
+                },
+                filters={"id": runtime["id"]},
+                returning="minimal",
+            )
+
+    @staticmethod
+    def _symbols_equivalent(left: list[str], right: list[str]) -> bool:
+        return set(left) == set(right)
 
     def _strategy_history_changed(self, *, previous_bot: dict[str, Any], next_bot: dict[str, Any]) -> bool:
         return any(previous_bot.get(field) != next_bot.get(field) for field in self.STRATEGY_VERSION_FIELDS)

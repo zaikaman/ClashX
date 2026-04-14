@@ -500,6 +500,96 @@ def test_update_bot_preserves_manual_runtime_allowlist_overrides() -> None:
     assert fake_supabase.tables["bot_runtimes"][0]["risk_policy_json"]["allowed_symbols"] == ["BTC"]
 
 
+def test_update_bot_syncs_runtime_allowlist_when_previous_symbols_match_out_of_order() -> None:
+    tables = _seed_tables()
+    tables["bot_definitions"][0]["rules_json"] = {
+        "selected_market_symbols": ["BTC", "ETH", "SOL"],
+        "graph": _graph_rules()["graph"],
+    }
+    tables["bot_runtimes"][0]["risk_policy_json"]["allowed_symbols"] = ["SOL", "BTC", "ETH"]
+    fake_supabase = FakeSupabaseRestClient(tables)
+    service = BotBuilderService()
+    service.supabase = fake_supabase
+
+    service.update_bot(
+        None,
+        bot_id="bot-1",
+        wallet_address="wallet-1",
+        rules_json={
+            "selected_market_symbols": ["BTC", "SOL", "ADA", "HYPE", "BCH", "BNB"],
+            "graph": _graph_rules()["graph"],
+        },
+    )
+
+    assert fake_supabase.tables["bot_runtimes"][0]["risk_policy_json"]["allowed_symbols"] == [
+        "BTC",
+        "SOL",
+        "ADA",
+        "HYPE",
+        "BCH",
+        "BNB",
+    ]
+
+
+def test_update_bot_syncs_matching_runtime_when_multiple_runtime_rows_exist() -> None:
+    tables = _seed_tables()
+    tables["bot_definitions"][0]["rules_json"] = {
+        "selected_market_symbols": ["BTC", "ETH", "SOL"],
+        "graph": _graph_rules()["graph"],
+    }
+    manual_runtime = {
+        "id": "runtime-manual",
+        "bot_definition_id": "bot-1",
+        "user_id": "user-1",
+        "wallet_address": "wallet-1",
+        "status": "stopped",
+        "mode": "live",
+        "risk_policy_json": {
+            "max_leverage": 5,
+            "max_order_size_usd": 250,
+            "allocated_capital_usd": 200,
+            "cooldown_seconds": 45,
+            "max_drawdown_pct": 18,
+            "allowed_symbols": ["BTC"],
+            "_runtime_state": {},
+        },
+        "deployed_at": "2026-03-16T00:00:00+00:00",
+        "stopped_at": "2026-03-16T01:00:00+00:00",
+        "updated_at": "2026-03-16T01:00:00+00:00",
+    }
+    derived_runtime = deepcopy(tables["bot_runtimes"][0])
+    derived_runtime["id"] = "runtime-derived"
+    derived_runtime["status"] = "active"
+    derived_runtime["risk_policy_json"]["allowed_symbols"] = ["BTC", "ETH", "SOL"]
+    derived_runtime["updated_at"] = "2026-03-16T02:00:00+00:00"
+    tables["bot_runtimes"] = [manual_runtime, derived_runtime]
+
+    fake_supabase = FakeSupabaseRestClient(tables)
+    service = BotBuilderService()
+    service.supabase = fake_supabase
+
+    service.update_bot(
+        None,
+        bot_id="bot-1",
+        wallet_address="wallet-1",
+        rules_json={
+            "selected_market_symbols": ["BTC", "SOL", "ADA", "HYPE", "BCH", "BNB"],
+            "graph": _graph_rules()["graph"],
+        },
+    )
+
+    runtime_by_id = {row["id"]: row for row in fake_supabase.tables["bot_runtimes"]}
+    assert runtime_by_id["runtime-manual"]["risk_policy_json"]["allowed_symbols"] == ["BTC"]
+    assert runtime_by_id["runtime-derived"]["risk_policy_json"]["allowed_symbols"] == [
+        "BTC",
+        "SOL",
+        "ADA",
+        "HYPE",
+        "BCH",
+        "BNB",
+    ]
+
+
 def test_list_runtimes_for_wallet_returns_serialized_runtime_summaries() -> None:
     fake_supabase = FakeSupabaseRestClient(_seed_tables())
     engine = BotRuntimeEngine()
