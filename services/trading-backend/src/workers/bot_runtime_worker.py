@@ -293,6 +293,7 @@ class BotRuntimeWorker:
                 if abs(float(item.get("amount") or 0.0)) > 0
             ),
         }
+        performance_refreshed = False
         if self._should_refresh_performance(runtime_state=runtime_state):
             history_loader = getattr(self._pacifica, "get_position_history", None)
             manual_close_history = (
@@ -317,6 +318,16 @@ class BotRuntimeWorker:
             )
             runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
             runtime_state["performance_synced_at"] = now.isoformat()
+            performance_refreshed = True
+        runtime_state = self._restore_runtime_state_from_execution_history(
+            runtime=runtime,
+            runtime_state=runtime_state,
+            position_lookup=position_lookup,
+            open_order_lookup=open_order_lookup,
+        )
+        runtime_policy["_runtime_state"] = runtime_state
+        runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
+        if performance_refreshed:
             runtime_state, close_notifications = self._capture_trade_close_notifications(
                 runtime_state=runtime_state,
                 history_rows=manual_close_history,
@@ -2009,6 +2020,137 @@ class BotRuntimeWorker:
                 continue
             lookup.setdefault(symbol, []).append(item)
         return lookup
+
+    def _restore_runtime_state_from_execution_history(
+        self,
+        *,
+        runtime: dict[str, Any],
+        runtime_state: dict[str, Any],
+        position_lookup: dict[str, dict[str, Any]],
+        open_order_lookup: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, Any]:
+        if not self._should_restore_runtime_management_state(
+            runtime_state=runtime_state,
+            position_lookup=position_lookup,
+        ):
+            return runtime_state
+
+        history_rows = self._supabase.select(
+            "bot_execution_events",
+            columns="request_payload,result_payload,created_at",
+            filters={"runtime_id": runtime["id"], "event_type": "action.executed", "status": "success"},
+            order="created_at.desc",
+            limit=200,
+        )
+        if not history_rows:
+            return runtime_state
+
+        next_state = dict(runtime_state)
+        managed_positions = next_state.get("managed_positions")
+        managed_positions = dict(managed_positions) if isinstance(managed_positions, dict) else {}
+        pending_entries = next_state.get("pending_entry_symbols")
+        pending_entries = dict(pending_entries) if isinstance(pending_entries, dict) else {}
+
+        for row in reversed(history_rows):
+            request_payload = row.get("request_payload") if isinstance(row.get("request_payload"), dict) else {}
+            result_payload = row.get("result_payload") if isinstance(row.get("result_payload"), dict) else {}
+            action_type = str(request_payload.get("type") or "")
+            symbol = self._normalize_symbol(request_payload.get("symbol"))
+            if not symbol:
+                continue
+            created_at = str(row.get("created_at") or datetime.now(tz=UTC).isoformat())
+
+            if action_type in ENTRY_ACTION_TYPES and not self._to_bool(request_payload.get("reduce_only"), False):
+                execution_meta = result_payload.get("execution_meta") if isinstance(result_payload.get("execution_meta"), dict) else {}
+                amount = self._coerce_float(execution_meta.get("amount"))
+                entry_client_order_id = str(execution_meta.get("client_order_id") or "").strip()
+                if amount <= 0 or not entry_client_order_id:
+                    continue
+                existing_position = managed_positions.get(symbol)
+                existing_position = dict(existing_position) if isinstance(existing_position, dict) else {}
+                managed_positions[symbol] = {
+                    **existing_position,
+                    "symbol": symbol,
+                    "amount": amount,
+                    "side": str(execution_meta.get("side") or existing_position.get("side") or "").lower(),
+                    "entry_client_order_id": entry_client_order_id,
+                    "entry_price": execution_meta.get("reference_price") or existing_position.get("entry_price") or 0.0,
+                    "opened_at": str(existing_position.get("opened_at") or created_at),
+                    "updated_at": created_at,
+                }
+                pending_entries[symbol] = str(pending_entries.get(symbol) or created_at)
+                continue
+
+            if action_type == "close_position":
+                managed_positions.pop(symbol, None)
+                pending_entries.pop(symbol, None)
+                continue
+
+            if action_type == "set_tpsl":
+                managed_position = managed_positions.get(symbol)
+                if not isinstance(managed_position, dict):
+                    continue
+                execution_meta = result_payload.get("execution_meta") if isinstance(result_payload.get("execution_meta"), dict) else {}
+                take_profit_client_order_id = str(execution_meta.get("take_profit_client_order_id") or "").strip()
+                stop_loss_client_order_id = str(execution_meta.get("stop_loss_client_order_id") or "").strip()
+                if take_profit_client_order_id:
+                    managed_position["take_profit_client_order_id"] = take_profit_client_order_id
+                if stop_loss_client_order_id:
+                    managed_position["stop_loss_client_order_id"] = stop_loss_client_order_id
+                if take_profit_client_order_id or stop_loss_client_order_id:
+                    managed_position["tpsl_set_at"] = created_at
+                    managed_position["updated_at"] = created_at
+                managed_positions[symbol] = managed_position
+
+        if managed_positions:
+            next_state["managed_positions"] = managed_positions
+        else:
+            next_state.pop("managed_positions", None)
+        if pending_entries:
+            next_state["pending_entry_symbols"] = pending_entries
+        else:
+            next_state.pop("pending_entry_symbols", None)
+        return self._reconcile_runtime_state(
+            runtime_state=next_state,
+            position_lookup=position_lookup,
+            open_order_lookup=open_order_lookup,
+        )
+
+    def _should_restore_runtime_management_state(
+        self,
+        *,
+        runtime_state: dict[str, Any],
+        position_lookup: dict[str, dict[str, Any]],
+    ) -> bool:
+        managed_positions = runtime_state.get("managed_positions")
+        if not isinstance(managed_positions, dict):
+            managed_positions = {}
+        managed_symbols = {
+            self._normalize_symbol(item.get("symbol") or symbol)
+            for symbol, item in managed_positions.items()
+            if isinstance(item, dict) and abs(self._coerce_float(item.get("amount"))) > 0
+        }
+        managed_symbols.discard("")
+
+        live_symbols = {
+            self._normalize_symbol(item.get("symbol") or symbol)
+            for symbol, item in position_lookup.items()
+            if isinstance(item, dict) and abs(self._coerce_float(item.get("amount"))) > 0
+        }
+        live_symbols.discard("")
+        if live_symbols and not live_symbols.issubset(managed_symbols):
+            return True
+
+        pending_entries = runtime_state.get("pending_entry_symbols")
+        if isinstance(pending_entries, dict) and pending_entries:
+            return False
+        if managed_symbols:
+            return False
+
+        last_executed_at = self._parse_runtime_state_timestamp(str(runtime_state.get("last_executed_at") or ""))
+        if last_executed_at is None:
+            return False
+        return (datetime.now(tz=UTC) - last_executed_at).total_seconds() <= PENDING_ENTRY_TTL_SECONDS
 
     def _reconcile_runtime_state(
         self,

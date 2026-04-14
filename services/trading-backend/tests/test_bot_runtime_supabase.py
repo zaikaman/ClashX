@@ -1471,20 +1471,42 @@ def test_runtime_worker_skips_market_evaluation_for_entry_only_bot_at_position_c
     assert fake_supabase.tables["bot_execution_events"] == []
 
 
-def test_runtime_worker_allows_new_entry_when_live_position_is_unmanaged() -> None:
+def test_runtime_worker_restores_managed_position_from_own_execution_history() -> None:
     tables = _seed_tables()
     tables["bot_runtimes"][0]["risk_policy_json"]["max_open_positions"] = 1
     tables["bot_runtimes"][0]["risk_policy_json"]["allowed_symbols"] = ["BTC", "ETH", "SOL"]
+    tables["bot_execution_events"] = [
+        {
+            "id": "event-1",
+            "runtime_id": "runtime-1",
+            "event_type": "action.executed",
+            "decision_summary": "idem:runtime-1:btc-entry",
+            "request_payload": {"type": "open_long", "symbol": "BTC", "size_usd": 100, "leverage": 2},
+            "result_payload": {
+                "execution_meta": {
+                    "symbol": "BTC",
+                    "side": "bid",
+                    "amount": 0.005,
+                    "reduce_only": False,
+                    "reference_price": 100000.0,
+                    "client_order_id": "entry-1",
+                }
+            },
+            "status": "success",
+            "error_reason": None,
+            "created_at": "2026-03-16T00:05:00+00:00",
+        }
+    ]
 
     fake_supabase = FakeSupabaseRestClient(tables)
     fake_pacifica = FakePacificaClient(
         positions=[
             {
-                "symbol": "ETH",
+                "symbol": "BTC",
                 "amount": 0.25,
-                "side": "ask",
-                "entry_price": 2200,
-                "mark_price": 2190,
+                "side": "bid",
+                "entry_price": 100500,
+                "mark_price": 105000,
                 "created_at": "2026-03-16T00:05:00+00:00",
                 "updated_at": "2026-03-16T00:06:00+00:00",
             }
@@ -1500,11 +1522,11 @@ def test_runtime_worker_allows_new_entry_when_live_position_is_unmanaged() -> No
 
     asyncio.run(worker._process_runtime(None, fake_supabase.tables["bot_runtimes"][0]))
 
-    assert len(fake_pacifica.orders) == 2
-    assert fake_pacifica.orders[0]["type"] == "update_leverage"
-    assert fake_pacifica.orders[1]["symbol"] == "BTC"
-    assert fake_pacifica.orders[1]["side"] == "bid"
-    assert fake_supabase.tables["bot_execution_events"][-1]["event_type"] == "action.executed"
+    assert fake_pacifica.orders == []
+    restored_state = fake_supabase.tables["bot_runtimes"][0]["risk_policy_json"]["_runtime_state"]
+    assert restored_state["managed_positions"]["BTC"]["entry_client_order_id"] == "entry-1"
+    assert restored_state["managed_positions"]["BTC"]["amount"] == 0.005
+    assert fake_supabase.tables["bot_execution_events"] == tables["bot_execution_events"]
 
 
 def test_runtime_worker_builds_rules_position_lookup_from_managed_positions_only() -> None:
