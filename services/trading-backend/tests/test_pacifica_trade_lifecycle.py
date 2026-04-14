@@ -500,6 +500,57 @@ def test_bot_runtime_worker_prefers_managed_position_side_for_tpsl_when_wallet_s
     assert pacifica.order_calls[0]["stop_loss"]["stop_price"] == 104055.0
 
 
+def test_bot_runtime_worker_clamps_short_stop_loss_above_live_market_reference() -> None:
+    worker = BotRuntimeWorker()
+    pacifica = FakePacificaClient()
+    worker._pacifica = pacifica
+
+    credentials = {
+        "account_address": "wallet-1",
+        "agent_wallet_address": "agent-1",
+        "agent_private_key": "secret",
+    }
+    market_lookup = {
+        "ETH": {
+            "symbol": "ETH-PERP",
+            "mark_price": 2363.05,
+            "mid_price": 2421.8,
+            "oracle_price": 2363.05,
+            "lot_size": 0.0001,
+            "tick_size": 0.1,
+        }
+    }
+
+    asyncio.run(
+        worker._execute_action(
+            runtime_state={
+                "managed_positions": {
+                    "ETH": {
+                        "symbol": "ETH",
+                        "side": "ask",
+                        "amount": 0.2538,
+                    }
+                }
+            },
+            action={"type": "set_tpsl", "symbol": "ETH", "take_profit_pct": 2.0, "stop_loss_pct": 1.0},
+            credentials=credentials,
+            market_lookup=market_lookup,
+            position_lookup={
+                "ETH": {
+                    "symbol": "ETH",
+                    "side": "ask",
+                    "amount": 0.2538,
+                    "mark_price": 2363.05,
+                }
+            },
+        )
+    )
+
+    assert pacifica.order_calls[0]["type"] == "set_position_tpsl"
+    assert pacifica.order_calls[0]["take_profit"]["stop_price"] == 2315.7
+    assert pacifica.order_calls[0]["stop_loss"]["stop_price"] == 2421.9
+
+
 def test_bot_runtime_worker_caps_tpsl_amount_to_live_position_size() -> None:
     worker = BotRuntimeWorker()
     pacifica = FakePacificaClient()
@@ -545,8 +596,8 @@ def test_bot_runtime_worker_caps_tpsl_amount_to_live_position_size() -> None:
     )
 
     assert pacifica.order_calls[0]["type"] == "set_position_tpsl"
-    assert "amount" not in pacifica.order_calls[0]["take_profit"]
-    assert "amount" not in pacifica.order_calls[0]["stop_loss"]
+    assert pacifica.order_calls[0]["take_profit"]["amount"] == 0.01212
+    assert pacifica.order_calls[0]["stop_loss"]["amount"] == 0.01212
 
 
 def test_bot_runtime_worker_does_not_reject_small_btc_quantity_from_min_order_size_metadata() -> None:
@@ -1186,8 +1237,8 @@ def test_two_bots_can_manage_separate_btc_slices_on_the_same_wallet(monkeypatch:
         "create_market_order",
         "set_position_tpsl",
     ]
-    assert "amount" not in pacifica.order_calls[2]["take_profit"]
-    assert "amount" not in pacifica.order_calls[5]["take_profit"]
+    assert float(pacifica.order_calls[2]["take_profit"]["amount"]) > 0
+    assert float(pacifica.order_calls[5]["take_profit"]["amount"]) > 0
     assert pacifica._position is not None
     assert pacifica._position["amount"] == 0.018
 

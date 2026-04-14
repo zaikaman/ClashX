@@ -253,10 +253,58 @@ def test_copy_worker_sets_tpsl_with_required_close_side() -> None:
 
     assert fake_pacifica.orders[0]["type"] == "set_position_tpsl"
     assert fake_pacifica.orders[0]["side"] == "bid"
-    assert "amount" not in fake_pacifica.orders[0]["take_profit"]
-    assert "amount" not in fake_pacifica.orders[0]["stop_loss"]
+    assert fake_pacifica.orders[0]["take_profit"]["amount"] == 0.005
+    assert fake_pacifica.orders[0]["stop_loss"]["amount"] == 0.005
     assert fake_pacifica.orders[0]["take_profit"]["stop_price"] == 81.59
     assert fake_pacifica.orders[0]["stop_loss"]["stop_price"] == 83.25
+
+
+def test_copy_worker_clamps_short_stop_loss_above_live_market_reference() -> None:
+    worker = BotCopyWorker(poll_interval_seconds=0.01)
+    fake_pacifica = FakePacificaClient()
+    worker._pacifica = fake_pacifica
+
+    asyncio.run(
+        worker._execute_action(
+            relationship={"id": "rel-eth"},
+            source_event={"id": "evt-eth", "request_payload": {}, "result_payload": {}},
+            action={
+                "type": "set_tpsl",
+                "symbol": "ETH",
+                "take_profit_pct": 2.0,
+                "stop_loss_pct": 1.0,
+            },
+            scale_bps=10_000,
+            credentials={
+                "account_address": "wallet-1",
+                "agent_wallet_address": "agent-1",
+                "agent_private_key": "secret",
+            },
+            market_lookup={
+                "ETH": {
+                    "mark_price": 2363.05,
+                    "mid_price": 2421.8,
+                    "oracle_price": 2363.05,
+                    "tick_size": 0.1,
+                    "lot_size": 0.0001,
+                    "min_order_size": 10.0,
+                    "max_leverage": 20,
+                }
+            },
+            position_lookup={
+                "ETH": {
+                    "symbol": "ETH",
+                    "side": "ask",
+                    "amount": 0.2538,
+                    "mark_price": 2363.05,
+                }
+            },
+        )
+    )
+
+    assert fake_pacifica.orders[0]["type"] == "set_position_tpsl"
+    assert fake_pacifica.orders[0]["take_profit"]["stop_price"] == 2315.7
+    assert fake_pacifica.orders[0]["stop_loss"]["stop_price"] == 2421.9
 
 
 def test_copy_worker_mirrors_exact_source_tpsl_prices_and_client_order_ids() -> None:

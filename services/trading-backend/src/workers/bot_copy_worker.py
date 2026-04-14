@@ -572,10 +572,34 @@ class BotCopyWorker:
                     tick_size=tick_size,
                     rounding=ROUND_UP,
                 )
-            # Mirror the follower's full position protection and avoid serializing a stop amount
-            # that may fail Pacifica validation after position-size normalization.
-            take_profit_request = {"stop_price": take_profit_price}
-            stop_loss_request = {"stop_price": stop_loss_price}
+            min_reference_price, max_reference_price = self._protective_price_bounds(
+                position=follower_position,
+                market=market,
+            )
+            if side in {"bid", "long"}:
+                take_profit_price = self._ensure_price_above_reference(
+                    take_profit_price,
+                    reference_price=max_reference_price,
+                    tick_size=tick_size,
+                )
+                stop_loss_price = self._ensure_price_below_reference(
+                    stop_loss_price,
+                    reference_price=min_reference_price,
+                    tick_size=tick_size,
+                )
+            else:
+                take_profit_price = self._ensure_price_below_reference(
+                    take_profit_price,
+                    reference_price=min_reference_price,
+                    tick_size=tick_size,
+                )
+                stop_loss_price = self._ensure_price_above_reference(
+                    stop_loss_price,
+                    reference_price=max_reference_price,
+                    tick_size=tick_size,
+                )
+            take_profit_request = {"amount": amount, "stop_price": take_profit_price}
+            stop_loss_request = {"amount": amount, "stop_price": stop_loss_price}
             mirrored_take_profit_client_order_id = self._mirror_nested_client_order_id(
                 relationship=relationship,
                 source_order=source_take_profit,
@@ -839,6 +863,47 @@ class BotCopyWorker:
             tick = Decimal(str(tick_size))
             normalized = (normalized / tick).to_integral_value(rounding=rounding) * tick
         return float(normalized)
+
+    @staticmethod
+    def _protective_price_bounds(*, position: dict[str, Any], market: dict[str, Any]) -> tuple[float, float]:
+        candidates: list[float] = []
+        for source in (position, market):
+            if not isinstance(source, dict):
+                continue
+            for key in ("mark_price", "mid_price", "oracle_price"):
+                try:
+                    value = float(source.get(key) or 0.0)
+                except (TypeError, ValueError):
+                    value = 0.0
+                if value > 0:
+                    candidates.append(value)
+        if not candidates:
+            return 0.0, 0.0
+        return min(candidates), max(candidates)
+
+    @classmethod
+    def _ensure_price_above_reference(cls, price: float, *, reference_price: float, tick_size: float) -> float:
+        if reference_price <= 0 or price > reference_price:
+            return price
+        minimum_valid_price = reference_price + (tick_size if tick_size > 0 else max(reference_price * 1e-6, 1e-6))
+        return cls._normalize_price_to_tick(
+            minimum_valid_price,
+            tick_size=tick_size,
+            rounding=ROUND_UP,
+        )
+
+    @classmethod
+    def _ensure_price_below_reference(cls, price: float, *, reference_price: float, tick_size: float) -> float:
+        if reference_price <= 0 or price < reference_price:
+            return price
+        maximum_valid_price = reference_price - (tick_size if tick_size > 0 else max(reference_price * 1e-6, 1e-6))
+        if maximum_valid_price <= 0:
+            return price
+        return cls._normalize_price_to_tick(
+            maximum_valid_price,
+            tick_size=tick_size,
+            rounding=ROUND_DOWN,
+        )
 
     def _build_limit_order_price(
         self,
