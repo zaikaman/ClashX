@@ -584,9 +584,11 @@ class TelegramService:
             execution_meta = result_payload.get("execution_meta") if isinstance(result_payload.get("execution_meta"), dict) else {}
             amount = self._to_float(execution_meta.get("amount"))
             if action_type in {"open_long", "open_short", "place_market_order", "place_limit_order", "place_twap_order"} and not bool(execution_meta.get("reduce_only")):
+                runtime_id = str(payload.get("runtime_id") or "").strip()
+                bot_name = self._resolve_runtime_bot_name(runtime_id) if runtime_id else "Bot"
                 side = str(execution_meta.get("side") or "").lower().strip()
                 normalized_side = "long" if side in {"bid", "long"} else "short" if side in {"ask", "short"} else side
-                return f"Trade opened\n{symbol} {normalized_side}\nSize: {amount:.4f}"
+                return f"Trade opened\n{bot_name}\n{symbol} {normalized_side}\nSize: {amount:.4f}"
             if action_type == "set_tpsl":
                 return f"Protection armed\n{symbol}\nTP and SL orders were placed for {amount:.4f}."
             if action_type == "close_position" or bool(execution_meta.get("reduce_only")):

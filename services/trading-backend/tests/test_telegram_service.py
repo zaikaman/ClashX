@@ -223,12 +223,14 @@ def test_configure_bot_logs_warning_on_rate_limit(monkeypatch: pytest.MonkeyPatc
     assert "setWebhook" in caplog.text
 
 
-def test_render_trade_open_notification() -> None:
+def test_render_trade_open_notification(monkeypatch: pytest.MonkeyPatch) -> None:
     service = TelegramService(supabase=_FakeSupabase())
+    monkeypatch.setattr(service, "_resolve_runtime_bot_name", lambda runtime_id: "Momentum Rider")
 
     rendered = service._render_notification_message(
         event="bot.execution.success",
         payload={
+            "runtime_id": "runtime-1",
             "request_payload": {"type": "open_long", "symbol": "btc"},
             "result_payload": {
                 "execution_meta": {
@@ -240,7 +242,7 @@ def test_render_trade_open_notification() -> None:
         },
     )
 
-    assert rendered == "Trade opened\nBTC long\nSize: 0.2500"
+    assert rendered == "Trade opened\nMomentum Rider\nBTC long\nSize: 0.2500"
 
 
 def test_render_tpsl_armed_notification() -> None:
