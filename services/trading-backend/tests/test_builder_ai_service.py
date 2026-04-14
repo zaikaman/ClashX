@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,11 +21,15 @@ class _FakeSettings:
 
 
 class _FakeResponse:
-    def __init__(self, status_code: int, payload: Any) -> None:
+    def __init__(self, status_code: int, payload: Any, *, text: str = "", reason_phrase: str = "") -> None:
         self.status_code = status_code
         self._payload = payload
+        self.text = text
+        self.reason_phrase = reason_phrase
 
     def json(self) -> Any:
+        if isinstance(self._payload, Exception):
+            raise self._payload
         return self._payload
 
 
@@ -121,6 +126,15 @@ def test_generate_draft_prefers_trollllm_and_uses_openai_compatible_chat_complet
     assert len(http_client.calls) == 1
     assert http_client.calls[0]["url"] == "https://chat.trollllm.xyz/v1/chat/completions"
     assert http_client.calls[0]["json"]["messages"][1]["role"] == "user"
+
+
+def test_builder_ai_http_timeout_is_five_minutes() -> None:
+    service = BuilderAiService()
+
+    assert service._http.timeout.read == 300.0
+    assert service._http.timeout.write == 300.0
+    assert service._http.timeout.pool == 300.0
+    assert service._http.timeout.connect == 10.0
 
 
 def test_generate_draft_falls_back_to_openai_when_trollllm_fails() -> None:
@@ -398,6 +412,58 @@ def test_generate_draft_accepts_trollllm_function_call_output_items() -> None:
     assert result["draft"]["markets"] == ["BTC"]
     assert len(result["draft"]["routes"]) == 1
     assert result["draft"]["conditions"][0]["type"] == "rsi_below"
+
+
+def test_generate_draft_accepts_trollllm_raw_json_text_response() -> None:
+    raw_payload_text = json.dumps(_draft_payload(symbol="SOL"))
+    service, http_client = _service_with(
+        settings=_FakeSettings(
+            trollllm_api_key="troll-key",
+            trollllm_base_url="https://chat.trollllm.xyz/v1",
+            trollllm_model="gemini-3.1-pro-preview",
+        ),
+        responses=[_FakeResponse(200, ValueError("not-json"), text=raw_payload_text)],
+    )
+
+    result = asyncio.run(
+        service.generate_draft(
+            messages=[{"role": "user", "content": "Build the SOL strategy."}],
+            available_markets=["BTC", "SOL"],
+            current_draft=None,
+        )
+    )
+
+    assert result["draft"]["name"] == "SOL Breakout"
+    assert result["draft"]["markets"] == ["SOL"]
+    assert len(http_client.calls) == 1
+
+
+def test_generate_draft_retries_trollllm_with_responses_endpoint_when_chat_completions_is_non_json() -> None:
+    service, http_client = _service_with(
+        settings=_FakeSettings(
+            trollllm_api_key="troll-key",
+            trollllm_base_url="https://chat.trollllm.xyz/v1",
+            trollllm_model="gemini-3.1-pro-preview",
+        ),
+        responses=[
+            _FakeResponse(200, ValueError("not-json"), text="<html>cloudflare</html>"),
+            _FakeResponse(200, {"output_text": json.dumps(_draft_payload(symbol="SOL"))}),
+        ],
+    )
+
+    result = asyncio.run(
+        service.generate_draft(
+            messages=[{"role": "user", "content": "Build the SOL strategy."}],
+            available_markets=["BTC", "SOL"],
+            current_draft=None,
+        )
+    )
+
+    assert result["draft"]["name"] == "SOL Breakout"
+    assert [call["url"] for call in http_client.calls] == [
+        "https://chat.trollllm.xyz/v1/chat/completions",
+        "https://chat.trollllm.xyz/v1/responses",
+    ]
 
 
 def test_generate_draft_converts_openai_timeouts_to_runtime_errors() -> None:

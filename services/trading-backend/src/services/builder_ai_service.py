@@ -66,6 +66,9 @@ ACTION_OPTIONS = [
 
 logger = logging.getLogger(__name__)
 
+BUILDER_AI_TOTAL_TIMEOUT_SECONDS = 300.0
+BUILDER_AI_CONNECT_TIMEOUT_SECONDS = 10.0
+
 
 @dataclass(frozen=True)
 class _ProviderAttempt:
@@ -77,7 +80,12 @@ class _ProviderAttempt:
 class BuilderAiService:
     def __init__(self) -> None:
         self.settings = get_settings()
-        self._http = httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0))
+        self._http = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                BUILDER_AI_TOTAL_TIMEOUT_SECONDS,
+                connect=BUILDER_AI_CONNECT_TIMEOUT_SECONDS,
+            )
+        )
 
     async def generate_draft(
         self,
@@ -153,14 +161,27 @@ class BuilderAiService:
         messages: list[dict[str, str]],
         system_prompt: str,
     ) -> Any:
-        return await self._request_chat_completions_compatible(
-            provider_name="TrollLLM",
-            base_url=self.settings.trollllm_base_url,
-            api_key=self.settings.trollllm_api_key,
-            model=self.settings.trollllm_model,
-            messages=messages,
-            system_prompt=system_prompt,
-        )
+        try:
+            return await self._request_chat_completions_compatible(
+                provider_name="TrollLLM",
+                base_url=self.settings.trollllm_base_url,
+                api_key=self.settings.trollllm_api_key,
+                model=self.settings.trollllm_model,
+                messages=messages,
+                system_prompt=system_prompt,
+            )
+        except RuntimeError as exc:
+            if "non-json" not in str(exc).lower():
+                raise
+            logger.warning("TrollLLM chat/completions returned non-JSON; retrying with /responses endpoint.")
+            return await self._request_openai_compatible(
+                provider_name="TrollLLM",
+                base_url=self.settings.trollllm_base_url,
+                api_key=self.settings.trollllm_api_key,
+                model=self.settings.trollllm_model,
+                messages=messages,
+                system_prompt=system_prompt,
+            )
 
     async def _request_openai(
         self,
@@ -298,11 +319,34 @@ class BuilderAiService:
         )
 
     def _parse_response_payload(self, response: Any) -> Any:
+        status_code = int(getattr(response, "status_code", 500) or 500)
         try:
             payload = response.json()
         except ValueError as exc:
+            raw_text = str(getattr(response, "text", "") or "").strip()
+            if raw_text and status_code < 400:
+                try:
+                    extract_first_json_object(raw_text)
+                except RuntimeError:
+                    pass
+                else:
+                    return {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": raw_text,
+                                }
+                            }
+                        ]
+                    }
+            if status_code >= 400:
+                reason = str(getattr(response, "reason_phrase", "") or "").strip()
+                status_summary = f"AI request failed with status {status_code}"
+                if reason:
+                    status_summary = f"{status_summary} ({reason})"
+                raise RuntimeError(f"{status_summary}.") from exc
             raise RuntimeError("AI provider returned a non-JSON response.") from exc
-        if getattr(response, "status_code", 500) >= 400:
+        if status_code >= 400:
             error = payload.get("error", {}) if isinstance(payload, dict) else {}
             detail = error.get("message") if isinstance(error, dict) else None
             raise RuntimeError(str(detail or "AI request failed."))
@@ -395,7 +439,24 @@ class BuilderAiService:
                         chunks.append(part["text"])
             if chunks:
                 return "\n".join(chunks).strip()
+        if self._looks_like_builder_payload(payload):
+            return json.dumps(payload)
         return ""
+
+    def _looks_like_builder_payload(self, payload: dict[str, Any]) -> bool:
+        return any(
+            key in payload
+            for key in (
+                "reply",
+                "name",
+                "description",
+                "marketSelection",
+                "markets",
+                "conditions",
+                "actions",
+                "routes",
+            )
+        )
 
     def _extract_json(self, value: str) -> dict[str, Any]:
         return extract_first_json_object(value)

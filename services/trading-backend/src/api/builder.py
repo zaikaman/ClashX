@@ -63,6 +63,13 @@ class BuilderAiChatJobStatusResponse(BaseModel):
     completedAt: str | None = None
 
 
+def _runtime_error_status(exc: RuntimeError) -> int:
+    message = str(exc).lower()
+    if "timed out" in message or "timeout" in message:
+        return 504
+    return 500
+
+
 def _serialize_job_status(row: dict[str, Any]) -> BuilderAiChatJobStatusResponse:
     result_payload = row.get("result_payload_json")
     result = BuilderAiChatResponse.model_validate(result_payload) if isinstance(result_payload, dict) and result_payload else None
@@ -111,7 +118,7 @@ async def ai_chat(payload: BuilderAiChatRequest) -> BuilderAiChatResponse:
             current_draft=payload.current_draft,
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=_runtime_error_status(exc), detail=str(exc)) from exc
     return BuilderAiChatResponse.model_validate(result)
 
 

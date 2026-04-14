@@ -75,7 +75,7 @@ Harness our visual rules engine to craft precision-driven bots, or discover top-
 "Let's see it in action. First, we connect our wallet using Privy. Because ClashX is non-custodial, we use Pacifica's builder program. Here, we authorize a delegated agent wallet. This allows ClashX to execute trades on our behalf with strict builder fee limits, but we keep our private keys and our funds stay in our own wallet."
 
 *(1:50 - 2:40: The Visual Builder & Copilot)*
-"Now let's build a bot. I could use the drag-and-drop Visual Builder—connecting condition nodes like RSI or SMA to action nodes like 'Open Long' or 'Set Stop Loss'. 
+"Now let's build a bot. I could use the drag-and-drop Visual Builder—connecting condition nodes like RSI to action nodes like 'Open Long' or 'Set Stop Loss'. 
 
 But let's use the AI Copilot. I'll type: *'Create a mean reversion bot on SOL-PERP that goes long when the 15-minute RSI drops below 30, with a 2% stop loss.'* 
 *(Visual: Type prompt, show Copilot generating the bot graph instantly. Zoom in on the matched Risk Management node)*. 
