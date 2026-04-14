@@ -78,22 +78,22 @@ const config: Config = {
         'hover': 'rgba(220, 232, 93, 0.3)',
       },
       fontFamily: {
-          sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
-          mono: ['Inconsolata', 'Courier New', 'monospace'],
-        },
-        fontSize: {
-          'xs': ['0.6875rem', { lineHeight: '1rem' }],
-          'sm': ['0.8125rem', { lineHeight: '1.25rem' }],
-          'base': ['0.875rem', { lineHeight: '1.5rem' }],
-          'lg': ['0.9375rem', { lineHeight: '1.75rem' }],
-          'xl': ['1rem', { lineHeight: '1.75rem' }],
-          '2xl': ['1.25rem', { lineHeight: '2rem' }],
-          '3xl': ['1.5rem', { lineHeight: '2.25rem' }],
-          '4xl': ['2rem', { lineHeight: '2.5rem' }],
-          '5xl': ['2.5rem', { lineHeight: '3rem' }],
-          '6xl': ['3.75rem', { lineHeight: '1' }],
-          '7xl': ['4.5rem', { lineHeight: '1' }],
-        },
+        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
+        mono: ['Inconsolata', 'Courier New', 'monospace'],
+      },
+      fontSize: {
+        'xs': ['0.6875rem', { lineHeight: '1rem' }],
+        'sm': ['0.8125rem', { lineHeight: '1.25rem' }],
+        'base': ['0.875rem', { lineHeight: '1.5rem' }],
+        'lg': ['0.9375rem', { lineHeight: '1.75rem' }],
+        'xl': ['1rem', { lineHeight: '1.75rem' }],
+        '2xl': ['1.25rem', { lineHeight: '2rem' }],
+        '3xl': ['1.5rem', { lineHeight: '2.25rem' }],
+        '4xl': ['2rem', { lineHeight: '2.5rem' }],
+        '5xl': ['2.5rem', { lineHeight: '3rem' }],
+        '6xl': ['3.75rem', { lineHeight: '1' }],
+        '7xl': ['4.5rem', { lineHeight: '1' }],
+      },
       animation: {
         'fade-in': 'fadeIn 0.3s ease-out',
         'slide-in': 'slideIn 0.3s ease-out',
@@ -131,7 +131,7 @@ const config: Config = {
       },
     },
   },
-  plugins: [],
+  plugins: [require("@tailwindcss/typography")],
 };
 
 export default config;
