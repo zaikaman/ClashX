@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import UTC, datetime
+import re
 from typing import Any
 
 import anyio
@@ -15,6 +16,7 @@ from src.services.rules_engine import RulesEngine
 from src.services.supabase_rest import SupabaseRestClient
 
 MARKET_UNIVERSE_SYMBOL = "__BOT_MARKET_UNIVERSE__"
+_SYMBOL_TOKEN_RE = re.compile(r"^[A-Z0-9]+$")
 
 
 class BotRuntimeEngine:
@@ -331,16 +333,50 @@ class BotRuntimeEngine:
     def _derive_allowed_symbols_from_bot(cls, bot: dict[str, Any]) -> list[str]:
         rules_json = bot.get("rules_json") if isinstance(bot.get("rules_json"), dict) else {}
         selected_symbols = rules_json.get("selected_market_symbols")
-        if isinstance(selected_symbols, list):
-            normalized_selected = cls._normalize_symbols(selected_symbols)
-            if normalized_selected:
-                return normalized_selected
-
         explicit_symbols = cls._extract_rule_symbols(rules_json)
-        if explicit_symbols:
+        normalized_selected = cls._normalize_symbols(selected_symbols) if isinstance(selected_symbols, list) else []
+        uses_market_universe = cls._rules_use_market_universe_symbol(rules_json)
+
+        if uses_market_universe:
+            merged_symbols = cls._normalize_symbols([*explicit_symbols, *normalized_selected])
+            if merged_symbols:
+                return merged_symbols
+        elif explicit_symbols:
             return explicit_symbols
 
+        if normalized_selected:
+            return normalized_selected
+
         return cls._market_scope_symbols(str(bot.get("market_scope") or ""))
+
+    @classmethod
+    def _rules_use_market_universe_symbol(cls, rules_json: dict[str, Any]) -> bool:
+        for group in ("conditions", "actions"):
+            rows = rules_json.get(group)
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                symbol = cls._normalize_symbol(row.get("symbol"))
+                if symbol == MARKET_UNIVERSE_SYMBOL:
+                    return True
+
+        graph = rules_json.get("graph")
+        if isinstance(graph, dict):
+            nodes = graph.get("nodes")
+            if isinstance(nodes, list):
+                for node in nodes:
+                    if not isinstance(node, dict):
+                        continue
+                    config = node.get("config")
+                    if not isinstance(config, dict):
+                        continue
+                    symbol = cls._normalize_symbol(config.get("symbol"))
+                    if symbol == MARKET_UNIVERSE_SYMBOL:
+                        return True
+
+        return False
 
     @classmethod
     def _extract_rule_symbols(cls, rules_json: dict[str, Any]) -> list[str]:
@@ -383,7 +419,16 @@ class BotRuntimeEngine:
         if not normalized or "all pacifica" in normalized.lower():
             return []
         tail = normalized.split("/")[-1]
-        return cls._normalize_symbols(tail.split(","))
+        candidate_symbols = cls._normalize_symbols(tail.split(","))
+        return [symbol for symbol in candidate_symbols if cls._looks_like_market_symbol(symbol)]
+
+    @staticmethod
+    def _looks_like_market_symbol(symbol: str) -> bool:
+        if not symbol:
+            return False
+        if not _SYMBOL_TOKEN_RE.match(symbol):
+            return False
+        return any(character.isalpha() for character in symbol)
 
     @classmethod
     def _normalize_symbols(cls, values: list[Any]) -> list[str]:

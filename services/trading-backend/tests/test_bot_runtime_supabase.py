@@ -504,7 +504,40 @@ def test_update_bot_syncs_runtime_allowlist_when_previous_symbols_match_out_of_o
     tables = _seed_tables()
     tables["bot_definitions"][0]["rules_json"] = {
         "selected_market_symbols": ["BTC", "ETH", "SOL"],
-        "graph": _graph_rules()["graph"],
+        "graph": {
+            "version": 1,
+            "entry": "builder-entry",
+            "nodes": [
+                {"id": "builder-entry", "kind": "entry", "position": {"x": 0, "y": 0}},
+                {
+                    "id": "condition-rsi",
+                    "kind": "condition",
+                    "position": {"x": 180, "y": 80},
+                    "config": {
+                        "type": "rsi_above",
+                        "symbol": "__BOT_MARKET_UNIVERSE__",
+                        "timeframe": "1m",
+                        "period": 14,
+                        "value": 70,
+                    },
+                },
+                {
+                    "id": "action-open",
+                    "kind": "action",
+                    "position": {"x": 380, "y": 80},
+                    "config": {
+                        "type": "open_long",
+                        "symbol": "__BOT_MARKET_UNIVERSE__",
+                        "size_usd": 100,
+                        "leverage": 3,
+                    },
+                },
+            ],
+            "edges": [
+                {"id": "edge-entry-condition", "source": "builder-entry", "target": "condition-rsi"},
+                {"id": "edge-condition-action", "source": "condition-rsi", "target": "action-open"},
+            ],
+        },
     }
     tables["bot_runtimes"][0]["risk_policy_json"]["allowed_symbols"] = ["SOL", "BTC", "ETH"]
     fake_supabase = FakeSupabaseRestClient(tables)
@@ -517,7 +550,40 @@ def test_update_bot_syncs_runtime_allowlist_when_previous_symbols_match_out_of_o
         wallet_address="wallet-1",
         rules_json={
             "selected_market_symbols": ["BTC", "SOL", "ADA", "HYPE", "BCH", "BNB"],
-            "graph": _graph_rules()["graph"],
+            "graph": {
+                "version": 1,
+                "entry": "builder-entry",
+                "nodes": [
+                    {"id": "builder-entry", "kind": "entry", "position": {"x": 0, "y": 0}},
+                    {
+                        "id": "condition-rsi",
+                        "kind": "condition",
+                        "position": {"x": 180, "y": 80},
+                        "config": {
+                            "type": "rsi_above",
+                            "symbol": "__BOT_MARKET_UNIVERSE__",
+                            "timeframe": "1m",
+                            "period": 14,
+                            "value": 70,
+                        },
+                    },
+                    {
+                        "id": "action-open",
+                        "kind": "action",
+                        "position": {"x": 380, "y": 80},
+                        "config": {
+                            "type": "open_long",
+                            "symbol": "__BOT_MARKET_UNIVERSE__",
+                            "size_usd": 100,
+                            "leverage": 3,
+                        },
+                    },
+                ],
+                "edges": [
+                    {"id": "edge-entry-condition", "source": "builder-entry", "target": "condition-rsi"},
+                    {"id": "edge-condition-action", "source": "condition-rsi", "target": "action-open"},
+                ],
+            },
         },
     )
 
@@ -588,6 +654,100 @@ def test_update_bot_syncs_matching_runtime_when_multiple_runtime_rows_exist() ->
         "BCH",
         "BNB",
     ]
+
+
+def test_update_bot_syncs_runtime_allowlist_from_explicit_rules_when_selected_symbols_are_stale() -> None:
+    tables = _seed_tables()
+    tables["bot_definitions"][0]["rules_json"] = {
+        "selected_market_symbols": ["BTC", "ETH", "SOL"],
+        "graph": {
+            "version": 1,
+            "entry": "builder-entry",
+            "nodes": [
+                {"id": "builder-entry", "kind": "entry", "position": {"x": 0, "y": 0}},
+                {
+                    "id": "condition-rsi",
+                    "kind": "condition",
+                    "position": {"x": 180, "y": 80},
+                    "config": {
+                        "type": "rsi_above",
+                        "symbol": "__BOT_MARKET_UNIVERSE__",
+                        "timeframe": "1m",
+                        "period": 14,
+                        "value": 70,
+                    },
+                },
+                {
+                    "id": "action-open",
+                    "kind": "action",
+                    "position": {"x": 380, "y": 80},
+                    "config": {
+                        "type": "open_long",
+                        "symbol": "__BOT_MARKET_UNIVERSE__",
+                        "size_usd": 100,
+                        "leverage": 3,
+                    },
+                },
+            ],
+            "edges": [
+                {"id": "edge-entry-condition", "source": "builder-entry", "target": "condition-rsi"},
+                {"id": "edge-condition-action", "source": "condition-rsi", "target": "action-open"},
+            ],
+        },
+    }
+    tables["bot_runtimes"][0]["risk_policy_json"]["allowed_symbols"] = ["BTC", "ETH", "SOL"]
+    fake_supabase = FakeSupabaseRestClient(tables)
+    service = BotBuilderService()
+    service.supabase = fake_supabase
+
+    service.update_bot(
+        None,
+        bot_id="bot-1",
+        wallet_address="wallet-1",
+        rules_json={
+            "selected_market_symbols": ["BTC", "ETH", "SOL"],
+            "graph": {
+                "version": 1,
+                "entry": "builder-entry",
+                "nodes": [
+                    {"id": "builder-entry", "kind": "entry", "position": {"x": 0, "y": 0}},
+                    {
+                        "id": "condition-rsi",
+                        "kind": "condition",
+                        "position": {"x": 180, "y": 80},
+                        "config": {
+                            "type": "rsi_above",
+                            "symbol": "LTC",
+                            "timeframe": "1m",
+                            "period": 14,
+                            "value": 70,
+                        },
+                    },
+                    {
+                        "id": "action-open",
+                        "kind": "action",
+                        "position": {"x": 380, "y": 80},
+                        "config": {
+                            "type": "open_long",
+                            "symbol": "LTC",
+                            "size_usd": 100,
+                            "leverage": 3,
+                        },
+                    },
+                ],
+                "edges": [
+                    {"id": "edge-entry-condition", "source": "builder-entry", "target": "condition-rsi"},
+                    {"id": "edge-condition-action", "source": "condition-rsi", "target": "action-open"},
+                ],
+            },
+        },
+    )
+
+    assert fake_supabase.tables["bot_runtimes"][0]["risk_policy_json"]["allowed_symbols"] == ["LTC"]
+
+
+def test_market_scope_parser_ignores_summary_label_strings() -> None:
+    assert BotRuntimeEngine._market_scope_symbols("4 Pacifica markets") == []
 
 
 def test_list_runtimes_for_wallet_returns_serialized_runtime_summaries() -> None:
