@@ -53,18 +53,18 @@
   > **Start Frame Prompt:** *the fragile glass cube shatters into pieces, freeing the bright white spark of the idea*
   > **End Frame Prompt:** *a massive, sleek, cyber-luxury mechanical infrastructure safely catching the spark and routing it perfectly into a glowing digital wallet icon, representing flawless systematic execution*
 
-## 2. Solution Overview (0:40 - 1:20)
+## 2. Solution Overview (0:40 - 1:00)
 **Visual:** 
-- Cut to the ClashX Landing Page. 
-- Scroll smoothly to highlight the core value propositions (Visual Builder, AI Copilot, Copy Trading).
-- Cut to the main User Dashboard showing an active fleet of bots generating PnL.
+- The video cuts to the top of the **ClashX Landing Page**.
+- *Scroll Down 1:* The page scrolls past the Hero ("Social Bot Trading on Pacifica") and down to the "Engine" section, highlighting the Live Execution Feed terminal.
+- *Scroll Down 2:* Scrolls to the Feature Showcase grid, hovering the mouse over the "Advanced Bot Builder" and "Creator Marketplace" cards.
 
 **Audio / Voiceover:**
-"That’s why we built ClashX—a Pacifica-native autonomous trading bot platform.
+"ClashX is a Pacifica-native autonomous trading platform.
 
-ClashX transforms the user from a manual trader into a bot operator. Instead of placing discretionary trades, you design, test, and deploy automated strategies that execute continuously on Pacifica's on-chain perpetuals infrastructure. 
+Your bots don't sleep. Every tick, our engine evaluates live market data and executes directly through Pacifica's on-chain order book. 
 
-Whether you want to build a strategy using our drag-and-drop visual graph, generate one using our AI Copilot in plain English, or simply copy a top-performing creator from our public leaderboard, ClashX gives you hedge-fund-level execution tools without ever taking custody of your funds."
+Harness our visual rules engine to craft precision-driven bots, or discover top-performing strategies in the Creator Marketplace to mirror live. Maximum control. Optimal returns."
 
 ## 3. Live Product Walkthrough (1:20 - 4:20)
 **Visual:** 
