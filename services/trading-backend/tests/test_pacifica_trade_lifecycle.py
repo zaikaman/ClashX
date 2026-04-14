@@ -451,6 +451,55 @@ def test_bot_runtime_worker_sets_tpsl_with_required_close_side() -> None:
     assert pacifica.order_calls[0]["stop_loss"]["stop_price"] == 104055.0
 
 
+def test_bot_runtime_worker_prefers_managed_position_side_for_tpsl_when_wallet_snapshot_is_stale() -> None:
+    worker = BotRuntimeWorker()
+    pacifica = FakePacificaClient()
+    worker._pacifica = pacifica
+
+    credentials = {
+        "account_address": "wallet-1",
+        "agent_wallet_address": "agent-1",
+        "agent_private_key": "secret",
+    }
+    market_lookup = {
+        "BTC": {
+            "symbol": "BTC-PERP",
+            "mark_price": 105_000.0,
+            "lot_size": 0.001,
+        }
+    }
+
+    asyncio.run(
+        worker._execute_action(
+            runtime_state={
+                "managed_positions": {
+                    "BTC": {
+                        "symbol": "BTC",
+                        "side": "bid",
+                        "amount": 0.002,
+                    }
+                }
+            },
+            action={"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.8, "stop_loss_pct": 0.9},
+            credentials=credentials,
+            market_lookup=market_lookup,
+            position_lookup={
+                "BTC": {
+                    "symbol": "BTC",
+                    "side": "ask",
+                    "amount": 0.01,
+                    "mark_price": 105_000.0,
+                }
+            },
+        )
+    )
+
+    assert pacifica.order_calls[0]["type"] == "set_position_tpsl"
+    assert pacifica.order_calls[0]["side"] == "ask"
+    assert pacifica.order_calls[0]["take_profit"]["stop_price"] == 106890.0
+    assert pacifica.order_calls[0]["stop_loss"]["stop_price"] == 104055.0
+
+
 def test_bot_runtime_worker_caps_tpsl_amount_to_live_position_size() -> None:
     worker = BotRuntimeWorker()
     pacifica = FakePacificaClient()

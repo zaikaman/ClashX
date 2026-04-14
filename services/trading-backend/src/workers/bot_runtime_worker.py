@@ -986,8 +986,11 @@ class BotRuntimeWorker:
             )
             if amount <= 0:
                 raise ValueError(f"No open position to close for {symbol}")
-            side = str(position.get("side") or "").lower()
-            close_side = "ask" if side in {"bid", "long"} else "bid"
+            side = self._resolve_position_side(
+                managed_position=managed_position,
+                wallet_position=position,
+            )
+            close_side = self._position_close_side(side)
             reference_price = float(position.get("mark_price") or (market_lookup.get(symbol) or {}).get("mark_price") or 0)
             response = await self._pacifica.place_order(
                 {"type": "create_market_order", **payload, "side": close_side, "amount": amount, "reduce_only": True}
@@ -1017,9 +1020,12 @@ class BotRuntimeWorker:
                 raise ValueError(f"Cannot set TP/SL without valid position price for {symbol}")
             tp_pct = float(action.get("take_profit_pct") or 0)
             sl_pct = float(action.get("stop_loss_pct") or 0)
-            side = str(position.get("side") or "").lower()
-            close_side = "ask" if side in {"bid", "long"} else "bid"
-            if side in {"bid", "long"}:
+            side = self._resolve_position_side(
+                managed_position=managed_position,
+                wallet_position=position,
+            )
+            close_side = self._position_close_side(side)
+            if self._is_long_position_side(side):
                 take_profit_price = self._normalize_price_to_tick(
                     mark_price * (1 + tp_pct / 100),
                     tick_size=tick_size,
@@ -2238,6 +2244,22 @@ class BotRuntimeWorker:
         if managed_amount > 0:
             return managed_amount
         return wallet_amount
+
+    @staticmethod
+    def _resolve_position_side(*, managed_position: dict[str, Any], wallet_position: dict[str, Any]) -> str:
+        managed_side = str(managed_position.get("side") or "").lower().strip() if isinstance(managed_position, dict) else ""
+        wallet_side = str(wallet_position.get("side") or "").lower().strip() if isinstance(wallet_position, dict) else ""
+        if managed_side in {"bid", "ask", "long", "short"}:
+            return managed_side
+        return wallet_side
+
+    @staticmethod
+    def _is_long_position_side(side: str) -> bool:
+        return side.lower().strip() in {"bid", "long"}
+
+    @staticmethod
+    def _position_close_side(side: str) -> str:
+        return "ask" if BotRuntimeWorker._is_long_position_side(side) else "bid"
 
     @staticmethod
     def _entry_retry_generation(*, runtime_state: dict[str, Any], symbol: str) -> int:
