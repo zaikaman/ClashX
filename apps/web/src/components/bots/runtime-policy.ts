@@ -69,3 +69,11 @@ export function runtimePolicyDraftToPayload(draft: RuntimePolicyDraft): Record<s
     risk_per_trade_pct: draft.riskPerTradePct,
   };
 }
+
+export function runtimePolicyDraftToPayloadWithoutAllowlist(
+  draft: RuntimePolicyDraft,
+): Record<string, unknown> {
+  const payload = runtimePolicyDraftToPayload(draft);
+  delete payload.allowed_symbols;
+  return payload;
+}

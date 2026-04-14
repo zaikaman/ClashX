@@ -143,19 +143,19 @@ export function AdvancedSettingsPanel({
             Execution scope
           </span>
           <p className="text-sm leading-7 text-neutral-400">
-            Limit which markets can trade and how position sizing should be calculated.
+            Market scope is managed in Builder. This panel only controls runtime risk and sizing.
           </p>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
           <label className={FIELD_LABEL_CLASS}>
-            Market scope symbols
+            Market scope symbols (Builder only)
             <input
               value={policy.allowedSymbols}
-              onChange={(event) => updatePolicy({ allowedSymbols: event.target.value })}
+              readOnly
               placeholder="BTC,ETH,SOL"
               className={INPUT_CLASS}
-              disabled={inputsDisabled}
+              aria-readonly="true"
             />
           </label>
           <label className={FIELD_LABEL_CLASS}>
@@ -198,6 +198,9 @@ export function AdvancedSettingsPanel({
           )}
         </div>
 
+        <p className="text-xs leading-6 text-neutral-500">
+          Market scope cannot be edited here. Use the Builder page to change which symbols this bot may trade.
+        </p>
         <p className="text-xs leading-6 text-neutral-500">
           Drawdown uses realized plus unrealized PnL against this runtime allocation. If a bot with $
           {policy.allocatedCapitalUsd || 0} allocated reaches a {policy.maxDrawdownPct}% loss budget, it is stopped

@@ -11,7 +11,7 @@ import {
   DEFAULT_RUNTIME_POLICY,
   type RuntimePolicyDraft,
   runtimePolicyDraftFromPolicy,
-  runtimePolicyDraftToPayload,
+  runtimePolicyDraftToPayloadWithoutAllowlist,
 } from "@/components/bots/runtime-policy";
 import { useClashxAuth } from "@/lib/clashx-auth";
 import type { BotPerformance } from "@/lib/bot-performance";
@@ -650,7 +650,7 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
         headers: await getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           wallet_address: walletAddress,
-          risk_policy_json: runtimePolicyDraftToPayload(runtimePolicy),
+          risk_policy_json: runtimePolicyDraftToPayloadWithoutAllowlist(runtimePolicy),
         }),
       });
       const payload = await unwrapResponse<RuntimeRiskStateResponse>(response, "Could not save runtime policy");

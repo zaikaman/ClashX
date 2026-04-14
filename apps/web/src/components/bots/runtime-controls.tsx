@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   type RuntimePolicyDraft,
-  runtimePolicyDraftToPayload,
+  runtimePolicyDraftToPayloadWithoutAllowlist,
 } from "@/components/bots/runtime-policy";
 import {
   PacificaOnboardingChecklist,
@@ -60,7 +60,10 @@ export function RuntimeControls({
     agentAuthorized: false,
   });
 
-  const serializedRiskPolicy = useMemo(() => runtimePolicyDraftToPayload(riskPolicy), [riskPolicy]);
+  const serializedRiskPolicy = useMemo(
+    () => runtimePolicyDraftToPayloadWithoutAllowlist(riskPolicy),
+    [riskPolicy],
+  );
 
   useEffect(() => {
     if (!authenticated || !walletAddress) {
