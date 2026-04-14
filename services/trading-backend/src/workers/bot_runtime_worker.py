@@ -435,7 +435,10 @@ class BotRuntimeWorker:
                 "runtime": {"id": runtime["id"], "state": cycle_runtime_state},
                 "market_lookup": resolved_market_lookup,
                 "candle_lookup": resolved_candle_lookup,
-                "position_lookup": position_lookup,
+                "position_lookup": self._build_managed_position_lookup(
+                    runtime_state=cycle_runtime_state,
+                    live_position_lookup=position_lookup,
+                ),
             },
         )
         if not evaluation.get("triggered"):
@@ -1821,6 +1824,43 @@ class BotRuntimeWorker:
             symbol = self._normalize_symbol(item.get("symbol"))
             if symbol:
                 lookup[symbol] = item
+        return lookup
+
+    def _build_managed_position_lookup(
+        self,
+        *,
+        runtime_state: dict[str, Any],
+        live_position_lookup: dict[str, dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        managed_positions = runtime_state.get("managed_positions")
+        if not isinstance(managed_positions, dict):
+            return {}
+
+        lookup: dict[str, dict[str, Any]] = {}
+        for raw_symbol, managed_position in managed_positions.items():
+            if not isinstance(managed_position, dict):
+                continue
+            symbol = self._normalize_symbol(managed_position.get("symbol") or raw_symbol)
+            if not symbol:
+                continue
+            managed_amount = abs(self._coerce_float(managed_position.get("amount")))
+            if managed_amount <= 0:
+                continue
+
+            wallet_position = live_position_lookup.get(symbol)
+            resolved_amount = self._resolve_position_amount(
+                managed_position=managed_position,
+                wallet_position=wallet_position if isinstance(wallet_position, dict) else {},
+            )
+            combined = dict(wallet_position) if isinstance(wallet_position, dict) else {}
+            combined.update(managed_position)
+            combined["symbol"] = symbol
+            combined["amount"] = resolved_amount if resolved_amount > 0 else managed_amount
+            if isinstance(wallet_position, dict):
+                for key in ("mark_price", "margin", "quantity", "unrealized_pnl", "unrealized_pnl_pct"):
+                    if key in wallet_position:
+                        combined[key] = wallet_position.get(key)
+            lookup[symbol] = combined
         return lookup
 
     def _build_open_order_lookup(self, open_orders: list[Any]) -> dict[str, list[dict[str, Any]]]:

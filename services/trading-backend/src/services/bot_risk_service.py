@@ -107,14 +107,9 @@ class BotRiskService:
             managed_position = {}
 
         allowed_symbols = normalized.get("allowed_symbols") or []
-        live_position_symbols = self._live_position_symbols(
-            position_lookup=positions,
-            allowed_symbols=allowed_symbols,
-        )
         reserved_entry_symbols = self._reserved_entry_symbols(
             managed_positions=managed_positions,
             pending_entries=pending_entries,
-            live_position_symbols=live_position_symbols,
         )
         if symbol and allowed_symbols and symbol not in allowed_symbols:
             issues.append(f"symbol {symbol} is not in allowed_symbols policy")
@@ -151,8 +146,6 @@ class BotRiskService:
                 )
             if abs(self._to_float(managed_position.get("amount"), 0.0)) > 0:
                 issues.append(f"bot already manages an open position on {symbol}")
-            elif symbol and symbol in live_position_symbols:
-                issues.append(f"existing live position on {symbol} already consumes bot capacity")
             symbol_orders = open_orders.get(symbol) or []
             entry_client_order_id = str(managed_position.get("entry_client_order_id") or "").strip()
             if entry_client_order_id and any(
@@ -338,31 +331,11 @@ class BotRiskService:
         order_type = str(order.get("order_type") or order.get("kind") or "").strip().lower()
         return "stop_loss" in order_type or order_type.startswith("sl")
 
-    def _live_position_symbols(
-        self,
-        *,
-        position_lookup: dict[str, dict[str, Any]],
-        allowed_symbols: list[str],
-    ) -> set[str]:
-        allowed = {str(symbol).upper().replace("-PERP", "") for symbol in allowed_symbols if str(symbol).strip()}
-        live_symbols: set[str] = set()
-        for raw_symbol, position in position_lookup.items():
-            if not isinstance(position, dict):
-                continue
-            symbol = str(position.get("symbol") or raw_symbol).upper().replace("-PERP", "")
-            if not symbol or (allowed and symbol not in allowed):
-                continue
-            if abs(self._to_float(position.get("amount"), 0.0)) <= 0:
-                continue
-            live_symbols.add(symbol)
-        return live_symbols
-
     def _reserved_entry_symbols(
         self,
         *,
         managed_positions: dict[str, Any],
         pending_entries: dict[str, Any],
-        live_position_symbols: set[str],
     ) -> set[str]:
         reserved_symbols = {
             str(item.get("symbol") or symbol).strip().upper().replace("-PERP", "")
@@ -374,6 +347,5 @@ class BotRiskService:
             for symbol in pending_entries
             if str(symbol).strip()
         )
-        reserved_symbols.update(live_position_symbols)
         reserved_symbols.discard("")
         return reserved_symbols

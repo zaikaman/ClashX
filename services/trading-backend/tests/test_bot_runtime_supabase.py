@@ -1128,7 +1128,7 @@ def test_runtime_worker_skips_market_evaluation_for_entry_only_bot_at_position_c
     assert fake_supabase.tables["bot_execution_events"] == []
 
 
-def test_runtime_worker_skips_new_entry_when_live_allowed_symbol_position_consumes_capacity() -> None:
+def test_runtime_worker_allows_new_entry_when_live_position_is_unmanaged() -> None:
     tables = _seed_tables()
     tables["bot_runtimes"][0]["risk_policy_json"]["max_open_positions"] = 1
     tables["bot_runtimes"][0]["risk_policy_json"]["allowed_symbols"] = ["BTC", "ETH", "SOL"]
@@ -1157,15 +1157,51 @@ def test_runtime_worker_skips_new_entry_when_live_allowed_symbol_position_consum
 
     asyncio.run(worker._process_runtime(None, fake_supabase.tables["bot_runtimes"][0]))
 
-    skipped_events = [
-        event
-        for event in fake_supabase.tables["bot_execution_events"]
-        if event["event_type"] == "action.skipped"
-    ]
+    assert len(fake_pacifica.orders) == 2
+    assert fake_pacifica.orders[0]["type"] == "update_leverage"
+    assert fake_pacifica.orders[1]["symbol"] == "BTC"
+    assert fake_pacifica.orders[1]["side"] == "bid"
+    assert fake_supabase.tables["bot_execution_events"][-1]["event_type"] == "action.executed"
 
-    assert fake_pacifica.orders == []
-    assert len(skipped_events) == 1
-    assert skipped_events[0]["result_payload"] == {"issues": ["max_open_positions 1 reached"]}
+
+def test_runtime_worker_builds_rules_position_lookup_from_managed_positions_only() -> None:
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+
+    position_lookup = worker._build_managed_position_lookup(
+        runtime_state={
+            "managed_positions": {
+                "BTC": {
+                    "symbol": "BTC",
+                    "amount": 0.005,
+                    "side": "bid",
+                    "entry_price": 101000,
+                }
+            }
+        },
+        live_position_lookup={
+            "BTC": {
+                "symbol": "BTC",
+                "amount": 0.25,
+                "side": "bid",
+                "entry_price": 100500,
+                "mark_price": 105000,
+                "unrealized_pnl": 123.45,
+            },
+            "SOL": {
+                "symbol": "SOL",
+                "amount": 5.0,
+                "side": "ask",
+                "entry_price": 150,
+                "mark_price": 149,
+            },
+        },
+    )
+
+    assert set(position_lookup) == {"BTC"}
+    assert position_lookup["BTC"]["amount"] == 0.005
+    assert position_lookup["BTC"]["entry_price"] == 101000
+    assert position_lookup["BTC"]["mark_price"] == 105000
+    assert position_lookup["BTC"]["unrealized_pnl"] == 123.45
 
 
 def test_runtime_worker_skips_market_evaluation_for_unrelated_entry_plus_tpsl_routes_at_position_capacity() -> None:

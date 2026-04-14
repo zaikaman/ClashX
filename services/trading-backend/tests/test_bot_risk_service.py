@@ -123,7 +123,7 @@ def test_normalize_policy_includes_runtime_sizing_fields() -> None:
     assert policy["risk_per_trade_pct"] == 1.5
 
 
-def test_assess_action_blocks_new_entry_when_live_allowed_symbol_position_consumes_capacity() -> None:
+def test_assess_action_allows_new_entry_when_only_unmanaged_live_position_exists() -> None:
     service = BotRiskService()
 
     issues = service.assess_action(
@@ -135,4 +135,19 @@ def test_assess_action_blocks_new_entry_when_live_allowed_symbol_position_consum
         market_lookup={"BTC": {"mark_price": 100_000.0, "max_leverage": 5}},
     )
 
-    assert "max_open_positions 1 reached" in issues
+    assert issues == []
+
+
+def test_assess_action_allows_same_symbol_entry_when_live_position_is_unmanaged() -> None:
+    service = BotRiskService()
+
+    issues = service.assess_action(
+        policy={"max_open_positions": 1, "allowed_symbols": ["BTC", "ETH", "SOL"]},
+        action={"type": "open_long", "symbol": "SOL", "size_usd": 100, "leverage": 2},
+        runtime_state={},
+        position_lookup={"SOL": {"symbol": "SOL", "amount": 0.25, "side": "ask"}},
+        open_order_lookup={},
+        market_lookup={"SOL": {"mark_price": 150.0, "max_leverage": 5}},
+    )
+
+    assert issues == []
