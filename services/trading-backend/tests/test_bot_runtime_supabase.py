@@ -1334,6 +1334,81 @@ def test_runtime_worker_drops_duplicate_tpsl_when_position_is_already_protected(
     assert actions == []
 
 
+def test_runtime_worker_drops_duplicate_tpsl_when_open_orders_are_temporarily_unsynced() -> None:
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+
+    actions = worker._prune_triggered_actions(
+        actions=[
+            {"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 2.0, "stop_loss_pct": 1.0},
+        ],
+        runtime_policy={"max_open_positions": 1},
+        runtime_state={
+            "managed_positions": {
+                "BTC": {
+                    "symbol": "BTC",
+                    "amount": 0.005,
+                    "side": "bid",
+                    "take_profit_client_order_id": "tp-1",
+                    "stop_loss_client_order_id": "sl-1",
+                }
+            }
+        },
+        position_lookup={"BTC": {"symbol": "BTC", "amount": 0.005}},
+        open_order_lookup={},
+        open_orders_synced=False,
+    )
+
+    assert actions == []
+
+
+def test_runtime_worker_drops_tpsl_when_open_orders_are_synced_but_runtime_already_recorded_tpsl() -> None:
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+
+    actions = worker._prune_triggered_actions(
+        actions=[
+            {"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 2.0, "stop_loss_pct": 1.0},
+        ],
+        runtime_policy={"max_open_positions": 1},
+        runtime_state={
+            "managed_positions": {
+                "BTC": {
+                    "symbol": "BTC",
+                    "amount": 0.005,
+                    "side": "bid",
+                    "take_profit_client_order_id": "tp-1",
+                    "stop_loss_client_order_id": "sl-1",
+                }
+            }
+        },
+        position_lookup={"BTC": {"symbol": "BTC", "amount": 0.005}},
+        open_order_lookup={},
+        open_orders_synced=True,
+    )
+
+    assert actions == []
+
+
+def test_runtime_worker_keeps_tpsl_when_fresh_entry_action_is_in_same_batch() -> None:
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+
+    actions = worker._prune_triggered_actions(
+        actions=[
+            {"type": "open_long", "symbol": "BTC", "size_usd": 120, "leverage": 3},
+            {"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 2.0, "stop_loss_pct": 1.0},
+        ],
+        runtime_policy={"max_open_positions": 1},
+        runtime_state={},
+        position_lookup={},
+        open_order_lookup={},
+        open_orders_synced=True,
+    )
+
+    assert actions == [
+        {"type": "open_long", "symbol": "BTC", "size_usd": 120, "leverage": 3},
+        {"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 2.0, "stop_loss_pct": 1.0},
+    ]
+
+
 def test_runtime_worker_deduplicates_identical_skip_events_within_recent_window() -> None:
     fake_supabase = FakeSupabaseRestClient(_seed_tables())
     worker = BotRuntimeWorker(poll_interval_seconds=0.01)

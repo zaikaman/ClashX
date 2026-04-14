@@ -268,16 +268,19 @@ class BotRuntimeWorker:
         previous_wallet_synced_at = str(runtime_state.get("wallet_synced_at") or "").strip()
         positions: list[dict[str, Any]] = []
         open_orders: list[dict[str, Any]] = []
+        open_orders_synced = False
         manual_close_history: list[dict[str, Any]] = []
         close_notifications: list[dict[str, Any]] = []
         if wallet_due:
-            positions, open_orders = await asyncio.gather(
-                self._safe_load(
+            position_result, open_order_result = await asyncio.gather(
+                self._safe_load_with_status(
                     lambda: self._pacifica.get_positions(runtime["wallet_address"], price_lookup=resolved_price_lookup),
                     [],
                 ),
-                self._safe_load(lambda: self._pacifica.get_open_orders(runtime["wallet_address"]), []),
+                self._safe_load_with_status(lambda: self._pacifica.get_open_orders(runtime["wallet_address"]), []),
             )
+            positions = position_result[0]
+            open_orders, open_orders_synced = open_order_result
         position_lookup = self._build_position_lookup(positions)
         open_order_lookup = self._build_open_order_lookup(open_orders)
         runtime_state = {
@@ -451,6 +454,7 @@ class BotRuntimeWorker:
             runtime_state=cycle_runtime_state,
             position_lookup=position_lookup,
             open_order_lookup=open_order_lookup,
+            open_orders_synced=open_orders_synced,
         )
         if not actions:
             return self._maybe_refresh_runtime_heartbeat(runtime, now=now)
@@ -1153,10 +1157,14 @@ class BotRuntimeWorker:
         raise ValueError(f"Unsupported action type: {action_type}")
 
     async def _safe_load(self, loader: Any, fallback: Any) -> Any:
+        value, _synced = await self._safe_load_with_status(loader, fallback)
+        return value
+
+    async def _safe_load_with_status(self, loader: Any, fallback: Any) -> tuple[Any, bool]:
         try:
-            return await loader()
+            return await loader(), True
         except PacificaClientError:
-            return fallback
+            return fallback, False
 
     async def _build_batch_order_request(
         self,
@@ -1751,10 +1759,12 @@ class BotRuntimeWorker:
         runtime_state: dict[str, Any],
         position_lookup: dict[str, dict[str, Any]],
         open_order_lookup: dict[str, list[dict[str, Any]]],
+        open_orders_synced: bool = True,
     ) -> list[dict[str, Any]]:
         max_open_positions = max(1, int(runtime_policy.get("max_open_positions") or 1))
         reserved_symbols = self._reserved_runtime_symbols(runtime_state=runtime_state)
         manageable_symbols = self._managed_runtime_symbols(runtime_state=runtime_state)
+        entry_symbols_in_batch: set[str] = set()
         filtered_actions: list[dict[str, Any]] = []
         for action in actions:
             if not isinstance(action, dict):
@@ -1765,20 +1775,38 @@ class BotRuntimeWorker:
                     continue
                 reserved_symbols.add(symbol)
                 manageable_symbols.add(symbol)
+                entry_symbols_in_batch.add(symbol)
                 filtered_actions.append(action)
                 continue
             if self._is_position_management_action(action):
                 if not symbol or symbol not in manageable_symbols:
                     continue
-                if str(action.get("type") or "") == "set_tpsl" and self._position_is_already_protected(
-                    runtime_state=runtime_state,
-                    position_lookup=position_lookup,
-                    open_order_lookup=open_order_lookup,
-                    symbol=symbol,
-                ):
-                    continue
+                if str(action.get("type") or "") == "set_tpsl":
+                    # TP/SL should be attached to a fresh entry action, not repeatedly re-issued
+                    # for an already-managed position.
+                    if symbol not in entry_symbols_in_batch and self._managed_position_has_recorded_tpsl(
+                        runtime_state=runtime_state,
+                        symbol=symbol,
+                    ):
+                        continue
+                    if self._position_is_already_protected(
+                        runtime_state=runtime_state,
+                        position_lookup=position_lookup,
+                        open_order_lookup=open_order_lookup,
+                        symbol=symbol,
+                        open_orders_synced=open_orders_synced,
+                    ):
+                        continue
             filtered_actions.append(action)
         return filtered_actions
+
+    def _managed_position_has_recorded_tpsl(self, *, runtime_state: dict[str, Any], symbol: str) -> bool:
+        managed_position = self._maybe_get_managed_position(runtime_state=runtime_state, symbol=symbol)
+        if not isinstance(managed_position, dict):
+            return False
+        take_profit_client_order_id = str(managed_position.get("take_profit_client_order_id") or "").strip()
+        stop_loss_client_order_id = str(managed_position.get("stop_loss_client_order_id") or "").strip()
+        return bool(take_profit_client_order_id and stop_loss_client_order_id)
 
     @staticmethod
     def _managed_runtime_symbols(*, runtime_state: dict[str, Any]) -> set[str]:
@@ -1815,6 +1843,7 @@ class BotRuntimeWorker:
         position_lookup: dict[str, dict[str, Any]],
         open_order_lookup: dict[str, list[dict[str, Any]]],
         symbol: str,
+        open_orders_synced: bool = True,
     ) -> bool:
         managed_position = self._maybe_get_managed_position(runtime_state=runtime_state, symbol=symbol)
         if not isinstance(managed_position, dict):
@@ -1834,6 +1863,8 @@ class BotRuntimeWorker:
             and abs(symbol_amount - managed_amount) <= max(1e-9, managed_amount * 0.001)
         )
         if take_profit_client_order_id and stop_loss_client_order_id:
+            if not open_orders_synced and covers_full_position:
+                return True
             open_client_order_ids = {
                 str(item.get("client_order_id") or "").strip()
                 for item in symbol_orders
