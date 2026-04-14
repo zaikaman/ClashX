@@ -15,11 +15,17 @@ import {
 } from "@/components/bots/runtime-policy";
 import { useClashxAuth } from "@/lib/clashx-auth";
 import type { BotPerformance } from "@/lib/bot-performance";
-import type { PublishingSettings } from "@/lib/public-bots";
+import {
+  fetchPublishingSettings,
+  readCachedPublishingSettings,
+  type PublishingSettings,
+} from "@/lib/public-bots";
 import type { RuntimeOverview } from "@/lib/runtime-overview";
 
+const loadAdvancedSettingsPanel = () => import("@/components/bots/advanced-settings-panel");
+
 const AdvancedSettingsPanel = dynamic(
-  () => import("@/components/bots/advanced-settings-panel").then((module) => module.AdvancedSettingsPanel),
+  () => loadAdvancedSettingsPanel().then((module) => module.AdvancedSettingsPanel),
   {
     loading: () => (
       <DeferredPanelPlaceholder
@@ -31,8 +37,10 @@ const AdvancedSettingsPanel = dynamic(
   },
 );
 
+const loadBotPublishingPanel = () => import("@/components/bots/bot-publishing-panel");
+
 const BotPublishingPanel = dynamic(
-  () => import("@/components/bots/bot-publishing-panel").then((module) => module.BotPublishingPanel),
+  () => loadBotPublishingPanel().then((module) => module.BotPublishingPanel),
   {
     loading: () => (
       <DeferredPanelPlaceholder
@@ -44,8 +52,10 @@ const BotPublishingPanel = dynamic(
   },
 );
 
+const loadRuntimeControls = () => import("@/components/bots/runtime-controls");
+
 const RuntimeControls = dynamic(
-  () => import("@/components/bots/runtime-controls").then((module) => module.RuntimeControls),
+  () => loadRuntimeControls().then((module) => module.RuntimeControls),
   {
     loading: () => (
       <DeferredPanelPlaceholder
@@ -211,6 +221,10 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
   const [runtimePolicyStatus, setRuntimePolicyStatus] = useState<"idle" | "loading" | "saving">("idle");
   const [runtimePolicyError, setRuntimePolicyError] = useState<string | null>(null);
   const [runtimePolicyRuntimeId, setRuntimePolicyRuntimeId] = useState<string | null>(null);
+  const [operateModuleStatus, setOperateModuleStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [operatePublishingStatus, setOperatePublishingStatus] = useState<"idle" | "loading" | "ready" | "error">(
+    "idle",
+  );
   const [pageVisible, setPageVisible] = useState(
     typeof document === "undefined" ? true : document.visibilityState === "visible",
   );
@@ -252,6 +266,8 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
       setRuntimePolicyStatus("idle");
       setRuntimePolicyError(null);
       setRuntimePolicyRuntimeId(null);
+      setOperateModuleStatus("idle");
+      setOperatePublishingStatus("idle");
       return;
     }
 
@@ -273,6 +289,7 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
       setRuntimePolicyStatus("idle");
       setRuntimePolicyError(null);
       setRuntimePolicyRuntimeId(null);
+      setOperatePublishingStatus("idle");
 
       try {
         const headers = await getAuthHeaders();
@@ -326,6 +343,66 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
     void loadPrimary();
     return () => controller.abort();
   }, [authenticated, walletAddress, params.botId, sessionActive, getAuthHeaders]);
+
+  useEffect(() => {
+    if (!sessionActive || !walletAddress) {
+      setOperateModuleStatus("idle");
+      return;
+    }
+
+    let cancelled = false;
+    setOperateModuleStatus("loading");
+
+    Promise.all([loadRuntimeControls(), loadBotPublishingPanel(), loadAdvancedSettingsPanel()])
+      .then(() => {
+        if (!cancelled) {
+          setOperateModuleStatus("ready");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setOperateModuleStatus("error");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionActive, walletAddress]);
+
+  useEffect(() => {
+    if (!sessionActive || !walletAddress || !bot) {
+      setOperatePublishingStatus("idle");
+      return;
+    }
+
+    const resolvedWallet = walletAddress;
+
+    if (readCachedPublishingSettings(params.botId, resolvedWallet)) {
+      setOperatePublishingStatus("ready");
+      return;
+    }
+
+    const controller = new AbortController();
+
+    async function prefetchPublishingSettings() {
+      setOperatePublishingStatus("loading");
+      try {
+        const headers = await getAuthHeaders();
+        await fetchPublishingSettings(params.botId, resolvedWallet, headers, controller.signal);
+        if (!controller.signal.aborted) {
+          setOperatePublishingStatus("ready");
+        }
+      } catch {
+        if (!controller.signal.aborted) {
+          setOperatePublishingStatus("error");
+        }
+      }
+    }
+
+    void prefetchPublishingSettings();
+    return () => controller.abort();
+  }, [bot, getAuthHeaders, params.botId, sessionActive, walletAddress]);
 
   useEffect(() => {
     if (!sessionActive || !walletAddress || runtimeRefreshToken === 0) {
@@ -440,7 +517,7 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
   }, [activeTab, pageVisible, primaryLoading, sessionActive, walletAddress]);
 
   useEffect(() => {
-    if (!sessionActive || !walletAddress || activeTab !== "operate") {
+    if (!sessionActive || !walletAddress) {
       return;
     }
 
@@ -494,7 +571,6 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
     return () => controller.abort();
   }, [
     activeRuntimeId,
-    activeTab,
     getAuthHeaders,
     params.botId,
     runtimePolicyRuntimeId,
@@ -505,6 +581,18 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
   const visibleBot = sessionActive ? bot : null;
   const visibleRuntimeOverview = sessionActive ? runtimeOverview : null;
   const visibleError = sessionActive ? error : null;
+  const runtimePolicyPending =
+    sessionActive &&
+    Boolean(walletAddress) &&
+    Boolean(activeRuntimeId) &&
+    runtimePolicyRuntimeId !== activeRuntimeId &&
+    runtimePolicyError === null;
+  const operateTabLoading =
+    Boolean(walletAddress) &&
+    (primaryLoading ||
+      runtimePolicyPending ||
+      operateModuleStatus === "loading" ||
+      operatePublishingStatus === "loading");
 
   const initialPublishingSettings = useMemo<PublishingSettings | null>(() => {
     if (!visibleBot) {
@@ -715,94 +803,100 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
               />
 
               {walletAddress ? (
-                <RuntimeControls
-                  botId={params.botId}
-                  walletAddress={walletAddress}
-                  riskPolicy={runtimePolicy}
-                  policyLoading={runtimePolicyStatus === "loading"}
-                  getAuthHeaders={getAuthHeaders}
-                  onRuntimeUpdate={refreshRuntimeData}
-                />
+                operateTabLoading ? (
+                  <OperateTabSkeleton />
+                ) : (
+                  <>
+                    <RuntimeControls
+                      botId={params.botId}
+                      walletAddress={walletAddress}
+                      riskPolicy={runtimePolicy}
+                      policyLoading={runtimePolicyStatus === "loading"}
+                      getAuthHeaders={getAuthHeaders}
+                      onRuntimeUpdate={refreshRuntimeData}
+                    />
+
+                    {visibleBot ? (
+                      <div className="grid gap-5 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] p-4 md:p-5">
+                        <div className="grid gap-5 xl:grid-cols-[0.28fr_1fr] xl:items-start">
+                          <div className="grid gap-4">
+                            <div className="rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4">
+                              <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                                Publishing
+                              </div>
+                              <div className="mt-2 font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">
+                                Marketplace profile
+                              </div>
+                              <p className="mt-2 text-sm leading-6 text-neutral-400">
+                                Access mode, creator details, and discovery copy.
+                              </p>
+                            </div>
+
+                            <div className="rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4">
+                              <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">
+                                Advanced settings
+                              </div>
+                              <div className="mt-2 font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">
+                                Runtime policy
+                              </div>
+                              <p className="mt-2 text-sm leading-6 text-neutral-400">
+                                Leverage, drawdown, cooldowns, and sizing rules.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="grid gap-5">
+                            <div className="grid gap-3">
+                              <SectionIntro
+                                eyebrow="Publishing"
+                                title="Control visibility"
+                                copy="Manage how this bot appears in the marketplace."
+                              />
+                              <BotPublishingPanel
+                                key={visibleBot.id}
+                                botId={visibleBot.id}
+                                runtimeId={activeRuntimeId}
+                                walletAddress={walletAddress}
+                                getAuthHeaders={getAuthHeaders}
+                                initialSettings={initialPublishingSettings}
+                                onSaved={(nextSettings) => {
+                                  setBot((current) => (current ? { ...current, visibility: nextSettings.visibility } : current));
+                                }}
+                              />
+                            </div>
+
+                            <div className="h-px bg-[rgba(255,255,255,0.06)]" />
+
+                            <div className="grid gap-3">
+                              <SectionIntro
+                                eyebrow="Advanced settings"
+                                title="Runtime policy"
+                                copy="The deploy controls and live policy editor both use this same policy source."
+                              />
+                              <AdvancedSettingsPanel
+                                policy={runtimePolicy}
+                                status={runtimePolicyStatus}
+                                error={runtimePolicyError}
+                                isDeployed={Boolean(activeRuntimeId)}
+                                onPolicyChange={(nextPolicy) => {
+                                  setRuntimePolicy(nextPolicy);
+                                  setRuntimePolicyError(null);
+                                }}
+                                onSave={saveRuntimePolicy}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                  </>
+                )
               ) : (
                 <article className="rounded-[1.8rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] px-5 py-5 text-sm leading-7 text-neutral-400">
                   Connect the wallet for this bot to unlock deployment and live controls.
                 </article>
               )}
             </div>
-
-            {walletAddress && visibleBot ? (
-              <div className="grid gap-5 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] p-4 md:p-5">
-                <div className="grid gap-5 xl:grid-cols-[0.28fr_1fr] xl:items-start">
-                  <div className="grid gap-4">
-                    <div className="rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4">
-                      <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">
-                        Publishing
-                      </div>
-                      <div className="mt-2 font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">
-                        Marketplace profile
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-neutral-400">
-                        Access mode, creator details, and discovery copy.
-                      </p>
-                    </div>
-
-                    <div className="rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4">
-                      <div className="text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">
-                        Advanced settings
-                      </div>
-                      <div className="mt-2 font-mono text-lg font-bold uppercase tracking-tight text-neutral-50">
-                        Runtime policy
-                      </div>
-                      <p className="mt-2 text-sm leading-6 text-neutral-400">
-                        Leverage, drawdown, cooldowns, and sizing rules.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-5">
-                    <div className="grid gap-3">
-                      <SectionIntro
-                        eyebrow="Publishing"
-                        title="Control visibility"
-                        copy="Manage how this bot appears in the marketplace."
-                      />
-                      <BotPublishingPanel
-                        key={visibleBot.id}
-                        botId={visibleBot.id}
-                        runtimeId={activeRuntimeId}
-                        walletAddress={walletAddress}
-                        getAuthHeaders={getAuthHeaders}
-                        initialSettings={initialPublishingSettings}
-                        onSaved={(nextSettings) => {
-                          setBot((current) => (current ? { ...current, visibility: nextSettings.visibility } : current));
-                        }}
-                      />
-                    </div>
-
-                    <div className="h-px bg-[rgba(255,255,255,0.06)]" />
-
-                    <div className="grid gap-3">
-                      <SectionIntro
-                        eyebrow="Advanced settings"
-                        title="Runtime policy"
-                        copy="The deploy controls and live policy editor both use this same policy source."
-                      />
-                      <AdvancedSettingsPanel
-                        policy={runtimePolicy}
-                        status={runtimePolicyStatus}
-                        error={runtimePolicyError}
-                        isDeployed={Boolean(activeRuntimeId)}
-                        onPolicyChange={(nextPolicy) => {
-                          setRuntimePolicy(nextPolicy);
-                          setRuntimePolicyError(null);
-                        }}
-                        onSave={saveRuntimePolicy}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : null}
           </section>
         ) : null}
 
@@ -838,6 +932,83 @@ export default function BotDetailPage({ params: paramsPromise }: { params: Promi
         ) : null}
       </section>
     </main>
+  );
+}
+
+function OperateTabSkeleton() {
+  return (
+    <div className="grid gap-5">
+      <article className="grid gap-5 rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
+        <div className="grid gap-3">
+          <div className="skeleton h-3 w-28 rounded-full" />
+          <div className="skeleton h-8 w-56 rounded-full" />
+          <div className="skeleton h-3 w-full max-w-2xl rounded-full" />
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 8 }).map((_, index) => (
+            <div
+              key={index}
+              className="rounded-[1.2rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] p-4"
+            >
+              <div className="skeleton h-3 w-20 rounded-full" />
+              <div className="mt-2 skeleton h-4 w-24 rounded-full" />
+            </div>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <div className="skeleton h-10 w-24 rounded-full" />
+          <div className="skeleton h-10 w-24 rounded-full" />
+          <div className="skeleton h-10 w-24 rounded-full" />
+          <div className="skeleton h-10 w-24 rounded-full" />
+        </div>
+      </article>
+
+      <div className="grid gap-5 rounded-[2rem] border border-[rgba(255,255,255,0.06)] bg-[#121416] p-4 md:p-5">
+        <div className="grid gap-5 xl:grid-cols-[0.28fr_1fr] xl:items-start">
+          <div className="grid gap-4">
+            <div className="rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4">
+              <div className="skeleton h-3 w-20 rounded-full" />
+              <div className="mt-2 skeleton h-4 w-32 rounded-full" />
+              <div className="mt-3 skeleton h-3 w-full rounded-full" />
+            </div>
+
+            <div className="rounded-[1.4rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-4">
+              <div className="skeleton h-3 w-24 rounded-full" />
+              <div className="mt-2 skeleton h-4 w-36 rounded-full" />
+              <div className="mt-3 skeleton h-3 w-full rounded-full" />
+            </div>
+          </div>
+
+          <div className="grid gap-4">
+            <div className="rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
+              <div className="skeleton h-3 w-24 rounded-full" />
+              <div className="mt-2 skeleton h-7 w-44 rounded-full" />
+              <div className="mt-3 skeleton h-3 w-full rounded-full" />
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                <div className="skeleton h-11 w-full rounded-2xl" />
+                <div className="skeleton h-11 w-full rounded-2xl" />
+                <div className="skeleton h-11 w-full rounded-2xl" />
+                <div className="skeleton h-11 w-full rounded-2xl" />
+              </div>
+            </div>
+
+            <div className="rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
+              <div className="skeleton h-3 w-24 rounded-full" />
+              <div className="mt-2 skeleton h-7 w-40 rounded-full" />
+              <div className="mt-3 skeleton h-3 w-full rounded-full" />
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                <div className="skeleton h-11 w-full rounded-2xl" />
+                <div className="skeleton h-11 w-full rounded-2xl" />
+                <div className="skeleton h-11 w-full rounded-2xl" />
+                <div className="skeleton h-11 w-full rounded-2xl" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
