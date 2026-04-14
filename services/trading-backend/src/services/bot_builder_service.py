@@ -133,6 +133,7 @@ class BotBuilderService:
         authoring_mode: str | None = None,
         rules_version: int | None = None,
         rules_json: dict | None = None,
+        sync_runtime_allowed_symbols: bool = False,
     ) -> dict:
         del db
         bot = self.supabase.maybe_one("bot_definitions", filters={"id": bot_id, "wallet_address": wallet_address})
@@ -190,7 +191,12 @@ class BotBuilderService:
             },
             filters={"id": bot_id},
         )[0]
-        self._sync_runtime_allowed_symbols_if_derived(runtimes=runtimes, previous_bot=bot, next_bot=row)
+        self._sync_runtime_allowed_symbols_if_derived(
+            runtimes=runtimes,
+            previous_bot=bot,
+            next_bot=row,
+            force_sync=sync_runtime_allowed_symbols,
+        )
         self._record_strategy_history(bot=row, created_by_user_id=str(bot["user_id"]), previous_bot=bot)
         return self.serialize(row)
 
@@ -331,6 +337,7 @@ class BotBuilderService:
         runtimes: list[dict[str, Any]],
         previous_bot: dict[str, Any],
         next_bot: dict[str, Any],
+        force_sync: bool = False,
     ) -> None:
         if not isinstance(runtimes, list) or not runtimes:
             return
@@ -349,7 +356,7 @@ class BotBuilderService:
                 if isinstance(allowed_symbols, list)
                 else []
             )
-            if not self._symbols_equivalent(current_allowed, previous_allowed):
+            if not force_sync and not self._symbols_equivalent(current_allowed, previous_allowed):
                 continue
             if self._symbols_equivalent(current_allowed, next_allowed):
                 continue

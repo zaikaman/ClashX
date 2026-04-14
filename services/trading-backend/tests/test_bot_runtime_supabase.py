@@ -750,6 +750,99 @@ def test_market_scope_parser_ignores_summary_label_strings() -> None:
     assert BotRuntimeEngine._market_scope_symbols("4 Pacifica markets") == []
 
 
+def test_update_bot_force_syncs_runtime_allowlist_after_previous_drift() -> None:
+    tables = _seed_tables()
+    tables["bot_definitions"][0]["rules_json"] = {
+        "selected_market_symbols": ["BTC", "SOL", "ADA", "BNB", "BCH", "HYPE"],
+        "graph": {
+            "version": 1,
+            "entry": "builder-entry",
+            "nodes": [
+                {"id": "builder-entry", "kind": "entry", "position": {"x": 0, "y": 0}},
+                {
+                    "id": "condition-rsi",
+                    "kind": "condition",
+                    "position": {"x": 180, "y": 80},
+                    "config": {
+                        "type": "rsi_above",
+                        "symbol": "BTC",
+                        "timeframe": "1m",
+                        "period": 14,
+                        "value": 70,
+                    },
+                },
+                {
+                    "id": "action-open",
+                    "kind": "action",
+                    "position": {"x": 380, "y": 80},
+                    "config": {
+                        "type": "open_long",
+                        "symbol": "BTC",
+                        "size_usd": 100,
+                        "leverage": 3,
+                    },
+                },
+            ],
+            "edges": [
+                {"id": "edge-entry-condition", "source": "builder-entry", "target": "condition-rsi"},
+                {"id": "edge-condition-action", "source": "condition-rsi", "target": "action-open"},
+            ],
+        },
+    }
+    # Simulate prior drift from old behavior: runtime still on the original smaller set.
+    tables["bot_runtimes"][0]["risk_policy_json"]["allowed_symbols"] = ["BTC", "ETH", "SOL"]
+
+    fake_supabase = FakeSupabaseRestClient(tables)
+    service = BotBuilderService()
+    service.supabase = fake_supabase
+
+    service.update_bot(
+        None,
+        bot_id="bot-1",
+        wallet_address="wallet-1",
+        rules_json={
+            "selected_market_symbols": ["BTC", "SOL", "ADA", "BNB", "BCH", "HYPE", "LTC"],
+            "graph": {
+                "version": 1,
+                "entry": "builder-entry",
+                "nodes": [
+                    {"id": "builder-entry", "kind": "entry", "position": {"x": 0, "y": 0}},
+                    {
+                        "id": "condition-rsi",
+                        "kind": "condition",
+                        "position": {"x": 180, "y": 80},
+                        "config": {
+                            "type": "rsi_above",
+                            "symbol": "LTC",
+                            "timeframe": "1m",
+                            "period": 14,
+                            "value": 70,
+                        },
+                    },
+                    {
+                        "id": "action-open",
+                        "kind": "action",
+                        "position": {"x": 380, "y": 80},
+                        "config": {
+                            "type": "open_long",
+                            "symbol": "LTC",
+                            "size_usd": 100,
+                            "leverage": 3,
+                        },
+                    },
+                ],
+                "edges": [
+                    {"id": "edge-entry-condition", "source": "builder-entry", "target": "condition-rsi"},
+                    {"id": "edge-condition-action", "source": "condition-rsi", "target": "action-open"},
+                ],
+            },
+        },
+        sync_runtime_allowed_symbols=True,
+    )
+
+    assert fake_supabase.tables["bot_runtimes"][0]["risk_policy_json"]["allowed_symbols"] == ["LTC"]
+
+
 def test_list_runtimes_for_wallet_returns_serialized_runtime_summaries() -> None:
     fake_supabase = FakeSupabaseRestClient(_seed_tables())
     engine = BotRuntimeEngine()

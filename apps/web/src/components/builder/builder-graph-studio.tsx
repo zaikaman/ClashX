@@ -1978,6 +1978,7 @@ export function BuilderGraphStudio({
       authoring_mode: "visual",
       rules_version: 1,
       rules_json: rulesJson,
+      sync_runtime_allowed_symbols: true,
     };
     const validationResponse = await fetch(`${API_BASE_URL}/api/bots/validate`, {
       method: "POST",

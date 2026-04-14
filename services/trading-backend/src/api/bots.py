@@ -86,6 +86,7 @@ class BotUpdateRequest(BaseModel):
     authoring_mode: str | None = None
     rules_version: int | None = Field(default=None, ge=1)
     rules_json: dict | None = None
+    sync_runtime_allowed_symbols: bool | None = None
 
 
 class BotValidationRequest(BaseModel):
@@ -641,6 +642,7 @@ def patch_bot(
             authoring_mode=payload.authoring_mode,
             rules_version=payload.rules_version,
             rules_json=payload.rules_json,
+            sync_runtime_allowed_symbols=bool(payload.sync_runtime_allowed_symbols),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
