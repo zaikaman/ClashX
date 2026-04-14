@@ -449,6 +449,8 @@ class BotRuntimeWorker:
             actions=actions,
             runtime_policy=runtime_policy,
             runtime_state=cycle_runtime_state,
+            position_lookup=position_lookup,
+            open_order_lookup=open_order_lookup,
         )
         if not actions:
             return self._maybe_refresh_runtime_heartbeat(runtime, now=now)
@@ -1715,9 +1717,12 @@ class BotRuntimeWorker:
         actions: list[dict[str, Any]],
         runtime_policy: dict[str, Any],
         runtime_state: dict[str, Any],
+        position_lookup: dict[str, dict[str, Any]],
+        open_order_lookup: dict[str, list[dict[str, Any]]],
     ) -> list[dict[str, Any]]:
         max_open_positions = max(1, int(runtime_policy.get("max_open_positions") or 1))
         reserved_symbols = self._reserved_runtime_symbols(runtime_state=runtime_state)
+        manageable_symbols = self._managed_runtime_symbols(runtime_state=runtime_state)
         filtered_actions: list[dict[str, Any]] = []
         for action in actions:
             if not isinstance(action, dict):
@@ -1727,13 +1732,32 @@ class BotRuntimeWorker:
                 if not symbol or symbol in reserved_symbols or len(reserved_symbols) >= max_open_positions:
                     continue
                 reserved_symbols.add(symbol)
+                manageable_symbols.add(symbol)
                 filtered_actions.append(action)
                 continue
             if self._is_position_management_action(action):
-                if not symbol or symbol not in reserved_symbols:
+                if not symbol or symbol not in manageable_symbols:
+                    continue
+                if str(action.get("type") or "") == "set_tpsl" and self._position_is_already_protected(
+                    runtime_state=runtime_state,
+                    position_lookup=position_lookup,
+                    open_order_lookup=open_order_lookup,
+                    symbol=symbol,
+                ):
                     continue
             filtered_actions.append(action)
         return filtered_actions
+
+    @staticmethod
+    def _managed_runtime_symbols(*, runtime_state: dict[str, Any]) -> set[str]:
+        managed_positions = runtime_state.get("managed_positions")
+        if not isinstance(managed_positions, dict):
+            return set()
+        return {
+            str(item.get("symbol") or symbol).strip().upper()
+            for symbol, item in managed_positions.items()
+            if isinstance(item, dict) and abs(float(item.get("amount") or 0.0)) > 0
+        }
 
     @staticmethod
     def _reserved_runtime_symbols(*, runtime_state: dict[str, Any]) -> set[str]:
@@ -1751,6 +1775,55 @@ class BotRuntimeWorker:
         }
         reserved_symbols.update(str(symbol).strip().upper() for symbol in pending_entries if str(symbol).strip())
         return reserved_symbols
+
+    def _position_is_already_protected(
+        self,
+        *,
+        runtime_state: dict[str, Any],
+        position_lookup: dict[str, dict[str, Any]],
+        open_order_lookup: dict[str, list[dict[str, Any]]],
+        symbol: str,
+    ) -> bool:
+        managed_position = self._maybe_get_managed_position(runtime_state=runtime_state, symbol=symbol)
+        if not isinstance(managed_position, dict):
+            return False
+
+        symbol_orders = open_order_lookup.get(symbol) or []
+        take_profit_client_order_id = str(managed_position.get("take_profit_client_order_id") or "").strip()
+        stop_loss_client_order_id = str(managed_position.get("stop_loss_client_order_id") or "").strip()
+        managed_amount = abs(self._coerce_float(managed_position.get("amount")))
+        symbol_position = position_lookup.get(symbol) or {}
+        symbol_amount = abs(self._coerce_float(symbol_position.get("amount")))
+        has_take_profit_order = any(self._is_take_profit_order(item) for item in symbol_orders)
+        has_stop_loss_order = any(self._is_stop_loss_order(item) for item in symbol_orders)
+        covers_full_position = (
+            managed_amount > 0
+            and symbol_amount > 0
+            and abs(symbol_amount - managed_amount) <= max(1e-9, managed_amount * 0.001)
+        )
+        if take_profit_client_order_id and stop_loss_client_order_id:
+            open_client_order_ids = {
+                str(item.get("client_order_id") or "").strip()
+                for item in symbol_orders
+                if str(item.get("client_order_id") or "").strip()
+            }
+            if {take_profit_client_order_id, stop_loss_client_order_id}.issubset(open_client_order_ids):
+                return True
+        return covers_full_position and has_take_profit_order and has_stop_loss_order
+
+    @staticmethod
+    def _is_take_profit_order(order: dict[str, Any]) -> bool:
+        if not BotRuntimeWorker._to_bool(order.get("reduce_only"), False):
+            return False
+        order_type = str(order.get("order_type") or order.get("kind") or "").strip().lower()
+        return "take_profit" in order_type or order_type.startswith("tp")
+
+    @staticmethod
+    def _is_stop_loss_order(order: dict[str, Any]) -> bool:
+        if not BotRuntimeWorker._to_bool(order.get("reduce_only"), False):
+            return False
+        order_type = str(order.get("order_type") or order.get("kind") or "").strip().lower()
+        return "stop_loss" in order_type or order_type.startswith("sl")
 
     @staticmethod
     def _is_position_management_action(action: dict[str, Any]) -> bool:

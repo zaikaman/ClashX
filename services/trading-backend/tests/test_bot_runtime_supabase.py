@@ -1278,11 +1278,60 @@ def test_runtime_worker_prunes_triggered_actions_for_unmanaged_symbols_when_capa
                 }
             }
         },
+        position_lookup={},
+        open_order_lookup={},
     )
 
     assert actions == [
         {"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.5, "stop_loss_pct": 0.7},
     ]
+
+
+def test_runtime_worker_drops_tpsl_for_pending_symbol_without_managed_position() -> None:
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+
+    actions = worker._prune_triggered_actions(
+        actions=[
+            {"type": "set_tpsl", "symbol": "ETH", "take_profit_pct": 2.0, "stop_loss_pct": 1.0},
+        ],
+        runtime_policy={"max_open_positions": 1},
+        runtime_state={"pending_entry_symbols": {"ETH": "2026-04-14T00:00:00+00:00"}},
+        position_lookup={},
+        open_order_lookup={},
+    )
+
+    assert actions == []
+
+
+def test_runtime_worker_drops_duplicate_tpsl_when_position_is_already_protected() -> None:
+    worker = BotRuntimeWorker(poll_interval_seconds=0.01)
+
+    actions = worker._prune_triggered_actions(
+        actions=[
+            {"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 2.0, "stop_loss_pct": 1.0},
+        ],
+        runtime_policy={"max_open_positions": 1},
+        runtime_state={
+            "managed_positions": {
+                "BTC": {
+                    "symbol": "BTC",
+                    "amount": 0.005,
+                    "side": "bid",
+                    "take_profit_client_order_id": "tp-1",
+                    "stop_loss_client_order_id": "sl-1",
+                }
+            }
+        },
+        position_lookup={"BTC": {"symbol": "BTC", "amount": 0.005}},
+        open_order_lookup={
+            "BTC": [
+                {"symbol": "BTC", "reduce_only": True, "client_order_id": "tp-1"},
+                {"symbol": "BTC", "reduce_only": True, "client_order_id": "sl-1"},
+            ]
+        },
+    )
+
+    assert actions == []
 
 
 def test_runtime_worker_deduplicates_identical_skip_events_within_recent_window() -> None:

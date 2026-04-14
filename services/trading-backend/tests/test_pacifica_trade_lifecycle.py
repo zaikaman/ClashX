@@ -788,10 +788,11 @@ def test_runtime_process_allows_tpsl_immediately_after_entry(monkeypatch: Any) -
 
     asyncio.run(worker._process_runtime(None, supabase.tables["bot_runtimes"][0]))
 
-    assert [call.get("type", "create_market_order") for call in pacifica.order_calls[:1]] == [
+    assert [call.get("type", "create_market_order") for call in pacifica.order_calls] == [
+        "update_leverage",
         "create_market_order",
+        "set_position_tpsl",
     ]
-    assert pacifica.order_calls[1]["type"] == "set_position_tpsl"
 
 
 def test_runtime_idempotency_key_changes_after_position_is_closed() -> None:
@@ -975,13 +976,17 @@ def test_runtime_process_does_not_reenter_or_duplicate_tpsl_while_position_sync_
     asyncio.run(worker._process_runtime(None, supabase.tables["bot_runtimes"][0]))
     asyncio.run(worker._process_runtime(None, supabase.tables["bot_runtimes"][0]))
 
-    assert [call.get("type") for call in pacifica.order_calls] == ["create_market_order"]
+    assert [call.get("type") for call in pacifica.order_calls] == [
+        "update_leverage",
+        "create_market_order",
+    ]
 
     pacifica._positions_visible = True
     asyncio.run(worker._process_runtime(None, supabase.tables["bot_runtimes"][0]))
     asyncio.run(worker._process_runtime(None, supabase.tables["bot_runtimes"][0]))
 
     assert [call.get("type") for call in pacifica.order_calls] == [
+        "update_leverage",
         "create_market_order",
         "set_position_tpsl",
     ]
@@ -1045,7 +1050,7 @@ def test_runtime_process_does_not_append_duplicate_skipped_tpsl_events_for_uncha
         if event.get("event_type") == "action.skipped" and event.get("status") == "skipped"
     ]
 
-    assert len(skipped_events) == 1
+    assert len(skipped_events) == 0
 
 
 def test_two_bots_can_manage_separate_btc_slices_on_the_same_wallet(monkeypatch: Any) -> None:
@@ -1125,15 +1130,17 @@ def test_two_bots_can_manage_separate_btc_slices_on_the_same_wallet(monkeypatch:
     asyncio.run(worker._process_runtime(None, supabase.tables["bot_runtimes"][1]))
 
     assert [call.get("type") for call in pacifica.order_calls] == [
+        "update_leverage",
         "create_market_order",
         "set_position_tpsl",
+        "update_leverage",
         "create_market_order",
         "set_position_tpsl",
     ]
-    assert "amount" not in pacifica.order_calls[1]["take_profit"]
-    assert "amount" not in pacifica.order_calls[3]["take_profit"]
+    assert "amount" not in pacifica.order_calls[2]["take_profit"]
+    assert "amount" not in pacifica.order_calls[5]["take_profit"]
     assert pacifica._position is not None
-    assert pacifica._position["amount"] == 0.006
+    assert pacifica._position["amount"] == 0.018
 
 
 def test_runtime_process_batches_multiple_cancel_actions(monkeypatch: Any) -> None:
