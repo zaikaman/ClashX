@@ -1,11 +1,11 @@
 "use client";
 
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, useInView } from 'framer-motion';
 import Link from 'next/link';
 import Script from 'next/script';
 import {
   ArrowRight, Shield, Zap, TrendingUp, Box, Users,
-  Activity, ShieldCheck, Layers, Sparkles, Menu, X,
+  Activity, ShieldCheck, Layers, Menu, X,
   Github, Twitter, Send, FileText, BookOpen
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -13,6 +13,43 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ClashXLogo } from '@/components/clashx-logo';
 import { useTransition } from '@/components/providers/transition-provider';
 import { getPreferredLaunchPath } from '@/lib/onboarding-state';
+
+const AnimatedCounter = ({ value, suffix = '' }: { value: string; suffix?: string }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const isInView = useInView(ref, { once: true, margin: '-50px' });
+  const [display, setDisplay] = useState('0');
+
+  const numericPart = value.replace(/[^0-9.]/g, '');
+  const prefix = value.replace(/[0-9.+%KMB]/g, '');
+
+  useEffect(() => {
+    if (!isInView) return;
+    const target = parseFloat(numericPart);
+    if (isNaN(target)) { setDisplay(value); return; }
+
+    const duration = 1200;
+    const startTime = performance.now();
+    const easeOutQuart = (t: number) => 1 - Math.pow(1 - t, 4);
+
+    const step = (now: number) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = easeOutQuart(progress);
+      const current = eased * target;
+
+      if (target >= 1) {
+        setDisplay(Math.round(current).toString());
+      } else {
+        setDisplay(current.toFixed(1));
+      }
+
+      if (progress < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }, [isInView, numericPart, value]);
+
+  return <div ref={ref}>{prefix}{display}{suffix}</div>;
+};
 
 const LandingHeader = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -259,7 +296,7 @@ const Footer = () => {
 const Home = () => {
   const { triggerTransition } = useTransition();
   const [isMobile, setIsMobile] = useState(false);
-  const [isFeaturesSectionVisible, setIsFeaturesSectionVisible] = useState(false);
+
   const unicornInitializedRef = useRef(false);
 
   const handleStartBuilding = () => {
@@ -296,25 +333,7 @@ const Home = () => {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.target.id === 'features') {
-            setIsFeaturesSectionVisible(entry.isIntersecting);
-          }
-        });
-      },
-      { threshold: 0.1 }
-    );
 
-    const featuresSection = document.getElementById('features');
-    if (featuresSection) observer.observe(featuresSection);
-
-    return () => {
-      if (featuresSection) observer.unobserve(featuresSection);
-    };
-  }, []);
 
   const stats = useMemo(() => [
     { label: 'Total Trading Volume', value: '$76M', change: '+12.5%', icon: TrendingUp },
@@ -348,7 +367,7 @@ const Home = () => {
       handle: '@sarahm_tradings',
       initial: 'SM',
       color: 'from-[#74b97f] to-[#5a9268]',
-    text: 'Cloning a top marketplace bot transformed my trading. The copy limits keep me perfectly safe.',
+      text: 'Cloning a top marketplace bot transformed my trading. The copy limits keep me perfectly safe.',
     },
     {
       name: 'James Park',
@@ -484,17 +503,29 @@ const Home = () => {
                 transition={{ delay: 0.3, duration: 0.3 }}
                 className="grid grid-cols-2 md:grid-cols-4 gap-3"
               >
-                {stats.map((stat) => {
+                {stats.map((stat, idx) => {
                   const Icon = stat.icon;
+                  const numericValue = stat.value.replace(/[^0-9.]/g, '');
+                  const prefix = stat.value.replace(/[0-9.]/g, '').replace(/[KMB+%]/g, '');
+                  const suffix = stat.value.replace(/[^KMB+%]/g, '');
                   return (
-                    <div key={stat.label} className="p-4 text-center bg-card rounded-xl border border-white/[0.06] hover:border-[#dce85d]/30 transition-colors">
+                    <motion.div
+                      key={stat.label}
+                      initial={{ opacity: 0, y: 15 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.35 + idx * 0.08, duration: 0.4, ease: [0.25, 1, 0.5, 1] }}
+                      className="p-4 text-center bg-card rounded-xl border border-white/[0.06] hover:border-[#dce85d]/30 transition-colors"
+                    >
                       <div className="flex items-center justify-center gap-2 mb-2">
                         <Icon className="w-4 h-4 text-[#dce85d]" />
-                        <div className="text-2xl font-bold text-neutral-50">{stat.value}</div>
+                        <div className="text-2xl font-bold text-neutral-50">
+                          <AnimatedCounter value={numericValue} suffix={suffix.startsWith('%') ? '%' : suffix} />
+                        </div>
+                        {prefix && <span className="text-2xl font-bold text-neutral-50">{prefix}</span>}
                       </div>
                       <div className="text-xs text-neutral-400 mb-1">{stat.label}</div>
                       <div className="text-xs text-[#74b97f] font-medium">{stat.change}</div>
-                    </div>
+                    </motion.div>
                   );
                 })}
               </motion.div>
@@ -532,108 +563,237 @@ const Home = () => {
           </div>
         </section>
 
-        {/* Features Section */}
-        <section id="features" className="py-24 relative bg-[#090a0a] overflow-hidden">
-          <div className="opacity-30 absolute top-0 right-0 bottom-0 left-0 will-change-[filter] transform-gpu">
-            <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-[#dce85d] rounded-full blur-[60px] md:blur-[120px]"></div>
-            <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-[#74b97f] rounded-full blur-[60px] md:blur-[120px]"></div>
+        {/* Engine Section — live signal pipeline */}
+        <section id="features" className="py-24 md:py-32 relative bg-[#090a0a] overflow-hidden">
+          <div className="absolute inset-0 pointer-events-none">
+            <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/[0.08] to-transparent" />
+            <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/[0.08] to-transparent" />
           </div>
 
-          <div className="container mx-auto px-4 max-w-7xl relative z-10">
-            <div className="text-center mb-16">
-              <span className="inline-flex items-center gap-2 rounded-full bg-[#dce85d]/10 px-3 py-1.5 text-xs text-[#dce85d] ring-1 ring-[#dce85d]/20 uppercase tracking-tight mb-4">
-                <Sparkles className="w-3.5 h-3.5" />
-                Platform Features
-              </span>
-              <h2 className="text-4xl md:text-6xl font-bold mb-4 text-white tracking-tight">
-                Everything You Need to{' '}
-                <span className="text-[#dce85d]">Succeed</span>
-              </h2>
-              <p className="text-lg text-[#a1a1aa] max-w-2xl mx-auto">
-                Powerful tools and integrations designed to maximize your trading bots
-              </p>
-            </div>
+          <div className="max-w-7xl mx-auto px-4 sm:px-8 relative z-10">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 lg:gap-24 items-start">
 
-            <div className="relative mx-auto mt-12 max-w-5xl mb-16">
-              <div className="flex gap-8 sm:gap-12 mb-8 items-center justify-center flex-wrap">
-                {[Shield, Activity, Box, Layers, TrendingUp, Zap].map((Icon, idx) => (
-                  <motion.span
-                    key={idx}
-                    whileHover={{ scale: 1.1 }}
-                    className="inline-flex items-center justify-center glass-card w-14 h-14 rounded-xl will-change-transform"
-                    style={{ animation: isFeaturesSectionVisible ? `float 3s ease-in-out infinite ${idx * 0.2}s` : 'none' }}
-                  >
-                    <Icon className="w-6 h-6 text-[#dce85d]" />
-                  </motion.span>
-                ))}
-              </div>
+              {/* Left — editorial intro */}
+              <motion.div
+                initial={{ opacity: 0, y: 30 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.6 }}
+                className="lg:sticky lg:top-32"
+              >
+                <span className="inline-block text-[10px] font-mono tracking-[0.2em] uppercase text-white/40 mb-6">How it works under the hood</span>
+                <h2 className="text-4xl md:text-5xl lg:text-6xl font-bold text-white tracking-tight leading-[1.05] mb-6">
+                  The engine behind<br />
+                  every <span className="text-[#dce85d]">trade</span>
+                </h2>
+                <p className="text-[#868e95] text-lg leading-relaxed max-w-md mb-10">
+                  Your bots don&apos;t sleep. Every tick, ClashX evaluates live market data against your rules, validates risk limits, and executes through Pacifica&apos;s on-chain order book — all in sub-second cycles.
+                </p>
 
-              <div className="relative h-72 hidden md:block">
-                <svg viewBox="0 0 900 360" className="absolute inset-0 w-full h-full max-w-[1008px] mx-auto will-change-transform transform-gpu" fill="none" strokeWidth="2">
-                  <defs>
-                    <filter id="glow">
-                      <feGaussianBlur stdDeviation="3" result="coloredBlur" />
-                      <feMerge>
-                        <feMergeNode in="coloredBlur" />
-                        <feMergeNode in="SourceGraphic" />
-                      </feMerge>
-                    </filter>
-                  </defs>
-
-                  {[150, 270, 390, 510, 630, 750].map((cx, idx) => (
-                    <circle key={idx} cx={cx} cy="30" r="5" fill="#dce85d" filter="url(#glow)" style={{ animation: `pulse-glow 2s ease-in-out infinite ${idx * 0.2}s` }} />
+                {/* Pipeline steps */}
+                <div className="space-y-0">
+                  {[
+                    { num: '01', label: 'Signal Detection', desc: 'Price feeds, candlesticks, and indicator streams ingested in real-time' },
+                    { num: '02', label: 'Rule Evaluation', desc: 'Your condition graph is walked node-by-node against current state' },
+                    { num: '03', label: 'Risk Gate', desc: 'Position size, leverage, and drawdown limits validated before submission' },
+                    { num: '04', label: 'Execution', desc: 'Market or limit order placed via delegated wallet on Pacifica' },
+                  ].map((step, idx) => (
+                    <motion.div
+                      key={step.num}
+                      initial={{ opacity: 0, x: -20 }}
+                      whileInView={{ opacity: 1, x: 0 }}
+                      viewport={{ once: true }}
+                      transition={{ duration: 0.4, delay: idx * 0.1 }}
+                      className="group flex items-start gap-5 py-5 relative"
+                    >
+                      {idx < 3 && (
+                        <div className="absolute left-[15px] top-[52px] bottom-0 w-px bg-gradient-to-b from-white/[0.08] to-transparent" />
+                      )}
+                      <div className="flex-shrink-0 w-[30px] h-[30px] rounded-lg bg-white/[0.03] border border-white/[0.08] flex items-center justify-center relative z-10">
+                        <span className="text-[10px] font-mono text-white/50 group-hover:text-[#dce85d] transition-colors">{step.num}</span>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-white mb-0.5">{step.label}</div>
+                        <div className="text-xs text-white/40 leading-relaxed">{step.desc}</div>
+                      </div>
+                    </motion.div>
                   ))}
+                </div>
+              </motion.div>
 
-                  <path d="M450 300 C 450 200, 300 120, 150 30" stroke="#dce85d" strokeWidth="2" strokeLinecap="round" opacity="0.6">
-                    <animate attributeName="stroke-dashoffset" values="600;0;600" dur="3s" repeatCount="indefinite" />
-                  </path>
-                  <path d="M450 300 C 450 210, 360 130, 270 30" stroke="#dce85d" strokeWidth="2" strokeLinecap="round" opacity="0.6">
-                    <animate attributeName="stroke-dashoffset" values="520;0;520" dur="3s" begin="0.2s" repeatCount="indefinite" />
-                  </path>
-                  <path d="M450 300 C 450 150, 420 80, 390 30" stroke="#dce85d" strokeWidth="2" strokeLinecap="round" opacity="0.6">
-                    <animate attributeName="stroke-dashoffset" values="450;0;450" dur="3s" begin="0.4s" repeatCount="indefinite" />
-                  </path>
-                  <path d="M450 300 C 450 150, 480 80, 510 30" stroke="#dce85d" strokeWidth="2" strokeLinecap="round" opacity="0.6">
-                    <animate attributeName="stroke-dashoffset" values="450;0;450" dur="3s" begin="0.6s" repeatCount="indefinite" />
-                  </path>
-                  <path d="M450 300 C 450 210, 540 130, 630 30" stroke="#dce85d" strokeWidth="2" strokeLinecap="round" opacity="0.6">
-                    <animate attributeName="stroke-dashoffset" values="520;0;520" dur="3s" begin="0.8s" repeatCount="indefinite" />
-                  </path>
-                  <path d="M450 300 C 450 200, 600 120, 750 30" stroke="#dce85d" strokeWidth="2" strokeLinecap="round" opacity="0.6">
-                    <animate attributeName="stroke-dashoffset" values="600;0;600" dur="3s" begin="1s" repeatCount="indefinite" />
-                  </path>
-                </svg>
+              {/* Right — simulated live signal feed */}
+              <motion.div
+                initial={{ opacity: 0, y: 30 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.6, delay: 0.15 }}
+                className="relative"
+              >
+                {/* Terminal-style feed container */}
+                <div className="bg-[#0c0d0e] rounded-2xl border border-white/[0.06] overflow-hidden">
+                  {/* Terminal header */}
+                  <div className="flex items-center justify-between px-5 py-3 border-b border-white/[0.06]">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full bg-[#74b97f] shadow-[0_0_6px_rgba(116,185,127,0.5)]" />
+                      <span className="text-[10px] font-mono text-white/40 tracking-wide">LIVE EXECUTION FEED</span>
+                    </div>
+                    <span className="text-[10px] font-mono text-white/20">bot_runtime_worker</span>
+                  </div>
 
-                <div className="absolute bottom-4 left-1/2 -translate-x-1/2">
-                  <span className="inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-[#dce85d]/20 ring-2 ring-[#dce85d]/40 shadow-[0_0_30px_rgba(220,232,93,0.6)]">
-                    <Sparkles className="w-8 h-8 text-[#dce85d]" />
-                  </span>
-                </div>
-              </div>
-            </div>
+                  {/* Feed entries */}
+                  <div className="divide-y divide-white/[0.04]">
+                    {/* Entry 1 — Signal detected */}
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      whileInView={{ opacity: 1, y: 0 }}
+                      viewport={{ once: true }}
+                      transition={{ delay: 0.3, ease: [0.25, 1, 0.5, 1] }}
+                      className="px-5 py-4"
+                    >
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-[#dce85d]" />
+                        <span className="text-[10px] font-mono text-white/30">00:00:01.204</span>
+                        <span className="text-[10px] font-mono text-[#dce85d]/70 bg-[#dce85d]/[0.06] px-1.5 py-0.5 rounded">SIGNAL</span>
+                      </div>
+                      <div className="ml-[18px] space-y-1">
+                        <div className="text-xs text-white/70">RSI crossed below <span className="text-[#dce85d] font-mono">30</span> on SOL-PERP (15m)</div>
+                        <div className="text-[10px] font-mono text-white/25">rsi_value=28.4 · threshold=30.0 · direction=below</div>
+                      </div>
+                    </motion.div>
 
-            <div className="mx-auto max-w-5xl mt-16">
-              <div className="flex flex-wrap md:flex-nowrap text-sm gap-x-4 gap-y-4 items-center justify-center">
-                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full glass-card whitespace-nowrap">
-                  <ShieldCheck className="w-4 h-4 text-[#dce85d]" />
-                  <span className="text-neutral-50">Audited Smart Contracts</span>
+                    {/* Entry 2 — Rule evaluation */}
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      whileInView={{ opacity: 1, y: 0 }}
+                      viewport={{ once: true }}
+                      transition={{ delay: 0.5, ease: [0.25, 1, 0.5, 1] }}
+                      className="px-5 py-4"
+                    >
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-[#a8c93a]" />
+                        <span className="text-[10px] font-mono text-white/30">00:00:01.207</span>
+                        <span className="text-[10px] font-mono text-[#a8c93a]/70 bg-[#a8c93a]/[0.06] px-1.5 py-0.5 rounded">EVAL</span>
+                      </div>
+                      <div className="ml-[18px] space-y-1">
+                        <div className="text-xs text-white/70">Condition graph evaluated — <span className="text-white font-medium">2 of 3</span> nodes triggered</div>
+                        <div className="flex items-center gap-3 mt-2">
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 rounded bg-[#dce85d]/20 flex items-center justify-center"><div className="w-1 h-1 rounded-full bg-[#dce85d]" /></div>
+                            <span className="text-[10px] font-mono text-white/30">rsi_below</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 rounded bg-[#dce85d]/20 flex items-center justify-center"><div className="w-1 h-1 rounded-full bg-[#dce85d]" /></div>
+                            <span className="text-[10px] font-mono text-white/30">price_above_sma</span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 rounded bg-white/[0.04] flex items-center justify-center"><div className="w-1 h-1 rounded-full bg-white/20" /></div>
+                            <span className="text-[10px] font-mono text-white/20">volume_spike</span>
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+
+                    {/* Entry 3 — Risk check */}
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      whileInView={{ opacity: 1, y: 0 }}
+                      viewport={{ once: true }}
+                      transition={{ delay: 0.7, ease: [0.25, 1, 0.5, 1] }}
+                      className="px-5 py-4"
+                    >
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-[#74b97f]" />
+                        <span className="text-[10px] font-mono text-white/30">00:00:01.209</span>
+                        <span className="text-[10px] font-mono text-[#74b97f]/70 bg-[#74b97f]/[0.06] px-1.5 py-0.5 rounded">RISK</span>
+                      </div>
+                      <div className="ml-[18px]">
+                        <div className="text-xs text-white/70">Risk gate <span className="text-[#74b97f] font-medium">passed</span></div>
+                        <div className="grid grid-cols-3 gap-4 mt-2">
+                          <div>
+                            <div className="text-[10px] font-mono text-white/20 mb-0.5">leverage</div>
+                            <div className="text-xs font-mono text-white/60">3x <span className="text-white/20">/ 10x</span></div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-mono text-white/20 mb-0.5">drawdown</div>
+                            <div className="text-xs font-mono text-white/60">2.1% <span className="text-white/20">/ 8%</span></div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] font-mono text-white/20 mb-0.5">size</div>
+                            <div className="text-xs font-mono text-white/60">$420</div>
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+
+                    {/* Entry 4 — Order placed */}
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      whileInView={{ opacity: 1, y: 0 }}
+                      viewport={{ once: true }}
+                      transition={{ delay: 0.9, ease: [0.25, 1, 0.5, 1] }}
+                      className="px-5 py-4 bg-[#dce85d]/[0.02]"
+                    >
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-[#dce85d] shadow-[0_0_6px_rgba(220,232,93,0.4)]" />
+                        <span className="text-[10px] font-mono text-white/30">00:00:01.215</span>
+                        <span className="text-[10px] font-mono text-[#dce85d] bg-[#dce85d]/[0.08] px-1.5 py-0.5 rounded font-semibold">EXECUTE</span>
+                      </div>
+                      <div className="ml-[18px] space-y-2">
+                        <div className="text-xs text-white/70">
+                          <span className="text-[#74b97f] font-medium">LONG</span> SOL-PERP · Market order · $420 @ <span className="font-mono text-white/60">$142.38</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="text-[10px] font-mono text-white/20 flex items-center gap-1">
+                            <Shield className="w-3 h-3" />
+                            SL $138.50
+                          </div>
+                          <div className="w-px h-3 bg-white/[0.08]" />
+                          <div className="text-[10px] font-mono text-white/20 flex items-center gap-1">
+                            <TrendingUp className="w-3 h-3" />
+                            TP $151.20
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+
+                    {/* Entry 5 — Confirmation */}
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      whileInView={{ opacity: 1, y: 0 }}
+                      viewport={{ once: true }}
+                      transition={{ delay: 1.1, ease: [0.25, 1, 0.5, 1] }}
+                      className="px-5 py-4"
+                    >
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-[#74b97f]" />
+                        <span className="text-[10px] font-mono text-white/30">00:00:01.342</span>
+                        <span className="text-[10px] font-mono text-[#74b97f]/70 bg-[#74b97f]/[0.06] px-1.5 py-0.5 rounded">FILL</span>
+                      </div>
+                      <div className="ml-[18px] flex items-center justify-between">
+                        <div className="text-xs text-white/70">Order filled · tx <span className="font-mono text-white/30">7xKm...3fQp</span></div>
+                        <div className="text-[10px] font-mono text-white/20">127ms</div>
+                      </div>
+                    </motion.div>
+                  </div>
+
+                  {/* Terminal footer */}
+                  <div className="px-5 py-3 border-t border-white/[0.06] flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span className="text-[10px] font-mono text-white/20">bot: RSI-Reversal-v3</span>
+                      <span className="w-px h-3 bg-white/[0.06]" />
+                      <span className="text-[10px] font-mono text-white/20">runtime: active</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-1.5 h-1.5 rounded-full bg-[#74b97f] animate-pulse" />
+                      <span className="text-[10px] font-mono text-white/20">streaming</span>
+                    </div>
+                  </div>
                 </div>
-                <div className="hidden md:block w-16 h-px border-t border-dashed border-[#dce85d]/40"></div>
-                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full glass-card whitespace-nowrap">
-                  <Activity className="w-4 h-4 text-[#dce85d]" />
-                  <span className="text-neutral-50">Real-time Monitoring</span>
-                </div>
-                <div className="hidden md:block w-16 h-px border-t border-dashed border-[#dce85d]/40"></div>
-                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full glass-card whitespace-nowrap">
-                  <Layers className="w-4 h-4 text-[#dce85d]" />
-                  <span className="text-neutral-50">Multi-Protocol Support</span>
-                </div>
-                <div className="hidden md:block w-16 h-px border-t border-dashed border-[#dce85d]/40"></div>
-                <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full glass-card whitespace-nowrap">
-                  <Sparkles className="w-4 h-4 text-[#dce85d]" />
-                  <span className="text-neutral-50">AI-Powered Optimization</span>
-                </div>
-              </div>
+
+                {/* Ambient glow behind the terminal */}
+                <div className="absolute -inset-4 -z-10 rounded-3xl bg-[#dce85d]/[0.02] blur-xl" />
+              </motion.div>
+
             </div>
           </div>
         </section>
@@ -730,7 +890,7 @@ const Home = () => {
                         <p className="text-[#a1a1aa] leading-relaxed">
                           Discover top-performing bots, creator shelves, and transparent on-chain execution with verifiable metrics, then mirror them live.
                         </p>
-                  <Link href="/marketplace" className="inline-flex items-center gap-2 mt-4 text-sm font-medium text-[#a8c93a] hover:text-[#dce85d] transition-colors group/link">
+                        <Link href="/marketplace" className="inline-flex items-center gap-2 mt-4 text-sm font-medium text-[#a8c93a] hover:text-[#dce85d] transition-colors group/link">
                           Open Marketplace
                           <ArrowRight className="w-3.5 h-3.5 group-hover/link:translate-x-1 transition-transform" />
                         </Link>
@@ -794,16 +954,29 @@ const Home = () => {
         {/* How It Works Section */}
         <section id="how-it-works" className="bg-[#161a1d] py-24 relative">
           <div className="container mx-auto px-4 max-w-3xl">
-            <div className="text-center mb-16">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.5, ease: [0.25, 1, 0.5, 1] }}
+              className="text-center mb-16"
+            >
               <h2 className="md:text-6xl text-4xl font-bold text-white tracking-tight mb-4">
                 Get Started in <span className="text-[#dce85d]">3 Steps</span>
               </h2>
               <p className="text-lg text-[#a1a1aa]">From zero to earning in minutes</p>
-            </div>
+            </motion.div>
 
             <div className="space-y-4 max-w-2xl mx-auto">
-              {steps.map((step) => (
-                <div key={step.step} className="glass-card rounded-2xl p-5 transition-all duration-300 hover:scale-[1.02]">
+              {steps.map((step, idx) => (
+                <motion.div
+                  key={step.step}
+                  initial={{ opacity: 0, y: 20 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true }}
+                  transition={{ duration: 0.45, delay: idx * 0.12, ease: [0.25, 1, 0.5, 1] }}
+                  className="glass-card rounded-2xl p-5 transition-all duration-300 hover:scale-[1.02]"
+                >
                   <div className="flex items-start gap-4">
                     <div className="flex-shrink-0 w-12 h-12 rounded-xl bg-[#dce85d] flex items-center justify-center">
                       <span className="text-lg font-bold text-[#090a0a]">{step.step}</span>
@@ -813,7 +986,7 @@ const Home = () => {
                       <p className="text-sm text-[#a1a1aa]">{step.description}</p>
                     </div>
                   </div>
-                </div>
+                </motion.div>
               ))}
             </div>
           </div>
@@ -822,14 +995,26 @@ const Home = () => {
         {/* Community Section */}
         <section className="py-16 lg:py-24 relative bg-[#090a0a]">
           <div className="max-w-7xl mx-auto px-4">
-            <div className="flex items-center justify-between mb-8">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.5, ease: [0.25, 1, 0.5, 1] }}
+              className="flex items-center justify-between mb-8"
+            >
               <div>
                 <p className="text-xs sm:text-sm text-[#a1a1aa]">What bot authors & followers say</p>
                 <h2 className="text-2xl sm:text-3xl md:text-4xl tracking-tight font-semibold text-white">Community</h2>
               </div>
-            </div>
+            </motion.div>
 
-            <div className="overflow-hidden rounded-3xl bg-[#0a0b0c] border border-white/[0.06] relative">
+            <motion.div
+              initial={{ opacity: 0, y: 30 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.6, delay: 0.1, ease: [0.25, 1, 0.5, 1] }}
+              className="overflow-hidden rounded-3xl bg-[#0a0b0c] border border-white/[0.06] relative"
+            >
               <div className="pointer-events-none absolute inset-y-0 left-0 w-24 bg-gradient-to-r from-[#0a0b0c] to-transparent z-10" />
               <div className="pointer-events-none absolute inset-y-0 right-0 w-24 bg-gradient-to-l from-[#0a0b0c] to-transparent z-10" />
 
@@ -868,40 +1053,65 @@ const Home = () => {
                   ))}
                 </div>
               </div>
-            </div>
+            </motion.div>
           </div>
         </section>
 
         {/* CTA Section */}
         <section className="py-24 relative bg-[#161a1d]">
           <div className="container mx-auto px-4 max-w-4xl">
-            <div className="glass-card rounded-3xl p-12 md:p-16 text-center relative overflow-hidden">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 30 }}
+              whileInView={{ opacity: 1, scale: 1, y: 0 }}
+              viewport={{ once: true, margin: '-80px' }}
+              transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+              className="glass-card rounded-3xl p-12 md:p-16 text-center relative overflow-hidden"
+            >
               <div className="absolute inset-0 opacity-10">
                 <div className="absolute top-0 right-1/4 w-64 h-64 bg-[#dce85d] rounded-full blur-[100px]"></div>
                 <div className="absolute bottom-0 left-1/4 w-64 h-64 bg-[#74b97f] rounded-full blur-[100px]"></div>
               </div>
               <div className="relative z-10">
-                <h2 className="text-4xl md:text-6xl font-bold mb-4 text-white tracking-tight">
+                <motion.h2
+                  initial={{ opacity: 0, y: 15 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true }}
+                  transition={{ duration: 0.5, delay: 0.15, ease: [0.25, 1, 0.5, 1] }}
+                  className="text-4xl md:text-6xl font-bold mb-4 text-white tracking-tight"
+                >
                   Ready to <span className="text-[#dce85d]">Maximize</span> Your Tradings?
-                </h2>
-                <p className="text-lg text-[#a1a1aa] mb-8 max-w-2xl mx-auto">
+                </motion.h2>
+                <motion.p
+                  initial={{ opacity: 0 }}
+                  whileInView={{ opacity: 1 }}
+                  viewport={{ once: true }}
+                  transition={{ duration: 0.4, delay: 0.3 }}
+                  className="text-lg text-[#a1a1aa] mb-8 max-w-2xl mx-auto"
+                >
                   Join thousands of users who are already earning with ClashX&apos;s automated trading bots
-                </p>
-                <button type="button" onClick={handleStartBuilding} className="group isolate inline-flex cursor-pointer overflow-hidden transition-all duration-300 hover:scale-105 hover:shadow-[0_0_40px_8px_rgba(220,232,93,0.35)] rounded-full relative shadow-[0_8px_40px_rgba(220,232,93,0.25)]">
-                  <div className="absolute inset-0">
-                    <div className="absolute inset-[-200%] w-[400%] h-[400%] animate-[rotate-gradient_4s_linear_infinite]">
-                      <div className="absolute inset-0" style={{ background: 'conic-gradient(from 225deg, transparent 0, rgba(255,255,255,0.6) 90deg, transparent 90deg)' }}></div>
+                </motion.p>
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true }}
+                  transition={{ duration: 0.4, delay: 0.45, ease: [0.25, 1, 0.5, 1] }}
+                >
+                  <button type="button" onClick={handleStartBuilding} className="group isolate inline-flex cursor-pointer overflow-hidden transition-all duration-300 hover:scale-105 hover:shadow-[0_0_40px_8px_rgba(220,232,93,0.35)] rounded-full relative shadow-[0_8px_40px_rgba(220,232,93,0.25)]">
+                    <div className="absolute inset-0">
+                      <div className="absolute inset-[-200%] w-[400%] h-[400%] animate-[rotate-gradient_4s_linear_infinite]">
+                        <div className="absolute inset-0" style={{ background: 'conic-gradient(from 225deg, transparent 0, rgba(255,255,255,0.6) 90deg, transparent 90deg)' }}></div>
+                      </div>
                     </div>
-                  </div>
-                  <div className="absolute rounded-full backdrop-blur" style={{ inset: '1px', background: 'rgba(220, 232, 93, 0.1)' }}></div>
-                  <div className="z-10 flex gap-3 overflow-hidden text-base font-medium text-white w-full pt-3 pr-5 pb-3 pl-5 relative items-center rounded-full">
-                    <div className="absolute inset-[1px] bg-[rgba(10,11,20,0.8)] rounded-full backdrop-blur-[8px]"></div>
-                    <span className="whitespace-nowrap relative z-10 font-sans">Launch App</span>
-                    <span className="inline-flex items-center justify-center z-10 bg-white/10 w-7 h-7 rounded-full relative"><ArrowRight className="w-4 h-4" /></span>
-                  </div>
-                </button>
+                    <div className="absolute rounded-full backdrop-blur" style={{ inset: '1px', background: 'rgba(220, 232, 93, 0.1)' }}></div>
+                    <div className="z-10 flex gap-3 overflow-hidden text-base font-medium text-white w-full pt-3 pr-5 pb-3 pl-5 relative items-center rounded-full">
+                      <div className="absolute inset-[1px] bg-[rgba(10,11,20,0.8)] rounded-full backdrop-blur-[8px]"></div>
+                      <span className="whitespace-nowrap relative z-10 font-sans">Launch App</span>
+                      <span className="inline-flex items-center justify-center z-10 bg-white/10 w-7 h-7 rounded-full relative"><ArrowRight className="w-4 h-4" /></span>
+                    </div>
+                  </button>
+                </motion.div>
               </div>
-            </div>
+            </motion.div>
           </div>
         </section>
       </main>
