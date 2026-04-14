@@ -401,11 +401,28 @@ async def list_bots(
     )
     performances: list[RuntimePerformanceResponse | None]
     if include_performance and runtimes_for_wallet and performance_mode == "fast":
+        live_runtime_ids = {
+            str(runtime.get("id") or "").strip()
+            for runtime in runtimes_for_wallet
+            if str(runtime.get("status") or "") in {"active", "paused"}
+            and str(runtime.get("id") or "").strip()
+        }
+        fresh_performance_by_runtime = (
+            await bot_performance_service.get_cached_runtimes_performance_map(runtimes_for_wallet)
+            if live_runtime_ids
+            else {}
+        )
         performances = [
             (
-                RuntimePerformanceResponse.model_validate(snapshot_payload)
-                if (snapshot_payload := _snapshot_performance_payload(snapshots_by_bot.get(row["id"])))
-                is not None
+                RuntimePerformanceResponse.model_validate(fresh_payload)
+                if (
+                    (runtime := runtimes.get(row["id"])) is not None
+                    and (runtime_id := str(runtime.get("id") or "").strip())
+                    and runtime_id in live_runtime_ids
+                    and (fresh_payload := fresh_performance_by_runtime.get(runtime_id)) is not None
+                )
+                else RuntimePerformanceResponse.model_validate(snapshot_payload)
+                if (snapshot_payload := _snapshot_performance_payload(snapshots_by_bot.get(row["id"]))) is not None
                 else _build_fast_runtime_performance(runtimes.get(row["id"]))
             )
             for row in definitions
