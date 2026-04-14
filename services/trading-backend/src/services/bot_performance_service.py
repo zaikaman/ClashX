@@ -250,13 +250,7 @@ class BotPerformanceService:
     ) -> dict[str, Any]:
         events = runtime_events
         if events is None:
-            events = self._supabase.select(
-                "bot_execution_events",
-                columns="id,created_at,request_payload,result_payload",
-                filters={"runtime_id": runtime["id"], "event_type": "action.executed"},
-                order="created_at.asc",
-                limit=1000,
-            )
+            events = self._load_runtime_execution_events(str(runtime.get("id") or ""))
 
         resolved_live_positions_loaded = live_positions_loaded
         if live_position_lookup is None:
@@ -431,7 +425,165 @@ class BotPerformanceService:
                 live_position_lookup=resolved_live_position_lookup,
                 live_positions_loaded=bool(resolved_live_positions_loaded),
             )
+        if resolved_live_positions_loaded:
+            runtime_events_index = runtime_events_by_id or self._load_runtime_execution_events_map(runtimes)
+            self._realign_live_positions_to_latest_entry_owner(
+                performance_by_runtime=performance_by_runtime,
+                runtime_events_by_id=runtime_events_index,
+                live_position_lookup=resolved_live_position_lookup,
+            )
         return performance_by_runtime
+
+    def _realign_live_positions_to_latest_entry_owner(
+        self,
+        *,
+        performance_by_runtime: dict[str, dict[str, Any]],
+        runtime_events_by_id: dict[str, list[dict[str, Any]]],
+        live_position_lookup: dict[str, dict[str, Any]],
+    ) -> None:
+        latest_entry_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+        latest_entry_by_runtime_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+        for runtime_id, events in runtime_events_by_id.items():
+            for event in events:
+                signal = self._extract_entry_event_signal(event)
+                if signal is None:
+                    continue
+                key = (signal["symbol"], signal["side"])
+                event_ts = self._timestamp_value(signal.get("created_at"))
+                current_owner = latest_entry_by_key.get(key)
+                if current_owner is None or event_ts >= self._timestamp_value(current_owner.get("created_at")):
+                    latest_entry_by_key[key] = {**signal, "runtime_id": runtime_id}
+                runtime_key = (runtime_id, signal["symbol"], signal["side"])
+                current_runtime_entry = latest_entry_by_runtime_key.get(runtime_key)
+                if current_runtime_entry is None or event_ts >= self._timestamp_value(current_runtime_entry.get("created_at")):
+                    latest_entry_by_runtime_key[runtime_key] = signal
+
+        owners_by_key: dict[tuple[str, str], list[str]] = {}
+        for runtime_id, payload in performance_by_runtime.items():
+            for position in payload.get("positions") or []:
+                if not isinstance(position, dict):
+                    continue
+                symbol = self._normalize_symbol(position.get("symbol"))
+                side = self._normalize_position_side(position.get("side"))
+                if not symbol or side not in {"long", "short"}:
+                    continue
+                owners_by_key.setdefault((symbol, side), []).append(runtime_id)
+
+        for symbol, live_position in live_position_lookup.items():
+            normalized_symbol = self._normalize_symbol(symbol)
+            live_side = self._normalize_position_side((live_position or {}).get("side"))
+            live_amount = abs(self._to_float((live_position or {}).get("amount")))
+            if not normalized_symbol or live_side not in {"long", "short"} or live_amount <= 1e-12:
+                continue
+
+            key = (normalized_symbol, live_side)
+            desired_owner = latest_entry_by_key.get(key)
+            if not isinstance(desired_owner, dict):
+                continue
+
+            current_owners = owners_by_key.get(key) or []
+            if len(current_owners) != 1:
+                continue
+            current_owner = current_owners[0]
+            desired_runtime_id = str(desired_owner.get("runtime_id") or "").strip()
+            if not desired_runtime_id or desired_runtime_id == current_owner:
+                continue
+
+            current_owner_entry = latest_entry_by_runtime_key.get((current_owner, normalized_symbol, live_side)) or {}
+            if self._timestamp_value(desired_owner.get("created_at")) <= self._timestamp_value(current_owner_entry.get("created_at")):
+                continue
+
+            removed_position: dict[str, Any] | None = None
+            current_payload = performance_by_runtime.get(current_owner) or {}
+            current_positions = current_payload.get("positions") if isinstance(current_payload.get("positions"), list) else []
+            kept_positions: list[dict[str, Any]] = []
+            for position in current_positions:
+                if not isinstance(position, dict):
+                    continue
+                position_symbol = self._normalize_symbol(position.get("symbol"))
+                position_side = self._normalize_position_side(position.get("side"))
+                if position_symbol == normalized_symbol and position_side == live_side:
+                    removed_position = dict(position)
+                    continue
+                kept_positions.append(dict(position))
+            current_payload["positions"] = kept_positions
+            self._recompute_payload_unrealized(current_payload)
+            performance_by_runtime[current_owner] = current_payload
+
+            desired_payload = performance_by_runtime.get(desired_runtime_id)
+            if not isinstance(desired_payload, dict):
+                continue
+            desired_positions = desired_payload.get("positions") if isinstance(desired_payload.get("positions"), list) else []
+
+            entry_price = self._to_float(desired_owner.get("reference_price"))
+            if entry_price <= 0:
+                entry_price = self._to_float((live_position or {}).get("entry_price"))
+            if entry_price <= 0 and isinstance(removed_position, dict):
+                entry_price = self._to_float(removed_position.get("entry_price"))
+            mark_price = self._to_float((live_position or {}).get("mark_price"))
+            if mark_price <= 0:
+                mark_price = entry_price
+            if entry_price <= 0 or mark_price <= 0:
+                continue
+
+            unrealized = (mark_price - entry_price) * live_amount if live_side == "long" else (entry_price - mark_price) * live_amount
+            desired_positions.append(
+                {
+                    "symbol": normalized_symbol,
+                    "side": live_side,
+                    "amount": round(live_amount, 8),
+                    "entry_price": round(entry_price, 8),
+                    "mark_price": round(mark_price, 8),
+                    "unrealized_pnl": round(unrealized, 8),
+                }
+            )
+            desired_payload["positions"] = desired_positions
+            self._recompute_payload_unrealized(desired_payload)
+            performance_by_runtime[desired_runtime_id] = desired_payload
+
+    def _extract_entry_event_signal(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        request_payload = event.get("request_payload") if isinstance(event.get("request_payload"), dict) else {}
+        result_payload = event.get("result_payload") if isinstance(event.get("result_payload"), dict) else {}
+        execution_meta = result_payload.get("execution_meta") if isinstance(result_payload.get("execution_meta"), dict) else {}
+        payload = result_payload.get("payload") if isinstance(result_payload.get("payload"), dict) else {}
+
+        action_type = str(request_payload.get("type") or "").strip().lower()
+        symbol = self._normalize_symbol(request_payload.get("symbol") or execution_meta.get("symbol") or payload.get("symbol"))
+        if not symbol:
+            return None
+
+        side: str
+        if action_type == "open_long":
+            side = "long"
+        elif action_type == "open_short":
+            side = "short"
+        elif action_type in {"place_market_order", "place_limit_order", "place_twap_order"}:
+            if self._to_bool(request_payload.get("reduce_only"), self._to_bool(execution_meta.get("reduce_only"), False)):
+                return None
+            side = self._normalize_position_side(request_payload.get("side") or execution_meta.get("side"))
+            if side not in {"long", "short"}:
+                return None
+        else:
+            return None
+
+        return {
+            "symbol": symbol,
+            "side": side,
+            "amount": self._to_float(execution_meta.get("amount") or payload.get("amount")),
+            "reference_price": self._to_float(execution_meta.get("reference_price") or execution_meta.get("price") or payload.get("price")),
+            "created_at": event.get("created_at"),
+        }
+
+    def _recompute_payload_unrealized(self, payload: dict[str, Any]) -> None:
+        positions = payload.get("positions") if isinstance(payload.get("positions"), list) else []
+        unrealized = round(
+            sum(self._to_float(item.get("unrealized_pnl")) for item in positions if isinstance(item, dict)),
+            2,
+        )
+        realized = round(self._to_float(payload.get("pnl_realized")), 2)
+        payload["pnl_unrealized"] = unrealized
+        payload["pnl_total"] = round(realized + unrealized, 2)
 
     def _load_wallet_runtimes(self, runtime: dict[str, Any]) -> list[dict[str, Any]]:
         wallet_address = str(runtime.get("wallet_address") or "").strip()
@@ -458,11 +610,9 @@ class BotPerformanceService:
                 continue
             events = (runtime_events_by_id or {}).get(runtime_id)
             if events is None:
-                events = self._supabase.select(
-                    "bot_execution_events",
-                    columns="result_payload,request_payload",
-                    filters={"runtime_id": runtime_id, "event_type": "action.executed"},
-                    limit=1000,
+                events = self._load_runtime_execution_events(
+                    runtime_id,
+                    columns="result_payload,request_payload,created_at",
                 )
             for event in events:
                 symbol = self._extract_event_symbol_hint(event)
@@ -898,20 +1048,31 @@ class BotPerformanceService:
         if not runtime_ids:
             return {}
 
+        events_by_runtime: dict[str, list[dict[str, Any]]] = {}
+        for runtime_id in runtime_ids:
+            events_by_runtime[runtime_id] = self._load_runtime_execution_events(runtime_id)
+        return events_by_runtime
+
+    def _load_runtime_execution_events(
+        self,
+        runtime_id: str,
+        *,
+        columns: str = "id,created_at,request_payload,result_payload",
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        resolved_runtime_id = str(runtime_id or "").strip()
+        if not resolved_runtime_id:
+            return []
         rows = self._supabase.select(
             "bot_execution_events",
-            columns="id,runtime_id,created_at,request_payload,result_payload",
-            filters={"runtime_id": ("in", runtime_ids), "event_type": "action.executed"},
-            order="created_at.asc",
-            limit=max(1000, len(runtime_ids) * 1000),
+            columns=columns,
+            filters={"runtime_id": resolved_runtime_id, "event_type": "action.executed"},
+            order="created_at.desc",
+            limit=limit,
         )
-        events_by_runtime: dict[str, list[dict[str, Any]]] = {runtime_id: [] for runtime_id in runtime_ids}
-        for row in rows:
-            runtime_id = str(row.get("runtime_id") or "").strip()
-            if runtime_id not in events_by_runtime or len(events_by_runtime[runtime_id]) >= 1000:
-                continue
-            events_by_runtime[runtime_id].append(row)
-        return events_by_runtime
+        ordered_rows = [row for row in rows if isinstance(row, dict)]
+        ordered_rows.sort(key=lambda row: self._timestamp_value(row.get("created_at")))
+        return ordered_rows
 
     @staticmethod
     def _is_retryable_ledger_cache_error(exc: SupabaseRestError) -> bool:

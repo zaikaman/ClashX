@@ -8,14 +8,50 @@
 ---
 
 ## 1. Problem & Idea (0:00 - 0:40)
-**Visual:** 
-- Start with a clean, cinematic title card: "ClashX: Autonomous Trading on Pacifica".
-- Fade into a split screen or graphic: On the left, a chaotic screen of a trader manually watching a volatile chart; on the right, a calm, unified dashboard of a bot fleet running systematically.
 
-**Audio / Voiceover:**
-"When trading perpetuals on decentralized exchanges, human traders face a massive disadvantage. We have to sleep, we get emotional, we revenge-trade, and we miss perfect entries because we stepped away from our screens. While institutional players use sophisticated, emotionless algorithms to extract value 24/7, retail traders are stuck manually clicking buttons and managing exits across volatile markets.
+*Note: This 40-second intro is broken down into ~6-second motion graphic sequences. Each sequence has a Start Frame (what the animation begins as) and an End Frame (what the animation morphs into).*
 
-The problem isn't that retail traders don't have good ideas—it's that they lack the infrastructure to systematically execute those ideas with strict risk management."
+**[0:00 - 0:06] Segment 1: The Disadvantage**
+- **Audio / Voiceover:** "When trading perpetuals on decentralized exchanges, human traders face a massive disadvantage."
+- **Visual Action:** The camera tilts up to reveal a massive, intimidating digital monolith representing the exchange, casting a heavy shadow over a tiny, isolated human element at the bottom.
+  > **Start Frame Prompt:** *neo-brutalist cyber-luxury graphic, a colossal glowing digital monolith pulsing with complex data, towering over a tiny, solitary human silhouette in the foreground, dark obsidian and neon cyan palette, imposing scale, cinematic lighting*
+  > **End Frame Prompt:** *the monolith expands, completely engulfing the human silhouette in dark heavy shadows and chaotic red data streams, feeling oppressive and difficult*
+
+**[0:06 - 0:12] Segment 2: Sleep & Emotion**
+- **Audio / Voiceover:** "We have to sleep. We get emotional."
+- **Visual Action:** A digital clock ticks down and morphs into a heavy, tired human eye. The eye flashes red as stress levels spike and the data wavers.
+  > **Start Frame Prompt:** *sleek dark-mode graphic, a futuristic digital clock interface glowing softly in the dark night, transitioning into a fragmented, tired human eye made of cybernetic wireframes*
+  > **End Frame Prompt:** *the cybernetic eye glowing aggressively with angry red neon light, surrounded by chaotic, distorted, and tangled digital wires representing human emotion and stress*
+
+**[0:12 - 0:18] Segment 3: Revenge Trading & Missed Entries**
+- **Audio / Voiceover:** "We revenge-trade, and we miss perfect entries because we stepped away from our screens."
+- **Visual Action:** A perfect, glowing green target passes by unnoticed. Below it, a cursor clicks frantically and blindly into an empty void, leaving shattered red error marks.
+  > **Start Frame Prompt:** *a perfectly aligned, glowing emerald green target node drifting safely across the top of a dark screen, completely missed by the elements below*
+  > **End Frame Prompt:** *a glowing white cursor violently striking an empty dark canvas, leaving behind jagged, shattered red impact marks representing frustrated revenge trading*
+
+**[0:18 - 0:24] Segment 4: Institutional Algorithms**
+- **Audio / Voiceover:** "While institutional players use sophisticated, emotionless algorithms..."
+- **Visual Action:** The chaos is replaced by a massive, flawless, completely symmetrical grid of robotic processors executing simultaneously without a single flaw.
+  > **Start Frame Prompt:** *a hyper-symmetrical, emotionless array of sleek server nodes and robotic processing cores, glowing in a cold, calculating neon blue, pristine cyber-luxury style*
+  > **End Frame Prompt:** *the mechanical cores executing perfectly in unison, sending out flawless, straight lines of light, representing absolute, unfeeling precision*
+
+**[0:24 - 0:30] Segment 5: The Contrast (24/7 vs Manual)**
+- **Audio / Voiceover:** "...to extract value 24/7, retail traders are stuck manually clicking buttons across volatile markets."
+- **Visual Action:** The flawless blue machine constantly siphons up glowing value. Meanwhile, a crude, physical-looking switchboard is shown being frantically mashed in a storm of red volatility.
+  > **Start Frame Prompt:** *the cold blue machine elegantly pulling up continuous streams of glowing golden light representing extracted value 24/7, smooth and untiring*
+  > **End Frame Prompt:** *close-up of a crude, outdated mechanical switchboard surrounded by a storm of red lightning, with a stressed, glowing human hand desperately trying to push buttons*
+
+**[0:30 - 0:35] Segment 6: Good Ideas, Zero Infrastructure**
+- **Audio / Voiceover:** "The problem isn't that retail traders don't have good ideas—"
+- **Visual Action:** A brilliant, beautiful, glowing spark of an idea appears, but it is trapped inside a fragile, cracking glass box representing the lack of proper infrastructure.
+  > **Start Frame Prompt:** *a brilliant, beautifully glowing spark of pure white light representing a great trading idea, floating in the center of the dark*
+  > **End Frame Prompt:** *the brilliant spark is suddenly trapped inside a fragile, cracked glass cube that cannot contain its potential, dark obsidian background*
+
+**[0:35 - 0:40] Segment 7: The ClashX Bridge**
+- **Audio / Voiceover:** "...it's that they lack the infrastructure to systematically execute them. That's why we built ClashX."
+- **Visual Action:** The fragile glass shatters. A massive, robust, high-tech ClashX infrastructure forms around the spark, securely plugging it into a perfect execution engine alongside a wallet.
+  > **Start Frame Prompt:** *the fragile glass cube shatters into pieces, freeing the bright white spark of the idea*
+  > **End Frame Prompt:** *a massive, sleek, cyber-luxury mechanical infrastructure safely catching the spark and routing it perfectly into a glowing digital wallet icon, representing flawless systematic execution*
 
 ## 2. Solution Overview (0:40 - 1:20)
 **Visual:** 

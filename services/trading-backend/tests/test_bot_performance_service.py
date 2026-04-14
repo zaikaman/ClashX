@@ -787,6 +787,89 @@ def test_runtime_performance_keeps_same_symbol_wallet_closes_scoped_to_the_corre
     assert performance_b["positions"][0]["unrealized_pnl"] == 10.0
 
 
+def test_runtime_performance_realigns_single_live_owner_to_latest_entry_runtime() -> None:
+    fake_supabase = FakeSupabaseRestClient(_tables())
+    fake_supabase.tables["bot_execution_events"] = [
+        {
+            "id": "event-a-open",
+            "runtime_id": "runtime-a",
+            "event_type": "action.executed",
+            "decision_summary": "btc long a",
+            "request_payload": {"type": "open_long", "symbol": "BTC"},
+            "result_payload": {
+                "execution_meta": {
+                    "symbol": "BTC",
+                    "side": "bid",
+                    "amount": 1.0,
+                    "reduce_only": False,
+                    "reference_price": 90.0,
+                }
+            },
+            "status": "success",
+            "error_reason": None,
+            "created_at": "2026-03-17T00:00:00+00:00",
+        },
+        {
+            "id": "event-b-short",
+            "runtime_id": "runtime-b",
+            "event_type": "action.executed",
+            "decision_summary": "btc short b",
+            "request_payload": {"type": "open_short", "symbol": "BTC"},
+            "result_payload": {
+                "execution_meta": {
+                    "symbol": "BTC",
+                    "side": "ask",
+                    "amount": 2.0,
+                    "reduce_only": False,
+                    "reference_price": 110.0,
+                }
+            },
+            "status": "success",
+            "error_reason": None,
+            "created_at": "2026-03-17T00:05:00+00:00",
+        },
+        {
+            "id": "event-b-latest-long",
+            "runtime_id": "runtime-b",
+            "event_type": "action.executed",
+            "decision_summary": "btc long b",
+            "request_payload": {"type": "open_long", "symbol": "BTC"},
+            "result_payload": {
+                "execution_meta": {
+                    "symbol": "BTC",
+                    "side": "bid",
+                    "amount": 1.0,
+                    "reduce_only": False,
+                    "reference_price": 100.0,
+                }
+            },
+            "status": "success",
+            "error_reason": None,
+            "created_at": "2026-03-17T00:10:00+00:00",
+        },
+    ]
+    fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = [
+        {
+            "symbol": "BTC",
+            "side": "bid",
+            "amount": 1.0,
+            "entry_price": 100.0,
+            "mark_price": 110.0,
+        }
+    ]
+    service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=fake_supabase)
+
+    runtimes = fake_supabase.select("bot_runtimes", filters={"wallet_address": "shared-wallet"})
+    performance_by_runtime = asyncio.run(service.calculate_runtimes_performance_map(runtimes))
+
+    assert performance_by_runtime["runtime-a"]["positions"] == []
+    assert len(performance_by_runtime["runtime-b"]["positions"]) == 1
+    assert performance_by_runtime["runtime-b"]["positions"][0]["symbol"] == "BTC"
+    assert performance_by_runtime["runtime-b"]["positions"][0]["side"] == "long"
+    assert performance_by_runtime["runtime-b"]["positions"][0]["amount"] == 1.0
+
+
 def test_runtime_performance_loads_manual_close_from_later_position_history_pages() -> None:
     fake_supabase = FakeSupabaseRestClient(_tables())
     fake_pacifica = FakePacificaClient()
@@ -891,6 +974,78 @@ def test_runtime_performance_recovers_bot_open_from_request_history_when_fill_is
     assert performance_a["positions"] == []
     assert performance_a["pnl_realized"] == 20.0
     assert performance_a["win_streak"] == 1
+
+
+def test_runtime_performance_uses_latest_execution_events_window() -> None:
+    fake_supabase = FakeSupabaseRestClient(_tables())
+    fake_supabase.tables["bot_runtimes"] = [
+        runtime for runtime in fake_supabase.tables["bot_runtimes"] if runtime["id"] == "runtime-a"
+    ]
+    old_events: list[dict[str, Any]] = []
+    for index in range(1000):
+        old_events.append(
+            {
+                "id": f"event-old-{index}",
+                "runtime_id": "runtime-a",
+                "event_type": "action.executed",
+                "decision_summary": "old eth open",
+                "request_payload": {"type": "open_short", "symbol": "ETH"},
+                "result_payload": {
+                    "request_id": f"old-{index}",
+                    "execution_meta": {
+                        "symbol": "ETH",
+                        "side": "ask",
+                        "amount": 1.0,
+                        "reduce_only": False,
+                        "reference_price": 50.0,
+                    },
+                },
+                "status": "success",
+                "error_reason": None,
+                "created_at": f"2026-03-16T{(index // 60) % 24:02d}:{index % 60:02d}:00+00:00",
+            }
+        )
+    latest_event = {
+        "id": "event-latest-btc-open",
+        "runtime_id": "runtime-a",
+        "event_type": "action.executed",
+        "decision_summary": "latest btc open",
+        "request_payload": {"type": "open_long", "symbol": "BTC"},
+        "result_payload": {
+            "request_id": "latest-open",
+            "execution_meta": {
+                "symbol": "BTC",
+                "side": "bid",
+                "amount": 1.0,
+                "reduce_only": False,
+                "reference_price": 100.0,
+            },
+        },
+        "status": "success",
+        "error_reason": None,
+        "created_at": "2026-03-17T00:30:00+00:00",
+    }
+    fake_supabase.tables["bot_execution_events"] = [*old_events, latest_event]
+
+    fake_pacifica = FakePacificaClient()
+    fake_pacifica.live_positions["shared-wallet"] = [
+        {
+            "symbol": "BTC",
+            "side": "bid",
+            "amount": 1.0,
+            "entry_price": 100.0,
+            "mark_price": 110.0,
+        }
+    ]
+    service = BotPerformanceService(pacifica_client=fake_pacifica, supabase=fake_supabase)
+
+    runtime_a = fake_supabase.maybe_one("bot_runtimes", filters={"id": "runtime-a"})
+    performance_a = asyncio.run(service.calculate_runtime_performance(runtime_a))
+
+    assert len(performance_a["positions"]) == 1
+    assert performance_a["positions"][0]["symbol"] == "BTC"
+    assert performance_a["positions"][0]["side"] == "long"
+    assert performance_a["positions"][0]["amount"] == 1.0
 
 
 def test_runtime_performance_realizes_manual_close_from_wallet_order_history() -> None:
