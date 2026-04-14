@@ -188,6 +188,7 @@ const TIF_OPTIONS = ["GTC", "IOC", "FOK"] as const;
 const ACTION_TYPES_WITH_LEVERAGE = new Set(["update_leverage"]);
 const AI_JOB_POLL_VISIBLE_MS = 1800;
 const AI_JOB_POLL_HIDDEN_MS = 6000;
+const BUILDER_CANVAS_STORAGE_KEY = "clashx-builder-canvas-v1";
 
 const SIGNAL_CATEGORIES = [
   {
@@ -1175,10 +1176,80 @@ export function BuilderGraphStudio({
   const [liveSchemaStatus, setLiveSchemaStatus] = useState<"idle" | "checking" | "error">("idle");
   const [liveSchemaError, setLiveSchemaError] = useState<string | null>(null);
   const [issueDrawerOpen, setIssueDrawerOpen] = useState(false);
+  const hasAttemptedCanvasRestoreRef = useRef(false);
+
+  const localCanvasSnapshot = useMemo<PortableBuilderDraft>(
+    () => buildPortableDraft(),
+    [activeTemplateId, builderMode, description, edges, name, nodes, selectedMarketSymbols, visibility],
+  );
 
   useEffect(() => {
     if (authenticatedWallet) setWalletAddress(authenticatedWallet);
   }, [authenticatedWallet]);
+
+  useEffect(() => {
+    if (hasAttemptedCanvasRestoreRef.current) {
+      return;
+    }
+
+    hasAttemptedCanvasRestoreRef.current = true;
+
+    if (requestedBotId || typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const storedDraft = window.localStorage.getItem(BUILDER_CANVAS_STORAGE_KEY);
+      if (!storedDraft) {
+        return;
+      }
+
+      const payload = parsePortableDraft(JSON.parse(storedDraft));
+      const nextGraph = buildCanvasFromSerializedGraph(payload.draft.graph);
+
+      setNodes(nextGraph.nodes);
+      setEdges(nextGraph.edges);
+      setSelectedNodeId(nextGraph.selectedNodeId);
+      setActiveTemplateId(payload.draft.active_template_id ?? BLANK_BUILDER_TEMPLATE_ID);
+      setName(payload.draft.name);
+      setDescription(payload.draft.description);
+      setVisibility(payload.draft.visibility);
+      setSelectedMarketSymbols(
+        payload.draft.selected_market_symbols.length > 0
+          ? payload.draft.selected_market_symbols.map(normalizeMarketSymbol)
+          : ["BTC"],
+      );
+      setBuilderMode(payload.draft.builder_mode ?? "visual");
+      setCreatedBotId(null);
+      setLoadedBotId(null);
+      setLoadedBotIsDeployed(false);
+      setRuntimeStatus(null);
+      setError(null);
+      setBlockSearch("");
+
+      requestAnimationFrame(() => {
+        flow?.fitView({ padding: 0.18, duration: 280 });
+      });
+    } catch {
+      window.localStorage.removeItem(BUILDER_CANVAS_STORAGE_KEY);
+    }
+  }, [flow, requestedBotId, setEdges, setNodes]);
+
+  useEffect(() => {
+    if (!hasAttemptedCanvasRestoreRef.current || typeof window === "undefined") {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem(BUILDER_CANVAS_STORAGE_KEY, JSON.stringify(localCanvasSnapshot));
+      } catch {
+        // Ignore localStorage quota/private mode failures.
+      }
+    }, 120);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [localCanvasSnapshot]);
 
   useEffect(() => {
     onWalletAddressChange?.(walletAddress.trim());
