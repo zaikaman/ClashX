@@ -129,34 +129,101 @@ class BotCopyDashboardService:
         if pacifica is None:
             return []
         try:
-            order_history = await pacifica.get_order_history(wallet_address, limit=limit, offset=0)
+            order_history, position_history = await self._load_manual_history_pages(
+                pacifica=pacifica,
+                wallet_address=wallet_address,
+                limit=limit,
+            )
         except (AttributeError, TypeError, PacificaClientError):
             return []
 
-        normalized_rows: list[dict[str, Any]] = []
-        seen_keys: set[str] = set()
+        position_groups: dict[tuple[str, Any], dict[str, float]] = defaultdict(
+            lambda: {"amount": 0.0, "pnl": 0.0, "price_notional": 0.0}
+        )
+        for row in position_history:
+            symbol = str(row.get("symbol") or "").strip().upper().replace("-PERP", "")
+            created_at = row.get("created_at") or row.get("createdAt")
+            amount = self._to_float(row.get("amount"))
+            price = self._to_float(row.get("price"))
+            if not symbol or created_at in (None, "") or amount <= 1e-12:
+                continue
+            key = (symbol, created_at)
+            position_groups[key]["amount"] += amount
+            position_groups[key]["pnl"] += self._to_float(row.get("pnl"))
+            if price > 0:
+                position_groups[key]["price_notional"] += amount * price
+
+        grouped_order_rows: dict[tuple[str, Any, str, str], dict[str, Any]] = {}
         for row in order_history:
             normalized = self._normalize_manual_history_row(row)
             if normalized is None:
                 continue
-            dedupe_key = "|".join(
-                (
-                    str(normalized.get("history_id") or ""),
-                    str(normalized.get("order_id") or ""),
-                    str(normalized.get("symbol") or ""),
-                    str(normalized.get("event_kind") or ""),
-                    str(normalized.get("position_side") or ""),
-                    str(normalized.get("created_at") or ""),
-                    f"{self._to_float(normalized.get('amount')):.12f}",
-                    f"{self._to_float(normalized.get('price')):.8f}",
-                )
+            key = (
+                str(normalized["symbol"]),
+                normalized["created_at"],
+                str(normalized["event_kind"]),
+                str(normalized["position_side"]),
             )
-            if dedupe_key in seen_keys:
+            existing = grouped_order_rows.get(key)
+            if existing is None:
+                grouped_order_rows[key] = dict(normalized)
+                grouped_order_rows[key]["_price_notional"] = (
+                    self._to_float(normalized.get("amount")) * self._to_float(normalized.get("price"))
+                )
                 continue
-            seen_keys.add(dedupe_key)
-            normalized_rows.append(normalized)
+            amount = self._to_float(normalized.get("amount"))
+            existing["amount"] = self._to_float(existing.get("amount")) + amount
+            existing["_price_notional"] = self._to_float(existing.get("_price_notional")) + (
+                amount * self._to_float(normalized.get("price"))
+            )
+
+        normalized_rows: list[dict[str, Any]] = []
+        for row in grouped_order_rows.values():
+            amount = self._to_float(row.get("amount"))
+            if amount <= 1e-12:
+                continue
+            row["price"] = self._to_float(row.get("_price_notional")) / amount
+            row.pop("_price_notional", None)
+            position_group = position_groups.get((str(row.get("symbol")), row.get("created_at")))
+            if position_group is not None and self._to_float(position_group.get("amount")) > 1e-12:
+                row["exchange_realized_pnl"] = self._to_float(position_group.get("pnl"))
+            normalized_rows.append(row)
         normalized_rows.sort(key=lambda row: self._timestamp_value(row.get("created_at")))
         return normalized_rows
+
+    async def _load_manual_history_pages(
+        self,
+        *,
+        pacifica: Any,
+        wallet_address: str,
+        limit: int,
+        max_pages: int = 10,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        order_rows: list[dict[str, Any]] = []
+        position_rows: list[dict[str, Any]] = []
+        page_size = max(1, int(limit))
+        page_offset = 0
+
+        for _ in range(max_pages):
+            batch = await pacifica.get_order_history(wallet_address, limit=page_size, offset=page_offset)
+            if not batch:
+                break
+            order_rows.extend(batch)
+            if len(batch) < page_size:
+                break
+            page_offset += page_size
+
+        page_offset = 0
+        for _ in range(max_pages):
+            batch = await pacifica.get_position_history(wallet_address, limit=page_size, offset=page_offset)
+            if not batch:
+                break
+            position_rows.extend(batch)
+            if len(batch) < page_size:
+                break
+            page_offset += page_size
+
+        return order_rows, position_rows
 
     def _build_copy_state(
         self,
@@ -170,6 +237,7 @@ class BotCopyDashboardService:
         )
         open_lots_by_key: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
         recorded_close_markers: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+        recorded_open_markers: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
         realized_24h = 0.0
         realized_7d = 0.0
         now = datetime.now(tz=UTC)
@@ -200,6 +268,13 @@ class BotCopyDashboardService:
                         "last_activity_at": created_at,
                     }
                 )
+                recorded_open_markers[(symbol, position_side)].append(
+                    {
+                        "relationship_id": relationship_id,
+                        "created_at": created_at,
+                        "remaining_quantity": quantity,
+                    }
+                )
                 continue
 
             recorded_close_markers[(symbol, position_side)].append(
@@ -223,14 +298,27 @@ class BotCopyDashboardService:
                 realized_7d += pnl
 
         for history_row in manual_history_rows or []:
-            if str(history_row.get("event_kind") or "") != "close":
-                continue
             symbol = str(history_row.get("symbol") or "").strip().upper()
             position_side = str(history_row.get("position_side") or "").strip().lower()
             quantity = self._to_float(history_row.get("amount"))
             price = self._to_float(history_row.get("price"))
             created_at = self._as_datetime(history_row.get("created_at")) or now
-            if not symbol or position_side not in {"long", "short"} or quantity <= 0 or price <= 0:
+            exchange_realized_pnl = self._to_float(history_row.get("exchange_realized_pnl"))
+            event_kind = str(history_row.get("event_kind") or "").strip().lower()
+            if not symbol or position_side not in {"long", "short"} or quantity <= 0:
+                continue
+            if event_kind == "open":
+                if self._consume_recorded_close_markers(
+                    markers=recorded_open_markers[(symbol, position_side)],
+                    quantity=quantity,
+                    created_at=created_at,
+                ):
+                    if created_at >= now - timedelta(days=1):
+                        realized_24h += exchange_realized_pnl
+                    if created_at >= now - timedelta(days=7):
+                        realized_7d += exchange_realized_pnl
+                continue
+            if event_kind != "close" or price <= 0:
                 continue
             if self._consume_recorded_close_markers(
                 markers=recorded_close_markers[(symbol, position_side)],
@@ -238,7 +326,7 @@ class BotCopyDashboardService:
                 created_at=created_at,
             ):
                 continue
-            pnl = self._consume_lots(
+            fallback_pnl = self._consume_lots(
                 open_lots_by_key=open_lots_by_key,
                 relationship_id=None,
                 symbol=symbol,
@@ -247,6 +335,7 @@ class BotCopyDashboardService:
                 price=price,
                 created_at=created_at,
             )
+            pnl = exchange_realized_pnl if history_row.get("exchange_realized_pnl") is not None else fallback_pnl
             if created_at >= now - timedelta(days=1):
                 realized_24h += pnl
             if created_at >= now - timedelta(days=7):
@@ -722,14 +811,11 @@ class BotCopyDashboardService:
         reduce_only = cls._to_bool(row.get("reduce_only"), False)
         amount = cls._to_float(row.get("amount"))
         price = cls._to_float(row.get("price"))
-        order_status = str(row.get("order_status") or row.get("status") or "").lower().strip()
         if amount <= 1e-12 or price <= 0:
             return None, None
-        if reduce_only and (order_status in {"", "filled", "partially_filled"} or event_type.startswith("fulfill")):
+        if reduce_only:
             return "close", "short" if side == "long" else "long"
-        if order_status in {"filled", "partially_filled"} or event_type.startswith("fulfill"):
-            return "open", side
-        return None, None
+        return "open", side
 
     @staticmethod
     def _normalize_position_side(value: Any) -> str | None:
