@@ -1,6 +1,7 @@
 "use client";
 
 import type { RuntimeMetrics } from "@/lib/runtime-overview";
+import { formatRuntimeEventSummary, formatRuntimeEventType } from "@/lib/runtime-events";
 
 export function RuntimeFailurePanel({
   metrics,
@@ -38,11 +39,11 @@ export function RuntimeFailurePanel({
           metrics.recent_failures.slice(0, 6).map((failure) => (
             <div key={failure.id} className="grid min-w-0 gap-1 border-b border-[rgba(255,255,255,0.06)] pb-2 text-sm text-neutral-400 last:border-b-0">
               <div className="flex items-center justify-between gap-2">
-                <span className="font-mono text-xs font-bold uppercase tracking-wider">{failure.event_type}</span>
+                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-neutral-200">{formatRuntimeEventType(failure.event_type)}</span>
                 <span className="text-[0.68rem] text-neutral-500">{new Date(failure.created_at).toLocaleString()}</span>
               </div>
               <div className="text-[#dce85d] break-words">{failure.error_reason}</div>
-              <div className="text-xs text-neutral-500 truncate">{failure.decision_summary}</div>
+              <div className="text-xs text-neutral-500">{formatRuntimeEventSummary(failure)}</div>
             </div>
           ))
         ) : (

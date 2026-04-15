@@ -11,6 +11,7 @@ import { StrategyPassportPanel } from "@/components/leaderboard/strategy-passpor
 import { TrustBadgeStrip } from "@/components/leaderboard/trust-badge-strip";
 import { useClashxAuth } from "@/lib/clashx-auth";
 import { fetchAccessibleRuntimeProfile, fetchRuntimeProfile, type RuntimeProfile } from "@/lib/public-bots";
+import { formatRuntimeEventSummary, formatRuntimeEventType } from "@/lib/runtime-events";
 
 function formatSigned(value: number) {
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
@@ -264,8 +265,8 @@ export default function MarketplaceRuntimePage({ params: paramsPromise }: { para
               className="stagger-in grid gap-2 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-4 md:grid-cols-[0.8fr_1fr_0.5fr_1fr] md:items-center"
               style={{ animationDelay: `${index * 25}ms` }}
             >
-              <div className="font-mono text-base font-bold uppercase tracking-tight text-neutral-50">{event.event_type}</div>
-              <div className="text-sm text-neutral-400">{event.decision_summary}</div>
+              <div className="text-base font-semibold leading-tight text-neutral-50">{formatRuntimeEventType(event.event_type)}</div>
+              <div className="text-sm leading-6 text-neutral-400">{formatRuntimeEventSummary(event)}</div>
               <div className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">{event.status}</div>
               <div className="text-xs text-neutral-500">{new Date(event.created_at).toLocaleString()}</div>
             </article>

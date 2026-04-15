@@ -1,5 +1,7 @@
 import { useMemo } from "react";
 
+import { formatRuntimeEventType } from "@/lib/runtime-events";
+
 type BotExecutionEvent = {
   id: string;
   runtime_id: string;
@@ -30,22 +32,6 @@ const currencyFormatter = new Intl.NumberFormat(undefined, {
   currency: "USD",
   maximumFractionDigits: 0,
 });
-
-function formatEventType(eventType: string) {
-  if (eventType === "action.skipped") {
-    return "Action skipped";
-  }
-  if (eventType === "action.executed") {
-    return "Action executed";
-  }
-  if (eventType === "action.failed") {
-    return "Action failed";
-  }
-  if (eventType.startsWith("runtime.")) {
-    return `Runtime ${eventType.split(".", 2)[1]?.replace(/_/g, " ") ?? "update"}`;
-  }
-  return eventType.replace(/[._]/g, " ");
-}
 
 function describeActionType(actionType: string, symbol: string | null) {
   const market = symbol ? ` on ${symbol}` : "";
@@ -177,7 +163,7 @@ export function ExecutionLog({ events }: { events: BotExecutionEvent[] }) {
         >
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="grid gap-1">
-              <div className="font-mono text-base font-bold uppercase tracking-tight text-neutral-50">{formatEventType(event.event_type)}</div>
+              <div className="font-mono text-base font-bold uppercase tracking-tight text-neutral-50">{formatRuntimeEventType(event.event_type)}</div>
               <div className="text-sm text-neutral-400">{summarizeAction(event) || event.decision_summary}</div>
             </div>
             <div className="grid justify-items-end gap-2">
