@@ -18,8 +18,8 @@ export default function RoadmapPage() {
                     </div>
                     {/* Card */}
                     <div className="w-[calc(100%-3rem)] md:w-[calc(50%-2.5rem)] p-6 rounded-2xl border border-white/10 bg-[#090a0a]/80 backdrop-blur-md shadow-2xl transition-all duration-300 hover:border-[#dce85d]/50 hover:shadow-[0_0_30px_rgba(220,232,93,0.15)] group-hover:-translate-y-1">
-                        <div className="flex items-center gap-3 mb-3">
-                            <span className="px-2 py-1 rounded-md bg-[#dce85d]/10 text-[#dce85d] text-xs font-bold uppercase tracking-wider">Phase I</span>
+                        <div className="flex flex-col items-start gap-2 mb-3">
+                            <span className="shrink-0 w-fit whitespace-nowrap px-2 py-1 rounded-md bg-[#dce85d]/10 text-[#dce85d] text-xs font-bold uppercase tracking-wider">Phase I</span>
                             <h3 className="text-xl font-bold text-white m-0 mt-0">Cross-Margin Portfolio Engine</h3>
                         </div>
                         <p className="text-neutral-400 text-sm leading-relaxed mb-4">
@@ -39,8 +39,8 @@ export default function RoadmapPage() {
                         <Timer className="w-5 h-5" />
                     </div>
                     <div className="w-[calc(100%-3rem)] md:w-[calc(50%-2.5rem)] p-6 rounded-2xl border border-white/10 bg-[#090a0a]/80 backdrop-blur-md shadow-2xl transition-all duration-300 hover:border-cyan-500/50 hover:shadow-[0_0_30px_rgba(6,182,212,0.15)] group-hover:-translate-y-1">
-                        <div className="flex items-center gap-3 mb-3">
-                            <span className="px-2 py-1 rounded-md bg-cyan-500/10 text-cyan-400 text-xs font-bold uppercase tracking-wider">Phase II</span>
+                        <div className="flex flex-col items-start gap-2 mb-3">
+                            <span className="shrink-0 w-fit whitespace-nowrap px-2 py-1 rounded-md bg-cyan-500/10 text-cyan-400 text-xs font-bold uppercase tracking-wider">Phase II</span>
                             <h3 className="text-xl font-bold text-white m-0 mt-0">TWAP / VWAP Execution Nodes</h3>
                         </div>
                         <p className="text-neutral-400 text-sm leading-relaxed mb-4">
@@ -60,8 +60,8 @@ export default function RoadmapPage() {
                         <Lock className="w-5 h-5" />
                     </div>
                     <div className="w-[calc(100%-3rem)] md:w-[calc(50%-2.5rem)] p-6 rounded-2xl border border-white/10 bg-[#090a0a]/80 backdrop-blur-md shadow-2xl transition-all duration-300 hover:border-purple-500/50 hover:shadow-[0_0_30px_rgba(168,85,247,0.15)] group-hover:-translate-y-1">
-                        <div className="flex items-center gap-3 mb-3">
-                            <span className="px-2 py-1 rounded-md bg-purple-500/10 text-purple-400 text-xs font-bold uppercase tracking-wider">Phase III</span>
+                        <div className="flex flex-col items-start gap-2 mb-3">
+                            <span className="shrink-0 w-fit whitespace-nowrap px-2 py-1 rounded-md bg-purple-500/10 text-purple-400 text-xs font-bold uppercase tracking-wider">Phase III</span>
                             <h3 className="text-xl font-bold text-white m-0 mt-0">NFT-Gated Private Bots</h3>
                         </div>
                         <p className="text-neutral-400 text-sm leading-relaxed mb-4">
