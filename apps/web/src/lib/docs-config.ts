@@ -35,5 +35,11 @@ export const docsConfig: { sidebarNav: NavItem[] } = {
                 { title: "API Reference", href: "/docs/api-reference" },
             ],
         },
+        {
+            title: "Vision",
+            items: [
+                { title: "Roadmap", href: "/docs/roadmap" },
+            ],
+        },
     ],
 };

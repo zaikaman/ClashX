@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Search, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { usePathname } from "next/navigation";
 
 export function DocsHeader() {
@@ -20,16 +20,10 @@ export function DocsHeader() {
                 <div className="hidden h-5 w-px bg-white/10 md:block" />
                 <nav className="hidden items-center gap-4 text-sm font-medium text-neutral-400 md:flex">
                     <Link href="/docs" className="text-white">Documentation</Link>
-                    <Link href="/api-reference" className="hover:text-white transition-colors">API Reference</Link>
                 </nav>
             </div>
 
             <div className="flex items-center gap-4">
-                <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-neutral-400 md:flex">
-                    <Search className="h-4 w-4" />
-                    <span>Search docs...</span>
-                    <span className="ml-4 rounded-md border border-white/10 bg-white/5 px-1 text-xs">⌘K</span>
-                </div>
                 <Link
                     href="/dashboard"
                     className="rounded-full bg-[#dce85d] px-4 py-1.5 text-sm font-medium text-[#090a0a] transition hover:bg-[#dce85d]/90"

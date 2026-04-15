@@ -96,26 +96,19 @@ I can click 'Mirror' on this top SOL breakout bot.
 *(Visual: Click Mirror, show scale factor slider adjusting to 50%)*. 
 I set my scale factor to 50% of the creator's size. Now, whenever their bot triggers an execution event, our Copy Worker instantly replicates that Pacifica order to my wallet. We can even group multiple bots into a Portfolio Basket that automatically rebalances based on drift."
 
-## 4. Pacifica Integration (4:20 - 5:10)
+## 4. Pacifica Integration (4:20 - 5:20)
 **Visual:** 
-- Code walkthrough instead of a generic split screen. Keep the live execution feed visible in a small corner while the main canvas moves through four labeled snippets.
-- Snippet 1: `pacifica_auth_service.py` showing agent wallet generation, `approve_builder_code`, `bind_agent_wallet`, and encrypted agent key storage.
-- Snippet 2: `pacifica_market_data_service.py` showing the Pacifica WebSocket subscribe call and normalization of mark price, oracle price, and funding rate into the shared cache.
-- Snippet 3: `pacifica_client.py` showing the endpoint map for `create_market_order`, `create_order`, `create_twap_order`, `set_position_tpsl`, and `update_leverage`, plus the block where `builder_code` is injected into supported requests.
-- Snippet 4: `bot_runtime_worker.py` showing leverage sync via `get_account_settings`, position refresh via `get_positions`, and live order submission. End with a quick Pacifica transaction view tied to the delegated agent wallet.
+- Code walkthrough only. Keep the live execution feed visible in a small corner while the main canvas shows one code image per shot.
 
-**Audio / Voiceover:**
-"This is the Pacifica integration path in the code.
+**Shot 1: Pacifica APIs Used**
+- **Visual:** `services/trading-backend/src/services/pacifica_client.py:84-238` showing the endpoint map, request-type inference, and `_normalize_payload` block.
+- **Audio / Voiceover:** "Pacifica is the execution layer for ClashX. The client routes requests to Pacifica APIs for bind-agent, market orders, limit orders, TWAP orders, TP and SL, and leverage updates, then normalizes each payload and injects the approved builder code where Pacifica expects it."
 
-First, in `pacifica_auth_service.py`, ClashX generates a dedicated agent wallet for the user, prepares the two Pacifica authorization payloads, `approve_builder_code` and `bind_agent_wallet`, and stores the agent private key encrypted. That is how we stay non-custodial while still enabling live execution.
+**Shot 2: Orders, Positions, Funding, and Margin**
+- **Visual:** `services/trading-backend/src/workers/bot_runtime_worker.py:876-916` showing the market-order execution path.
+- **Audio / Voiceover:** "Orders go out through Pacifica directly, with leverage checked first so the trade uses the right risk settings. Pacifica also remains the source of truth for live positions, margin, and funding data, so the runtime is always acting on Pacifica state rather than a separate copy."
 
-Next, in `pacifica_market_data_service.py`, the backend opens a Pacifica price-feed WebSocket and subscribes to `prices`. Those messages are normalized into shared market state with mark price, oracle price, funding rate, and next funding rate, so every runtime is reading from Pacifica-native live data instead of a separate pricing layer.
-
-Then everything funnels through `pacifica_client.py`. You can see the exact Pacifica endpoints we use: `bind_agent_wallet`, `create_market_order`, `create_order`, `create_twap_order`, `set_position_tpsl`, and `update_leverage`. For supported execution requests, ClashX automatically injects the approved builder code, so builder fees stay inside Pacifica's native flow rather than sitting outside it.
-
-Finally, in `bot_runtime_worker.py`, the worker refreshes Pacifica positions, checks account settings, syncs leverage when needed, and submits the actual order. So orders are sent through Pacifica, open positions are read back from Pacifica, funding rates come from Pacifica market data, and margin state is read from Pacifica account and position responses while leverage is actively managed through Pacifica's account API. Pacifica is not optional infrastructure here. It is the authorization layer, the market data layer, the position source of truth, and the execution engine for ClashX."
-
-## 5. Value & Impact (5:10 - 5:40)
+## 5. Value & Impact (5:20 - 5:50)
 **Visual:** 
 - Show a mock-up of a mobile phone receiving a Telegram notification: "Trade Executed: Long 50 SOL".
 - Transition to the Analytics Dashboard showing a rising equity curve and risk metrics.
@@ -123,16 +116,18 @@ Finally, in `bot_runtime_worker.py`, the worker refreshes Pacifica positions, ch
 **Audio / Voiceover:**
 "The impact here is massive. We are leveling the playing field. 
 
-Retail traders get strict risk management, 24/7 opportunity capture, and Telegram alerts, eliminating emotional trading errors. Strategy creators get a marketplace to monetize their edge through copy-trading. And Pacifica gets a massive injection of systematic, predictable volume running continuously through its smart contracts."
+Retail traders get strict risk management, 24/7 opportunity capture, and alerts on their phone, eliminating emotional trading errors. Strategy creators get a marketplace to monetize their edge through copy-trading. And Pacifica gets a massive injection of systematic, predictable volume running continuously through its smart contracts."
 
-## 6. What’s Next (5:40 - 6:00)
+## 6. What’s Next (5:50 - 6:10)
 **Visual:** 
-- A clean, well-designed roadmap slide displaying 3 future milestones: Cross-Margin Strategies, TWAP/VWAP Nodes, NFT-gated Bots.
+- A clean, high-confidence roadmap slide with three forward-looking milestones, each shown as a bold card with an understated progress accent: Cross-Margin Portfolio Engine, TWAP/VWAP Execution Nodes, NFT-Gated Private Bots.
 
 **Audio / Voiceover:**
-"What's next for ClashX? Post-hackathon, we are expanding our portfolio allocator to support multi-asset cross-margin strategies, introducing TWAP and VWAP execution nodes, and allowing creators to gate their invite-only bots using NFTs. 
+"What's next for ClashX? We’re taking the platform beyond single-strategy automation and into a more expressive trading stack.
 
-ClashX is ready to change how humans trade on Pacifica. Thank you."
+Next, we’re building a cross-margin portfolio engine so capital can be allocated across multiple correlated positions with shared risk awareness. We’re also adding TWAP and VWAP execution nodes for traders who need slower, more deliberate order flow instead of simple one-shot entries. And for creators, we’re exploring NFT-gated private bots so access, subscriptions, and strategy communities can all live on-chain.
+
+ClashX is just getting started. Stay tuned for what's coming. Thank you."
 
 ---
 

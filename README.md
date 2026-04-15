@@ -984,6 +984,7 @@ cp .env.example .env
 - `PACIFICA_NETWORK` - Set to `Testnet` for development
 - `PACIFICA_API_KEY` - Pacifica API key
 - `PACIFICA_API_SECRET` - Pacifica API secret
+- `PACIFICA_BUILDER_CODE` - Your Pacifica builder code
 - `PACIFICA_AGENT_ENCRYPTION_KEY` - AES key for agent wallet encryption
 
 **Optional for AI copilot:**
