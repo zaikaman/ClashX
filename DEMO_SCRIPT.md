@@ -98,15 +98,22 @@ I set my scale factor to 50% of the creator's size. Now, whenever their bot trig
 
 ## 4. Pacifica Integration (4:20 - 5:10)
 **Visual:** 
-- Split screen. Left side: Bot execution logs streaming in the UI. 
-- Right side: Quick pan over code snippets showing the delegated authorization flow (`approve_builder_code`, `bind_agent_wallet`), the shared Pacifica price feed subscription, and order submission calls (`create_market_order`, `create_order`, `set_position_tpsl`, `create_twap_order`), plus a block explorer showing transactions tied to the delegated agent wallet.
+- Code walkthrough instead of a generic split screen. Keep the live execution feed visible in a small corner while the main canvas moves through four labeled snippets.
+- Snippet 1: `pacifica_auth_service.py` showing agent wallet generation, `approve_builder_code`, `bind_agent_wallet`, and encrypted agent key storage.
+- Snippet 2: `pacifica_market_data_service.py` showing the Pacifica WebSocket subscribe call and normalization of mark price, oracle price, and funding rate into the shared cache.
+- Snippet 3: `pacifica_client.py` showing the endpoint map for `create_market_order`, `create_order`, `create_twap_order`, `set_position_tpsl`, and `update_leverage`, plus the block where `builder_code` is injected into supported requests.
+- Snippet 4: `bot_runtime_worker.py` showing leverage sync via `get_account_settings`, position refresh via `get_positions`, and live order submission. End with a quick Pacifica transaction view tied to the delegated agent wallet.
 
 **Audio / Voiceover:**
-"ClashX is built exclusively for and deeply integrated with Pacifica. 
+"This is the Pacifica integration path in the code.
 
-We aren't just a basic UI wrapper—on startup, ClashX opens a shared Pacifica price-feed WebSocket, keeps market snapshots and candle data warm, and our runtime workers reevaluate active bots every few seconds against that live cache. When a user authorizes ClashX, we generate a delegated agent wallet, have the user approve the builder code and bind that agent on Pacifica, then store the agent key encrypted for live execution. 
+First, in `pacifica_auth_service.py`, ClashX generates a dedicated agent wallet for the user, prepares the two Pacifica authorization payloads, `approve_builder_code` and `bind_agent_wallet`, and stores the agent private key encrypted. That is how we stay non-custodial while still enabling live execution.
 
-From there, our workers can submit Pacifica market orders, limit orders, TWAP orders, leverage updates, cancels, and TP/SL protection on the user's account without custodying the user's main wallet keys. Live funding rates also flow into the rule engine, so bots can trigger on Pacifica funding conditions as well as price. And because supported requests automatically include the approved builder code, builder fees stay transparent inside Pacifica's execution flow. Pacifica isn't just where orders land—it's the market data and execution layer the whole product runs on."
+Next, in `pacifica_market_data_service.py`, the backend opens a Pacifica price-feed WebSocket and subscribes to `prices`. Those messages are normalized into shared market state with mark price, oracle price, funding rate, and next funding rate, so every runtime is reading from Pacifica-native live data instead of a separate pricing layer.
+
+Then everything funnels through `pacifica_client.py`. You can see the exact Pacifica endpoints we use: `bind_agent_wallet`, `create_market_order`, `create_order`, `create_twap_order`, `set_position_tpsl`, and `update_leverage`. For supported execution requests, ClashX automatically injects the approved builder code, so builder fees stay inside Pacifica's native flow rather than sitting outside it.
+
+Finally, in `bot_runtime_worker.py`, the worker refreshes Pacifica positions, checks account settings, syncs leverage when needed, and submits the actual order. So orders are sent through Pacifica, open positions are read back from Pacifica, funding rates come from Pacifica market data, and margin state is read from Pacifica account and position responses while leverage is actively managed through Pacifica's account API. Pacifica is not optional infrastructure here. It is the authorization layer, the market data layer, the position source of truth, and the execution engine for ClashX."
 
 ## 5. Value & Impact (5:10 - 5:40)
 **Visual:** 

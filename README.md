@@ -875,10 +875,10 @@ Before a bot can be deployed, it must pass a multi-stage validation pipeline:
 
 ## Delegated Wallet Authorization
 
-ClashX uses Pacifica's builder program to enable non-custodial automated trading. The authorization flow works as follows:
+ClashX uses delegated wallet authorization to enable non-custodial automated trading. The authorization flow works as follows:
 
 1. **Agent wallet generation**: ClashX generates a unique agent wallet (Solana keypair) for each user.The agent private key is encrypted with AES using the platform's encryption key and stored in the database.
-2. **Builder approval**: The user signs a message approving ClashX as a builder for their account, authorizing the platform to submit orders with a configurable maximum fee rate.
+2. **Builder approval**: The user signs a message approving ClashX as a builder for their account, authorizing the platform to submit orders for their account.
 3. **Agent binding**: The user signs a second message binding the generated agent wallet to their account, granting it permission to act on their behalf.
 4. **Activation**: Once both signatures are submitted and verified on-chain, the authorization status moves to `active` and bots can begin trading.
 
@@ -887,7 +887,6 @@ ClashX uses Pacifica's builder program to enable non-custodial automated trading
 - The agent wallet can only execute trades, not withdraw funds.
 - Authorization can be revoked at any time by the user.
 - Each authorization record includes the original signed messages and signatures for full auditability.
-- The builder fee rate is capped and transparent.
 
 ---
 
@@ -985,7 +984,6 @@ cp .env.example .env
 - `PACIFICA_NETWORK` - Set to `Testnet` for development
 - `PACIFICA_API_KEY` - Pacifica API key
 - `PACIFICA_API_SECRET` - Pacifica API secret
-- `PACIFICA_BUILDER_CODE` - Your Pacifica builder code
 - `PACIFICA_AGENT_ENCRYPTION_KEY` - AES key for agent wallet encryption
 
 **Optional for AI copilot:**
