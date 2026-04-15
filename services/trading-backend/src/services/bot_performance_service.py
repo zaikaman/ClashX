@@ -516,9 +516,9 @@ class BotPerformanceService:
                 continue
             desired_positions = desired_payload.get("positions") if isinstance(desired_payload.get("positions"), list) else []
 
-            entry_price = self._to_float(desired_owner.get("reference_price"))
+            entry_price = self._to_float((live_position or {}).get("entry_price"))
             if entry_price <= 0:
-                entry_price = self._to_float((live_position or {}).get("entry_price"))
+                entry_price = self._to_float(desired_owner.get("reference_price"))
             if entry_price <= 0 and isinstance(removed_position, dict):
                 entry_price = self._to_float(removed_position.get("entry_price"))
             mark_price = self._to_float((live_position or {}).get("mark_price"))
@@ -787,6 +787,12 @@ class BotPerformanceService:
             live_side = self._normalize_position_side((live_position or {}).get("side"))
             if live_positions_loaded and (live_position is None or live_side != runtime_side):
                 continue
+            live_amount = abs(self._to_float((live_position or {}).get("amount")))
+            if live_amount > 1e-12:
+                quantity = live_amount if runtime_side == "long" else -live_amount
+            live_entry_price = self._to_float((live_position or {}).get("entry_price"))
+            if live_entry_price > 0:
+                entry_price = live_entry_price
             mark_price = 0.0
             if live_position is not None and live_side == runtime_side:
                 mark_price = float(live_position.get("mark_price") or 0.0)
