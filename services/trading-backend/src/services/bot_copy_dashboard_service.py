@@ -482,29 +482,62 @@ class BotCopyDashboardService:
 
         attributed_positions: list[dict[str, Any]] = []
         used_wallet_keys: set[tuple[str, str]] = set()
+        grouped_copy_positions: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
         for item in copy_state["positions"]:
-            symbol = str(item["symbol"]).upper()
-            side = str(item["side"]).lower()
+            symbol = str(item.get("symbol") or "").upper()
+            side = str(item.get("side") or "").lower()
+            if symbol and side in {"long", "short"}:
+                grouped_copy_positions[(symbol, side)].append(item)
+
+        for (symbol, side), grouped_items in grouped_copy_positions.items():
             wallet_position = wallet_position_lookup.get((symbol, side))
             if positions_loaded and self._position_size(wallet_position) <= 0:
                 continue
+
             mark_price = self._to_float((wallet_position or {}).get("mark_price")) or market_lookup.get(symbol, 0.0)
             if positions_loaded and mark_price <= 0:
                 continue
-            quantity = self._to_float(item["quantity"])
-            entry_price = self._to_float(item["entry_price"])
-            notional_usd = quantity * mark_price if mark_price > 0 else 0.0
-            unrealized_pnl = 0.0
-            if mark_price > 0 and entry_price > 0:
-                unrealized_pnl = (mark_price - entry_price) * quantity if side == "long" else (entry_price - mark_price) * quantity
-            attributed_positions.append(
-                {
-                    **item,
-                    "mark_price": round(mark_price, 8),
-                    "notional_usd": round(notional_usd, 2),
-                    "unrealized_pnl_usd": round(unrealized_pnl, 2),
-                }
-            )
+
+            wallet_quantity = self._position_size(wallet_position)
+            wallet_entry_price = self._to_float((wallet_position or {}).get("entry_price"))
+            copy_quantity_total = sum(self._to_float(item.get("quantity")) for item in grouped_items)
+
+            for item in grouped_items:
+                base_quantity = self._to_float(item.get("quantity"))
+                if base_quantity <= 0:
+                    continue
+
+                quantity = base_quantity
+                if positions_loaded and wallet_quantity > 0:
+                    if len(grouped_items) == 1:
+                        quantity = wallet_quantity
+                    elif copy_quantity_total > 1e-9:
+                        quantity = wallet_quantity * (base_quantity / copy_quantity_total)
+                    else:
+                        quantity = wallet_quantity / len(grouped_items)
+
+                entry_price = self._to_float(item.get("entry_price"))
+                if positions_loaded and wallet_entry_price > 0:
+                    entry_price = wallet_entry_price
+
+                notional_usd = quantity * mark_price if mark_price > 0 else 0.0
+                unrealized_pnl = 0.0
+                if mark_price > 0 and entry_price > 0:
+                    unrealized_pnl = (
+                        (mark_price - entry_price) * quantity if side == "long" else (entry_price - mark_price) * quantity
+                    )
+
+                attributed_positions.append(
+                    {
+                        **item,
+                        "quantity": round(quantity, 8),
+                        "entry_price": round(entry_price, 8),
+                        "mark_price": round(mark_price, 8),
+                        "notional_usd": round(notional_usd, 2),
+                        "unrealized_pnl_usd": round(unrealized_pnl, 2),
+                    }
+                )
+
             if wallet_position is not None:
                 used_wallet_keys.add((symbol, side))
 
