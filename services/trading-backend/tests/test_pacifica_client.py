@@ -269,6 +269,65 @@ class _SplitOnLargeRangeFakeHttpClient:
         )
 
 
+class _OrderHistoryByIdFakeHttpClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def get(self, url: str, *, params: dict[str, Any], headers: dict[str, str]) -> _FakeHttpResponse:
+        self.calls.append({"url": url, "params": params, "headers": headers})
+        return _FakeHttpResponse(
+            {
+                "success": True,
+                "data": [
+                    {
+                        "history_id": 617154019,
+                        "order_id": params["order_id"],
+                        "client_order_id": "fill-1",
+                        "symbol": "HYPE",
+                        "side": "ask",
+                        "price": "43.251",
+                        "initial_amount": "13.77",
+                        "filled_amount": "2.96",
+                        "event_type": "fulfill_market",
+                        "order_type": "market",
+                        "order_status": "partially_filled",
+                        "reduce_only": False,
+                        "created_at": 1776241599924,
+                    }
+                ],
+            }
+        )
+
+
+class _PositionHistoryFakeHttpClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def get(self, url: str, *, params: dict[str, Any], headers: dict[str, str]) -> _FakeHttpResponse:
+        self.calls.append({"url": url, "params": params, "headers": headers})
+        return _FakeHttpResponse(
+            {
+                "success": True,
+                "data": [
+                    {
+                        "history_id": 66683341,
+                        "order_id": 308576839,
+                        "client_order_id": None,
+                        "symbol": "HYPE",
+                        "amount": "2.96",
+                        "price": "43.628",
+                        "entry_price": "43.347841",
+                        "fee": "0.051656",
+                        "pnl": "-0.880926",
+                        "event_type": "fulfill_taker",
+                        "side": "close_short",
+                        "created_at": 1776241813343,
+                    }
+                ],
+            }
+        )
+
+
 async def _noop_throttle(**_: Any) -> None:
     return None
 
@@ -478,6 +537,65 @@ def test_get_kline_splits_again_when_provider_rejects_a_chunk_as_too_large() -> 
     assert len(candles) >= 2
     assert candles[0]["open_time"] == 0
     assert candles[-1]["open_time"] == 60_000 * 3_500
+
+
+def test_get_order_history_by_id_uses_filled_amount_fields() -> None:
+    client = object.__new__(PacificaClient)
+    client.settings = SimpleNamespace(pacifica_rest_url="https://pacifica.test")
+    client._http = _OrderHistoryByIdFakeHttpClient()
+    client._throttle = _noop_throttle
+
+    rows = asyncio.run(client.get_order_history_by_id(308576513))
+
+    assert client._http.calls[0]["url"] == "https://pacifica.test/orders/history_by_id"
+    assert rows == [
+        {
+            "history_id": 617154019,
+            "order_id": 308576513,
+            "client_order_id": "fill-1",
+            "symbol": "HYPE",
+            "side": "ask",
+            "price": 43.251,
+            "amount": 2.96,
+            "requested_amount": 13.77,
+            "order_type": "market",
+            "reduce_only": False,
+            "order_status": "partially_filled",
+            "event_type": "fulfill_market",
+            "created_at": 1776241599924,
+        }
+    ]
+
+
+def test_get_position_history_preserves_close_direction_and_realized_pnl() -> None:
+    client = object.__new__(PacificaClient)
+    client.settings = SimpleNamespace(pacifica_rest_url="https://pacifica.test")
+    client._http = _PositionHistoryFakeHttpClient()
+    client._throttle = _noop_throttle
+
+    rows = asyncio.run(client.get_position_history("wallet-1"))
+
+    assert client._http.calls[0]["url"] == "https://pacifica.test/positions/history"
+    assert rows == [
+        {
+            "history_id": 66683341,
+            "order_id": 308576839,
+            "client_order_id": None,
+            "symbol": "HYPE",
+            "amount": 2.96,
+            "price": 43.628,
+            "entry_price": 43.347841,
+            "fee": 0.051656,
+            "pnl": -0.880926,
+            "side": "close_short",
+            "event_kind": "close",
+            "position_side": "short",
+            "reduce_only": True,
+            "is_maker": False,
+            "event_type": "fulfill_taker",
+            "created_at": 1776241813343,
+        }
+    ]
 
 
 def test_load_candle_lookup_falls_back_to_mark_candles_when_trade_feed_is_sparse() -> None:

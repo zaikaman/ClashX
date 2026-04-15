@@ -1124,15 +1124,24 @@ class PacificaClient:
         for item in payload:
             if not isinstance(item, dict):
                 continue
+            raw_side = str(item.get("side") or "").strip().lower()
+            event_kind = "open" if raw_side.startswith("open_") else "close" if raw_side.startswith("close_") else None
+            position_side = "long" if raw_side.endswith("long") else "short" if raw_side.endswith("short") else None
             history.append(
                 {
                     "history_id": item.get("historyId") or item.get("history_id"),
+                    "order_id": item.get("orderId") or item.get("order_id"),
+                    "client_order_id": item.get("clientOrderId") or item.get("client_order_id"),
                     "symbol": item.get("symbol"),
                     "amount": float(item.get("amount", 0) or 0),
                     "price": float(item.get("price", 0) or 0),
                     "entry_price": float(item.get("entryPrice", item.get("entry_price", 0)) or 0),
                     "fee": float(item.get("fee", 0) or 0),
                     "pnl": float(item.get("pnl", 0) or 0),
+                    "side": raw_side or None,
+                    "event_kind": event_kind,
+                    "position_side": position_side,
+                    "reduce_only": raw_side.startswith("close_"),
                     "is_maker": bool(item.get("isMaker", item.get("is_maker", False))),
                     "event_type": str(item.get("eventType", item.get("event_type", "")) or ""),
                     "created_at": item.get("createdAt") or item.get("created_at"),
@@ -1217,12 +1226,33 @@ class PacificaClient:
                 {
                     "history_id": item.get("historyId") or item.get("history_id"),
                     "order_id": item.get("orderId") or item.get("order_id"),
+                    "client_order_id": item.get("clientOrderId") or item.get("client_order_id"),
                     "symbol": item.get("symbol"),
                     "side": item.get("side"),
-                    "price": float(item.get("price", 0) or 0),
-                    "amount": float(item.get("amount", 0) or 0),
+                    "price": float(
+                        item.get(
+                            "averageFilledPrice",
+                            item.get("average_filled_price", item.get("price", 0)),
+                        )
+                        or 0
+                    ),
+                    "amount": float(
+                        item.get(
+                            "filledAmount",
+                            item.get("filled_amount", item.get("amount", 0)),
+                        )
+                        or 0
+                    ),
+                    "requested_amount": float(
+                        item.get(
+                            "amount",
+                            item.get("initial_amount", item.get("requested_amount", 0)),
+                        )
+                        or 0
+                    ),
                     "order_type": item.get("orderType") or item.get("order_type"),
                     "reduce_only": bool(item.get("reduceOnly", item.get("reduce_only", False))),
+                    "order_status": str(item.get("orderStatus", item.get("order_status", item.get("status", ""))) or ""),
                     "event_type": str(item.get("eventType", item.get("event_type", "")) or ""),
                     "created_at": item.get("createdAt") or item.get("created_at"),
                 }

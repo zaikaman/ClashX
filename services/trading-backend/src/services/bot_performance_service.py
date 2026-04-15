@@ -865,7 +865,14 @@ class BotPerformanceService:
             closures = self._supabase.select("bot_trade_closures", filters={"runtime_id": runtime_id})
             if self._has_live_position_drift(lots, live_position_lookup, live_positions_loaded):
                 return None
-            if self._has_manual_history_drift(runtime, sync_state, lots, manual_close_history):
+            if self._has_manual_history_drift(
+                runtime,
+                sync_state,
+                lots,
+                manual_close_history,
+                closures=closures,
+                events=events,
+            ):
                 return None
             return lots, closures
         except SupabaseRestError as exc:
@@ -903,6 +910,9 @@ class BotPerformanceService:
         sync_state: dict[str, Any],
         lots: list[dict[str, Any]],
         manual_close_history: list[dict[str, Any]] | None,
+        *,
+        closures: list[dict[str, Any]] | None = None,
+        events: list[dict[str, Any]] | None = None,
     ) -> bool:
         if manual_close_history is None:
             return False
@@ -911,6 +921,16 @@ class BotPerformanceService:
             for item in lots
             if self._normalize_symbol(item.get("symbol"))
         }
+        symbols.update(
+            self._normalize_symbol(item.get("symbol"))
+            for item in (closures or [])
+            if self._normalize_symbol(item.get("symbol"))
+        )
+        symbols.update(
+            self._extract_event_symbol_hint(event)
+            for event in (events or [])
+            if self._extract_event_symbol_hint(event)
+        )
         if not symbols:
             return False
         deployed_at = self._timestamp_value(runtime.get("deployed_at"))
@@ -1516,7 +1536,17 @@ class BotPerformanceService:
     ) -> list[dict[str, Any]]:
         position_rows = await self._load_position_history_pages(wallet_address, limit=limit, offset=offset)
         order_rows = await self._load_wallet_order_history_pages(wallet_address, limit=limit, offset=offset)
-        return self._normalize_manual_history_rows([*position_rows, *order_rows])
+        position_order_ids = {
+            str(row.get("order_id") or row.get("orderId") or "").strip()
+            for row in position_rows
+            if str(row.get("order_id") or row.get("orderId") or "").strip()
+        }
+        filtered_order_rows = [
+            row
+            for row in order_rows
+            if str(row.get("order_id") or row.get("orderId") or "").strip() not in position_order_ids
+        ]
+        return self._normalize_manual_history_rows([*position_rows, *filtered_order_rows])
 
     async def _load_position_history_pages(
         self,
@@ -1714,7 +1744,7 @@ class BotPerformanceService:
     @staticmethod
     def _is_fill_event(row: dict[str, Any]) -> bool:
         event_type = str(row.get("event_type") or "").lower()
-        return event_type not in {"", "make", "cancel", "cancelled"}
+        return event_type not in {"", "make", "cancel", "cancelled", "expired"}
 
     @classmethod
     def _is_usable_fill(cls, row: dict[str, Any]) -> bool:

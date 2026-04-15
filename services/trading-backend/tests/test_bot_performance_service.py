@@ -1206,7 +1206,10 @@ def test_runtime_performance_realizes_manual_close_from_wallet_order_history() -
     fake_pacifica.position_history["shared-wallet"] = [
         {
             "history_id": 7001,
+            "order_id": 9001,
             "symbol": "BTC",
+            "event_kind": "close",
+            "position_side": "long",
             "amount": 1.0,
             "price": 120.0,
             "entry_price": 100.0,
