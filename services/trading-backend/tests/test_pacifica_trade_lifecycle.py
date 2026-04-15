@@ -1092,6 +1092,98 @@ def test_runtime_process_does_not_reenter_or_duplicate_tpsl_while_position_sync_
     ]
 
 
+def test_runtime_process_retries_deferred_tpsl_without_requiring_rule_retrigger(monkeypatch: Any) -> None:
+    monkeypatch.setattr("src.workers.bot_runtime_worker.broadcaster.publish", _noop_publish)
+
+    supabase = FakeSupabaseRestClient()
+    bot_id = "bot-1"
+    runtime_id = "runtime-1"
+    wallet_address = "wallet-1"
+    user_id = "user-1"
+    actions = [
+        {"type": "open_long", "symbol": "BTC", "size_usd": 105.0, "leverage": 3},
+        {"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.8, "stop_loss_pct": 0.9},
+    ]
+    supabase.tables["bot_definitions"] = [
+        {
+            "id": bot_id,
+            "user_id": user_id,
+            "wallet_address": wallet_address,
+            "rules_json": {
+                "conditions": [{"type": "price_below", "symbol": "BTC", "value": 200000}],
+                "actions": actions,
+            },
+        }
+    ]
+    supabase.tables["bot_runtimes"] = [
+        {
+            "id": runtime_id,
+            "bot_definition_id": bot_id,
+            "user_id": user_id,
+            "wallet_address": wallet_address,
+            "status": "active",
+            "mode": "live",
+            "risk_policy_json": {"max_open_positions": 1, "cooldown_seconds": 0},
+            "updated_at": "2026-03-18T07:00:00+00:00",
+        }
+    ]
+    supabase.tables["bot_execution_events"] = []
+
+    pacifica = FakePacificaClient()
+    pacifica._margin_settings = [{"symbol": "BTC", "isolated": False, "leverage": 3}]
+    pacifica._positions_visible = False
+
+    worker = BotRuntimeWorker()
+    worker._supabase = supabase
+    worker._engine._supabase = supabase
+    worker._auth = FakeAuthService()
+    worker._pacifica = pacifica
+    worker._indicator_context = FakeIndicatorContextService()
+    worker._coordination = FakeCoordinationService()
+
+    evaluate_calls = {"count": 0}
+
+    def fake_evaluate(*, rules_json: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        del rules_json, context
+        evaluate_calls["count"] += 1
+        if evaluate_calls["count"] == 1:
+            return {"triggered": True, "actions": deepcopy(actions)}
+        return {"triggered": False, "actions": []}
+
+    async def fake_performance(runtime: dict[str, Any]) -> dict[str, Any]:
+        del runtime
+        return {"pnl_total": 0.0, "pnl_realized": 0.0, "pnl_unrealized": 0.0}
+
+    worker._rules.evaluate = fake_evaluate  # type: ignore[method-assign]
+    worker._calculate_runtime_performance = fake_performance  # type: ignore[method-assign]
+
+    asyncio.run(worker._process_runtime(None, supabase.tables["bot_runtimes"][0]))
+
+    runtime_state = supabase.tables["bot_runtimes"][0]["risk_policy_json"]["_runtime_state"]
+    assert [call.get("type") for call in pacifica.order_calls] == [
+        "update_leverage",
+        "create_market_order",
+    ]
+    assert runtime_state["pending_tpsl_actions"]["BTC"]["type"] == "set_tpsl"
+    assert not any(
+        event.get("event_type") == "action.skipped"
+        and isinstance(event.get("request_payload"), dict)
+        and event["request_payload"].get("type") == "set_tpsl"
+        for event in supabase.tables["bot_execution_events"]
+    )
+
+    pacifica._positions_visible = True
+    asyncio.run(worker._process_runtime(None, supabase.tables["bot_runtimes"][0]))
+
+    runtime_state = supabase.tables["bot_runtimes"][0]["risk_policy_json"]["_runtime_state"]
+    assert [call.get("type") for call in pacifica.order_calls] == [
+        "update_leverage",
+        "create_market_order",
+        "set_position_tpsl",
+    ]
+    assert not runtime_state.get("pending_tpsl_actions")
+
+
 def test_runtime_process_does_not_append_duplicate_skipped_tpsl_events_for_unchanged_state(monkeypatch: Any) -> None:
     monkeypatch.setattr("src.workers.bot_runtime_worker.broadcaster.publish", _noop_publish)
 

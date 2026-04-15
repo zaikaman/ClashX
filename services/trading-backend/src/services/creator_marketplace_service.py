@@ -15,6 +15,7 @@ from src.models import (
 )
 from src.services.bot_builder_service import BotBuilderService
 from src.services.bot_leaderboard_engine import BotLeaderboardEngine
+from src.services.bot_runtime_engine import BotRuntimeEngine
 from src.services.bot_trust_service import BotTrustService
 from src.services.supabase_rest import SupabaseRestClient, SupabaseRestError
 
@@ -509,7 +510,7 @@ class CreatorMarketplaceService:
 
         rows = self.supabase.select(
             "bot_execution_events",
-            columns="id,runtime_id,event_type,decision_summary,status,created_at",
+            columns="id,runtime_id,event_type,decision_summary,request_payload,result_payload,status,error_reason,created_at",
             filters={"runtime_id": ("in", normalized_runtime_ids)},
             order="created_at.desc",
             limit=max(200, len(normalized_runtime_ids) * limit_per_runtime * 3),
@@ -519,15 +520,7 @@ class CreatorMarketplaceService:
             runtime_id = str(row.get("runtime_id") or "").strip()
             if runtime_id not in events_by_runtime or len(events_by_runtime[runtime_id]) >= limit_per_runtime:
                 continue
-            events_by_runtime[runtime_id].append(
-                {
-                    "id": row["id"],
-                    "event_type": row["event_type"],
-                    "decision_summary": row["decision_summary"],
-                    "status": row["status"],
-                    "created_at": row["created_at"],
-                }
-            )
+            events_by_runtime[runtime_id].append(BotRuntimeEngine.serialize_event_summary(row))
         return events_by_runtime
 
     @staticmethod

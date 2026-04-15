@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { use, useEffect, useState } from "react";
 
+import { ExecutionLog } from "@/components/bots/execution-log";
 import { BotCloneModal } from "@/components/copy/bot-clone-modal";
 import { BotMirrorModal } from "@/components/copy/bot-mirror-modal";
 import { CreatorReputationCard } from "@/components/leaderboard/creator-reputation-card";
@@ -11,7 +12,6 @@ import { StrategyPassportPanel } from "@/components/leaderboard/strategy-passpor
 import { TrustBadgeStrip } from "@/components/leaderboard/trust-badge-strip";
 import { useClashxAuth } from "@/lib/clashx-auth";
 import { fetchAccessibleRuntimeProfile, fetchRuntimeProfile, type RuntimeProfile } from "@/lib/public-bots";
-import { formatRuntimeEventSummary, formatRuntimeEventType } from "@/lib/runtime-events";
 
 function formatSigned(value: number) {
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
@@ -245,36 +245,37 @@ export default function MarketplaceRuntimePage({ params: paramsPromise }: { para
         </div>
       </section>
 
-      <section className="grid gap-3 rounded-[1.75rem] border border-[rgba(255,255,255,0.06)] bg-[#16181a] p-5">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Recent runtime events</span>
-          {profile?.creator ? (
-            <Link
-              href={`/marketplace/creators/${profile.creator.creator_id}`}
-              className="rounded-full border border-white/10 px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#74b97f] hover:text-[#74b97f]"
-            >
-              Creator page
-            </Link>
-          ) : null}
+      <section className="grid gap-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="grid gap-1">
+            <div className="text-[0.62rem] font-semibold uppercase tracking-[0.16em] text-neutral-500">Activity stream</div>
+            <h2 className="font-mono text-[clamp(1.75rem,3vw,2.35rem)] font-bold uppercase tracking-tight text-neutral-50">
+              Recent runtime activity
+            </h2>
+            <p className="text-sm text-neutral-400">Latest decisions, outcomes, and repeated checks.</p>
+          </div>
+
+          <div className="grid justify-items-end gap-2">
+            <span className="text-xs text-neutral-500">
+              latest {profile?.recent_events.length ?? 0} events, refreshed with the marketplace profile
+            </span>
+            {profile?.creator ? (
+              <Link
+                href={`/marketplace/creators/${profile.creator.creator_id}`}
+                className="rounded-full border border-white/10 px-4 py-2 text-[0.58rem] font-semibold uppercase tracking-[0.16em] text-neutral-300 transition hover:border-[#74b97f] hover:text-[#74b97f]"
+              >
+                Creator page
+              </Link>
+            ) : null}
+          </div>
         </div>
 
-        {(profile?.recent_events ?? []).length > 0 ? (
-          profile?.recent_events.map((event, index) => (
-            <article
-              key={event.id}
-              className="stagger-in grid gap-2 rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-4 py-4 md:grid-cols-[0.8fr_1fr_0.5fr_1fr] md:items-center"
-              style={{ animationDelay: `${index * 25}ms` }}
-            >
-              <div className="text-base font-semibold leading-tight text-neutral-50">{formatRuntimeEventType(event.event_type)}</div>
-              <div className="text-sm leading-6 text-neutral-400">{formatRuntimeEventSummary(event)}</div>
-              <div className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">{event.status}</div>
-              <div className="text-xs text-neutral-500">{new Date(event.created_at).toLocaleString()}</div>
-            </article>
-          ))
-        ) : (
-          <article className="rounded-[1.5rem] border border-[rgba(255,255,255,0.06)] bg-[#0d0f10] px-5 py-6 text-sm text-neutral-400">
-            {loading ? "Loading recent events..." : "No recent runtime events are available for this profile."}
+        {loading && !profile ? (
+          <article className="rounded-[1.6rem] bg-[#16181a] px-5 py-6 text-sm leading-6 text-neutral-400">
+            Loading recent runtime activity...
           </article>
+        ) : (
+          <ExecutionLog events={profile?.recent_events ?? []} />
         )}
       </section>
 

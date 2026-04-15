@@ -56,9 +56,16 @@ class BotLeaderboardCandidateRow(BaseModel):
 
 class RuntimeEventSummary(BaseModel):
     id: str
+    runtime_id: str
     event_type: str
     decision_summary: str
+    action_type: str | None = None
+    symbol: str | None = None
+    leverage: float | None = None
+    size_usd: float | None = None
     status: str
+    error_reason: str | None = None
+    outcome_summary: str
     created_at: datetime
 
 

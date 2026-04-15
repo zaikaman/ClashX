@@ -260,9 +260,16 @@ export type RuntimeProfile = {
   drawdown: number;
   recent_events: Array<{
     id: string;
+    runtime_id: string;
     event_type: string;
     decision_summary: string;
+    action_type?: string | null;
+    symbol?: string | null;
+    leverage?: number | null;
+    size_usd?: number | null;
     status: string;
+    error_reason?: string | null;
+    outcome_summary: string;
     created_at: string;
   }>;
   trust: TrustMetrics;

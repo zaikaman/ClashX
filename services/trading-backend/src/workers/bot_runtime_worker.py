@@ -40,6 +40,7 @@ IDLE_RUNTIME_DISCOVERY_SECONDS = 5.0
 RUNTIME_SET_REFRESH_SECONDS = 15.0
 MIN_WORKER_SLEEP_SECONDS = 1.0
 RUNTIME_COORDINATION_LEASE_SECONDS = 300
+PENDING_TPSL_ACTIONS_STATE_KEY = "pending_tpsl_actions"
 VOLATILE_RUNTIME_STATE_KEYS = frozenset(
     {
         "wallet_synced_at",
@@ -117,7 +118,11 @@ class BotRuntimeWorker:
                     )
                     runtime_state = runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
                     rules_json = bot["rules_json"] if isinstance(bot, dict) and isinstance(bot.get("rules_json"), dict) else {}
-                    evaluation_due = self._should_evaluate_rules(rules_json=rules_json, runtime_state=runtime_state)
+                    has_pending_tpsl_actions = self._has_pending_tpsl_actions(runtime_state=runtime_state)
+                    evaluation_due = has_pending_tpsl_actions or self._should_evaluate_rules(
+                        rules_json=rules_json,
+                        runtime_state=runtime_state,
+                    )
                     wallet_due = evaluation_due or self._should_refresh_wallet(runtime_state=runtime_state)
                     if evaluation_due:
                         shared_candle_requests.extend(extract_candle_requests(rules_json))
@@ -389,7 +394,7 @@ class BotRuntimeWorker:
                 )
             return runtime
 
-        if not evaluation_due:
+        if not evaluation_due and not self._has_pending_tpsl_actions(runtime_state=runtime_state):
             return self._maybe_refresh_runtime_heartbeat(runtime, now=now)
 
         credentials = self._auth.get_trading_credentials(None, runtime["wallet_address"])
@@ -427,7 +432,7 @@ class BotRuntimeWorker:
             rules_json=rules_json,
             runtime_policy=runtime_policy,
             runtime_state=runtime_state,
-        ):
+        ) and not self._has_pending_tpsl_actions(runtime_state=runtime_state):
             logger.debug(
                 "Runtime %s skipped rule evaluation because entry capacity is full and no exit actions are declared",
                 runtime["id"],
@@ -455,10 +460,14 @@ class BotRuntimeWorker:
                 ),
             },
         )
-        if not evaluation.get("triggered"):
+        triggered_actions = evaluation.get("actions") or [] if evaluation.get("triggered") else []
+        actions = self._merge_pending_tpsl_actions(
+            actions=triggered_actions,
+            runtime_state=cycle_runtime_state,
+        )
+        if not actions:
             return self._maybe_refresh_runtime_heartbeat(runtime, now=now)
 
-        actions = evaluation.get("actions") or []
         actions = self._prune_triggered_actions(
             actions=actions,
             runtime_policy=runtime_policy,
@@ -510,6 +519,24 @@ class BotRuntimeWorker:
                 market_lookup=resolved_market_lookup,
             )
             if issues:
+                if self._should_defer_tpsl_action(action=action, issues=issues):
+                    persisted_runtime_state = (
+                        runtime_policy.get("_runtime_state") if isinstance(runtime_policy.get("_runtime_state"), dict) else {}
+                    )
+                    cycle_runtime_state = self._queue_pending_tpsl_action(
+                        runtime_state=cycle_runtime_state,
+                        action=action,
+                    )
+                    runtime_policy["_runtime_state"] = {**persisted_runtime_state, **cycle_runtime_state}
+                    runtime = self._persist_runtime_policy(runtime, runtime_policy)
+                    runtime_state = runtime_policy["_runtime_state"]
+                    runtime_touched = True
+                    logger.debug(
+                        "Runtime %s deferred TP/SL action for %s until the position sync completes",
+                        runtime["id"],
+                        action.get("symbol"),
+                    )
+                    continue
                 skipped_key = self._build_idempotency_key(
                     runtime_id=runtime["id"],
                     action=action,
@@ -2167,6 +2194,9 @@ class BotRuntimeWorker:
         entry_retry_generations = next_state.get("entry_retry_generations")
         if not isinstance(entry_retry_generations, dict):
             entry_retry_generations = {}
+        pending_tpsl_actions = next_state.get(PENDING_TPSL_ACTIONS_STATE_KEY)
+        if not isinstance(pending_tpsl_actions, dict):
+            pending_tpsl_actions = {}
         synced_pending: dict[str, str] = {}
         for symbol, started_at in pending_entries.items():
             position = position_lookup.get(symbol) or {}
@@ -2216,6 +2246,24 @@ class BotRuntimeWorker:
                 "entry_price": managed_position.get("entry_price") or wallet_position.get("entry_price"),
                 "updated_at": datetime.now(tz=UTC).isoformat(),
             }
+        retained_pending_tpsl_actions: dict[str, dict[str, Any]] = {}
+        for symbol, pending_action in pending_tpsl_actions.items():
+            if not isinstance(pending_action, dict):
+                continue
+            normalized_symbol = self._normalize_symbol(pending_action.get("symbol") or symbol)
+            if not normalized_symbol:
+                continue
+            wallet_position = position_lookup.get(normalized_symbol) or {}
+            has_wallet_position = abs(float(wallet_position.get("amount") or 0.0)) > 0
+            if (
+                normalized_symbol in synced_pending
+                or normalized_symbol in reconciled_positions
+                or has_wallet_position
+            ):
+                retained_pending_tpsl_actions[normalized_symbol] = {
+                    **pending_action,
+                    "symbol": normalized_symbol,
+                }
         if reconciled_positions:
             next_state["managed_positions"] = reconciled_positions
         else:
@@ -2224,6 +2272,10 @@ class BotRuntimeWorker:
             next_state["entry_retry_generations"] = entry_retry_generations
         else:
             next_state.pop("entry_retry_generations", None)
+        if retained_pending_tpsl_actions:
+            next_state[PENDING_TPSL_ACTIONS_STATE_KEY] = retained_pending_tpsl_actions
+        else:
+            next_state.pop(PENDING_TPSL_ACTIONS_STATE_KEY, None)
         return next_state
 
     def _update_runtime_state_for_action(
@@ -2239,6 +2291,9 @@ class BotRuntimeWorker:
         pending_entries = next_state.get("pending_entry_symbols")
         if not isinstance(pending_entries, dict):
             pending_entries = {}
+        pending_tpsl_actions = next_state.get(PENDING_TPSL_ACTIONS_STATE_KEY)
+        if not isinstance(pending_tpsl_actions, dict):
+            pending_tpsl_actions = {}
         action_type = str(action.get("type") or "")
         symbol = self._normalize_symbol(action.get("symbol"))
         if success and symbol and action_type in {"open_long", "open_short", "place_market_order", "place_limit_order", "place_twap_order"}:
@@ -2263,6 +2318,7 @@ class BotRuntimeWorker:
                     next_state["managed_positions"] = managed_positions
         if success and symbol and action_type == "close_position":
             pending_entries.pop(symbol, None)
+            pending_tpsl_actions.pop(symbol, None)
             managed_positions = next_state.get("managed_positions")
             if isinstance(managed_positions, dict):
                 managed_positions.pop(symbol, None)
@@ -2271,6 +2327,7 @@ class BotRuntimeWorker:
                 else:
                     next_state.pop("managed_positions", None)
         if success and symbol and action_type == "set_tpsl":
+            pending_tpsl_actions.pop(symbol, None)
             managed_positions = next_state.get("managed_positions")
             if not isinstance(managed_positions, dict):
                 managed_positions = {}
@@ -2287,6 +2344,10 @@ class BotRuntimeWorker:
             next_state["pending_entry_symbols"] = pending_entries
         else:
             next_state.pop("pending_entry_symbols", None)
+        if pending_tpsl_actions:
+            next_state[PENDING_TPSL_ACTIONS_STATE_KEY] = pending_tpsl_actions
+        else:
+            next_state.pop(PENDING_TPSL_ACTIONS_STATE_KEY, None)
         return self._reconcile_runtime_state(
             runtime_state=next_state,
             position_lookup=position_lookup,
@@ -2468,6 +2529,69 @@ class BotRuntimeWorker:
         if not isinstance(entry_retry_generations, dict):
             return 0
         return int(entry_retry_generations.get(symbol) or 0)
+
+    @staticmethod
+    def _has_pending_tpsl_actions(*, runtime_state: dict[str, Any]) -> bool:
+        pending_tpsl_actions = runtime_state.get(PENDING_TPSL_ACTIONS_STATE_KEY)
+        return isinstance(pending_tpsl_actions, dict) and any(
+            isinstance(action, dict) for action in pending_tpsl_actions.values()
+        )
+
+    def _merge_pending_tpsl_actions(
+        self,
+        *,
+        actions: list[dict[str, Any]],
+        runtime_state: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        pending_tpsl_actions = runtime_state.get(PENDING_TPSL_ACTIONS_STATE_KEY)
+        if not isinstance(pending_tpsl_actions, dict) or not pending_tpsl_actions:
+            return list(actions)
+
+        merged_actions = list(actions)
+        action_symbols = {
+            self._normalize_symbol(action.get("symbol"))
+            for action in merged_actions
+            if isinstance(action, dict) and str(action.get("type") or "") == "set_tpsl"
+        }
+        deferred_actions = [
+            {
+                **pending_action,
+                "symbol": self._normalize_symbol(pending_action.get("symbol") or symbol),
+            }
+            for symbol, pending_action in pending_tpsl_actions.items()
+            if isinstance(pending_action, dict)
+            and self._normalize_symbol(pending_action.get("symbol") or symbol)
+            and self._normalize_symbol(pending_action.get("symbol") or symbol) not in action_symbols
+        ]
+        return deferred_actions + merged_actions
+
+    def _queue_pending_tpsl_action(
+        self,
+        *,
+        runtime_state: dict[str, Any],
+        action: dict[str, Any],
+    ) -> dict[str, Any]:
+        symbol = self._normalize_symbol(action.get("symbol"))
+        if not symbol:
+            return runtime_state
+        next_state = dict(runtime_state)
+        pending_tpsl_actions = next_state.get(PENDING_TPSL_ACTIONS_STATE_KEY)
+        pending_tpsl_actions = dict(pending_tpsl_actions) if isinstance(pending_tpsl_actions, dict) else {}
+        pending_tpsl_actions[symbol] = {**action, "symbol": symbol}
+        next_state[PENDING_TPSL_ACTIONS_STATE_KEY] = pending_tpsl_actions
+        return next_state
+
+    def _should_defer_tpsl_action(self, *, action: dict[str, Any], issues: list[str]) -> bool:
+        if str(action.get("type") or "") != "set_tpsl":
+            return False
+        symbol = self._normalize_symbol(action.get("symbol"))
+        if not symbol:
+            return False
+        sync_issue = f"awaiting position sync on {symbol} before TP/SL"
+        normalized_issues = [str(issue).strip() for issue in issues if str(issue).strip()]
+        if sync_issue not in normalized_issues:
+            return False
+        return all(issue == sync_issue for issue in normalized_issues)
 
     @staticmethod
     def _bump_entry_retry_generation(entry_retry_generations: dict[str, Any], symbol: str) -> None:
