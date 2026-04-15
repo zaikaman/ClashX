@@ -382,3 +382,206 @@ def test_dashboard_hides_stale_copy_positions_when_pacifica_reports_none_open() 
     assert dashboard["summary"]["copied_open_notional_usd"] == 0.0
     assert dashboard["positions"] == []
     assert dashboard["follows"][0]["copied_position_count"] == 0
+
+
+def test_dashboard_infers_realized_pnl_from_reduce_only_fills() -> None:
+    now = datetime.now(tz=UTC)
+    opened_at = (now - timedelta(hours=7)).isoformat()
+    closed_at = int((now - timedelta(hours=2)).timestamp() * 1000)
+    service = BotCopyDashboardService()
+    service.supabase = FakeSupabaseRestClient(
+        {
+            "marketplace_runtime_snapshots": [],
+            "bot_copy_execution_events": [
+                {
+                    "id": "exec-open",
+                    "relationship_id": "rel-1",
+                    "source_runtime_id": "runtime-1",
+                    "source_event_id": "event-open",
+                    "follower_wallet_address": "wallet-1",
+                    "symbol": "BTC",
+                    "position_side": "long",
+                    "action_type": "open_long",
+                    "reduce_only": False,
+                    "copied_quantity": 1.0,
+                    "reference_price": 100.0,
+                    "notional_estimate_usd": 100.0,
+                    "status": "mirrored",
+                    "error_reason": None,
+                    "created_at": opened_at,
+                    "updated_at": opened_at,
+                }
+            ],
+        }
+    )
+    service.copy_engine = FakeCopyEngine(
+        [
+            {
+                "id": "rel-1",
+                "source_runtime_id": "runtime-1",
+                "source_bot_definition_id": "bot-1",
+                "source_bot_name": "Momentum Atlas",
+                "follower_user_id": "user-1",
+                "follower_wallet_address": "wallet-1",
+                "mode": "mirror",
+                "scale_bps": 10_000,
+                "status": "active",
+                "risk_ack_version": "v1",
+                "confirmed_at": opened_at,
+                "updated_at": opened_at,
+                "follower_display_name": "Trader",
+                "max_notional_usd": None,
+            }
+        ]
+    )
+    service.portfolio_service = FakePortfolioService([])
+    service.trading_service = FakeTradingService(
+        {
+            "wallet_address": "wallet-1",
+            "positions_loaded": True,
+            "positions": [],
+            "markets": [],
+        }
+    )
+    service.readiness_service = FakeReadinessService(
+        {
+            "wallet_address": "wallet-1",
+            "ready": True,
+            "blockers": [],
+            "metrics": {"authorization_status": "active"},
+        }
+    )
+    service.marketplace_service = FakeMarketplaceService([])
+
+    async def fake_load_manual_history_rows(*, wallet_address: str, limit: int = 200) -> list[dict[str, Any]]:
+        assert wallet_address == "wallet-1"
+        assert limit == 200
+        return [
+            {
+                "order_id": "order-close",
+                "symbol": "BTC",
+                "event_kind": "close",
+                "position_side": "long",
+                "amount": 1.0,
+                "price": 130.0,
+                "created_at": closed_at,
+            }
+        ]
+
+    service._load_manual_history_rows = fake_load_manual_history_rows  # type: ignore[method-assign]
+
+    dashboard = asyncio.run(service.get_dashboard(wallet_address="wallet-1"))
+
+    assert dashboard["summary"]["open_positions"] == 0
+    assert dashboard["summary"]["copied_realized_pnl_usd_24h"] == 30.0
+    assert dashboard["summary"]["copied_realized_pnl_usd_7d"] == 30.0
+
+
+def test_dashboard_does_not_double_count_reduce_only_fill_when_close_event_exists() -> None:
+    now = datetime.now(tz=UTC)
+    opened_at = (now - timedelta(hours=7)).isoformat()
+    closed_at = (now - timedelta(hours=2)).isoformat()
+    service = BotCopyDashboardService()
+    service.supabase = FakeSupabaseRestClient(
+        {
+            "marketplace_runtime_snapshots": [],
+            "bot_copy_execution_events": [
+                {
+                    "id": "exec-open",
+                    "relationship_id": "rel-1",
+                    "source_runtime_id": "runtime-1",
+                    "source_event_id": "event-open",
+                    "follower_wallet_address": "wallet-1",
+                    "symbol": "BTC",
+                    "position_side": "long",
+                    "action_type": "open_long",
+                    "reduce_only": False,
+                    "copied_quantity": 1.0,
+                    "reference_price": 100.0,
+                    "notional_estimate_usd": 100.0,
+                    "status": "mirrored",
+                    "error_reason": None,
+                    "created_at": opened_at,
+                    "updated_at": opened_at,
+                },
+                {
+                    "id": "exec-close",
+                    "relationship_id": "rel-1",
+                    "source_runtime_id": "runtime-1",
+                    "source_event_id": "event-close",
+                    "follower_wallet_address": "wallet-1",
+                    "symbol": "BTC",
+                    "position_side": "long",
+                    "action_type": "close_position",
+                    "reduce_only": True,
+                    "copied_quantity": 1.0,
+                    "reference_price": 130.0,
+                    "notional_estimate_usd": 130.0,
+                    "status": "mirrored",
+                    "error_reason": None,
+                    "created_at": closed_at,
+                    "updated_at": closed_at,
+                },
+            ],
+        }
+    )
+    service.copy_engine = FakeCopyEngine(
+        [
+            {
+                "id": "rel-1",
+                "source_runtime_id": "runtime-1",
+                "source_bot_definition_id": "bot-1",
+                "source_bot_name": "Momentum Atlas",
+                "follower_user_id": "user-1",
+                "follower_wallet_address": "wallet-1",
+                "mode": "mirror",
+                "scale_bps": 10_000,
+                "status": "active",
+                "risk_ack_version": "v1",
+                "confirmed_at": opened_at,
+                "updated_at": closed_at,
+                "follower_display_name": "Trader",
+                "max_notional_usd": None,
+            }
+        ]
+    )
+    service.portfolio_service = FakePortfolioService([])
+    service.trading_service = FakeTradingService(
+        {
+            "wallet_address": "wallet-1",
+            "positions_loaded": True,
+            "positions": [],
+            "markets": [],
+        }
+    )
+    service.readiness_service = FakeReadinessService(
+        {
+            "wallet_address": "wallet-1",
+            "ready": True,
+            "blockers": [],
+            "metrics": {"authorization_status": "active"},
+        }
+    )
+    service.marketplace_service = FakeMarketplaceService([])
+
+    async def fake_load_manual_history_rows(*, wallet_address: str, limit: int = 200) -> list[dict[str, Any]]:
+        assert wallet_address == "wallet-1"
+        assert limit == 200
+        return [
+            {
+                "order_id": "order-close",
+                "symbol": "BTC",
+                "event_kind": "close",
+                "position_side": "long",
+                "amount": 1.0,
+                "price": 130.0,
+                "created_at": closed_at,
+            }
+        ]
+
+    service._load_manual_history_rows = fake_load_manual_history_rows  # type: ignore[method-assign]
+
+    dashboard = asyncio.run(service.get_dashboard(wallet_address="wallet-1"))
+
+    assert dashboard["summary"]["copied_realized_pnl_usd_24h"] == 30.0
+    assert dashboard["summary"]["copied_realized_pnl_usd_7d"] == 30.0

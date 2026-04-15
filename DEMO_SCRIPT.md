@@ -99,14 +99,14 @@ I set my scale factor to 50% of the creator's size. Now, whenever their bot trig
 ## 4. Pacifica Integration (4:20 - 5:10)
 **Visual:** 
 - Split screen. Left side: Bot execution logs streaming in the UI. 
-- Right side: Quick pan over code snippets showing the Pacifica SDK (`place_order`, WebSocket streams) and a block explorer showing real transactions originating from an agent wallet.
+- Right side: Quick pan over code snippets showing the delegated authorization flow (`approve_builder_code`, `bind_agent_wallet`), the shared Pacifica price feed subscription, and order submission calls (`create_market_order`, `create_order`, `set_position_tpsl`, `create_twap_order`), plus a block explorer showing transactions tied to the delegated agent wallet.
 
 **Audio / Voiceover:**
 "ClashX is built exclusively for and deeply integrated with Pacifica. 
 
-We aren't just a basic UI wrapper—our backend workers maintain persistent WebSocket connections to Pacifica to evaluate market data in real-time. When a strategy triggers, we use the Pacifica SDK to craft and sign transactions using the user's delegated agent wallet. 
+We aren't just a basic UI wrapper—on startup, ClashX opens a shared Pacifica price-feed WebSocket, keeps market snapshots and candle data warm, and our runtime workers reevaluate active bots every few seconds against that live cache. When a user authorizes ClashX, we generate a delegated agent wallet, have the user approve the builder code and bind that agent on Pacifica, then store the agent key encrypted for live execution. 
 
-We handle market orders, limit orders, scaling in and out of positions, and reading live funding rates to ensure precise execution. By leveraging Pacifica's Builder authorization standard, we collect transparent builder fees seamlessly inside the protocol’s execution layer. Pacifica is the engine that makes this high-frequency, non-custodial automation possible."
+From there, our workers can submit Pacifica market orders, limit orders, TWAP orders, leverage updates, cancels, and TP/SL protection on the user's account without custodying the user's main wallet keys. Live funding rates also flow into the rule engine, so bots can trigger on Pacifica funding conditions as well as price. And because supported requests automatically include the approved builder code, builder fees stay transparent inside Pacifica's execution flow. Pacifica isn't just where orders land—it's the market data and execution layer the whole product runs on."
 
 ## 5. Value & Impact (5:10 - 5:40)
 **Visual:** 

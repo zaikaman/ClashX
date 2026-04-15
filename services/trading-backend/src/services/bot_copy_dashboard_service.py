@@ -6,6 +6,7 @@ from typing import Any
 
 from src.services.bot_copy_engine import BotCopyEngine
 from src.services.creator_marketplace_service import CreatorMarketplaceService
+from src.services.pacifica_client import PacificaClientError
 from src.services.pacifica_readiness_service import PacificaReadinessService
 from src.services.portfolio_allocator_service import PortfolioAllocatorService
 from src.services.supabase_rest import SupabaseRestClient
@@ -38,8 +39,12 @@ class BotCopyDashboardService:
 
         runtime_profiles = await self._load_runtime_profiles(runtime_ids)
         activity_rows = self._load_activity_rows(relationship_ids=relationship_ids, wallet_address=wallet_address)
-        copy_state = self._build_copy_state(activity_rows=activity_rows)
         trading_snapshot = await self.trading_service.get_account_snapshot(None, wallet_address)
+        manual_history_rows = await self._load_manual_history_rows(wallet_address=wallet_address)
+        copy_state = self._build_copy_state(
+            activity_rows=activity_rows,
+            manual_history_rows=manual_history_rows,
+        )
         readiness = await self.readiness_service.get_readiness(None, wallet_address)
         baskets = self.portfolio_service.list_portfolios(wallet_address=wallet_address)
         discover_rows = await self.marketplace_service.discover_public_bots(limit=6)
@@ -119,12 +124,52 @@ class BotCopyDashboardService:
             limit=80,
         )
 
-    def _build_copy_state(self, *, activity_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    async def _load_manual_history_rows(self, *, wallet_address: str, limit: int = 200) -> list[dict[str, Any]]:
+        pacifica = getattr(self.trading_service, "pacifica", None)
+        if pacifica is None:
+            return []
+        try:
+            order_history = await pacifica.get_order_history(wallet_address, limit=limit, offset=0)
+        except (AttributeError, TypeError, PacificaClientError):
+            return []
+
+        normalized_rows: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        for row in order_history:
+            normalized = self._normalize_manual_history_row(row)
+            if normalized is None:
+                continue
+            dedupe_key = "|".join(
+                (
+                    str(normalized.get("history_id") or ""),
+                    str(normalized.get("order_id") or ""),
+                    str(normalized.get("symbol") or ""),
+                    str(normalized.get("event_kind") or ""),
+                    str(normalized.get("position_side") or ""),
+                    str(normalized.get("created_at") or ""),
+                    f"{self._to_float(normalized.get('amount')):.12f}",
+                    f"{self._to_float(normalized.get('price')):.8f}",
+                )
+            )
+            if dedupe_key in seen_keys:
+                continue
+            seen_keys.add(dedupe_key)
+            normalized_rows.append(normalized)
+        normalized_rows.sort(key=lambda row: self._timestamp_value(row.get("created_at")))
+        return normalized_rows
+
+    def _build_copy_state(
+        self,
+        *,
+        activity_rows: list[dict[str, Any]],
+        manual_history_rows: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         ordered_rows = sorted(
             activity_rows,
-            key=lambda row: str(row.get("created_at") or ""),
+            key=lambda row: self._timestamp_value(row.get("created_at")),
         )
         open_lots_by_key: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+        recorded_close_markers: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
         realized_24h = 0.0
         realized_7d = 0.0
         now = datetime.now(tz=UTC)
@@ -157,26 +202,55 @@ class BotCopyDashboardService:
                 )
                 continue
 
-            remaining = quantity
-            while remaining > 0 and open_lots_by_key[key]:
-                lot = open_lots_by_key[key][0]
-                close_qty = min(remaining, self._to_float(lot.get("quantity")))
-                entry_price = self._to_float(lot.get("entry_price"))
-                pnl = 0.0
-                if entry_price > 0 and price > 0:
-                    if position_side == "long":
-                        pnl = (price - entry_price) * close_qty
-                    else:
-                        pnl = (entry_price - price) * close_qty
-                if created_at >= now - timedelta(days=1):
-                    realized_24h += pnl
-                if created_at >= now - timedelta(days=7):
-                    realized_7d += pnl
-                lot["quantity"] = max(0.0, self._to_float(lot.get("quantity")) - close_qty)
-                lot["last_activity_at"] = created_at
-                if lot["quantity"] <= 1e-9:
-                    open_lots_by_key[key].pop(0)
-                remaining -= close_qty
+            recorded_close_markers[(symbol, position_side)].append(
+                {
+                    "created_at": created_at,
+                    "remaining_quantity": quantity,
+                }
+            )
+            pnl = self._consume_lots(
+                open_lots_by_key=open_lots_by_key,
+                relationship_id=relationship_id,
+                symbol=symbol,
+                position_side=position_side,
+                quantity=quantity,
+                price=price,
+                created_at=created_at,
+            )
+            if created_at >= now - timedelta(days=1):
+                realized_24h += pnl
+            if created_at >= now - timedelta(days=7):
+                realized_7d += pnl
+
+        for history_row in manual_history_rows or []:
+            if str(history_row.get("event_kind") or "") != "close":
+                continue
+            symbol = str(history_row.get("symbol") or "").strip().upper()
+            position_side = str(history_row.get("position_side") or "").strip().lower()
+            quantity = self._to_float(history_row.get("amount"))
+            price = self._to_float(history_row.get("price"))
+            created_at = self._as_datetime(history_row.get("created_at")) or now
+            if not symbol or position_side not in {"long", "short"} or quantity <= 0 or price <= 0:
+                continue
+            if self._consume_recorded_close_markers(
+                markers=recorded_close_markers[(symbol, position_side)],
+                quantity=quantity,
+                created_at=created_at,
+            ):
+                continue
+            pnl = self._consume_lots(
+                open_lots_by_key=open_lots_by_key,
+                relationship_id=None,
+                symbol=symbol,
+                position_side=position_side,
+                quantity=quantity,
+                price=price,
+                created_at=created_at,
+            )
+            if created_at >= now - timedelta(days=1):
+                realized_24h += pnl
+            if created_at >= now - timedelta(days=7):
+                realized_7d += pnl
 
         positions: list[dict[str, Any]] = []
         for (relationship_id, symbol, position_side), lots in open_lots_by_key.items():
@@ -209,6 +283,94 @@ class BotCopyDashboardService:
             "realized_pnl_7d_usd": round(realized_7d, 2),
             "activity_by_relationship": self._group_activity_by_relationship(activity_rows),
         }
+
+    def _consume_lots(
+        self,
+        *,
+        open_lots_by_key: dict[tuple[str, str, str], list[dict[str, Any]]],
+        relationship_id: str | None,
+        symbol: str,
+        position_side: str,
+        quantity: float,
+        price: float,
+        created_at: datetime,
+    ) -> float:
+        remaining = max(0.0, quantity)
+        realized_pnl = 0.0
+
+        if relationship_id:
+            candidate_keys = [(relationship_id, symbol, position_side)]
+        else:
+            candidate_keys = [
+                key
+                for key, lots in open_lots_by_key.items()
+                if key[1] == symbol and key[2] == position_side and lots
+            ]
+            candidate_keys.sort(
+                key=lambda key: min(
+                    self._timestamp_value(item.get("opened_at"))
+                    for item in open_lots_by_key.get(key, [])
+                ),
+            )
+
+        for key in candidate_keys:
+            lots = open_lots_by_key.get(key, [])
+            while remaining > 1e-9 and lots:
+                lot = lots[0]
+                close_qty = min(remaining, self._to_float(lot.get("quantity")))
+                entry_price = self._to_float(lot.get("entry_price"))
+                if close_qty <= 0:
+                    lots.pop(0)
+                    continue
+                if entry_price > 0 and price > 0:
+                    if position_side == "long":
+                        realized_pnl += (price - entry_price) * close_qty
+                    else:
+                        realized_pnl += (entry_price - price) * close_qty
+                lot["quantity"] = max(0.0, self._to_float(lot.get("quantity")) - close_qty)
+                lot["last_activity_at"] = created_at
+                if lot["quantity"] <= 1e-9:
+                    lots.pop(0)
+                remaining -= close_qty
+            if remaining <= 1e-9:
+                break
+
+        return realized_pnl
+
+    def _consume_recorded_close_markers(
+        self,
+        *,
+        markers: list[dict[str, Any]],
+        quantity: float,
+        created_at: datetime,
+    ) -> bool:
+        if quantity <= 1e-9 or not markers:
+            return False
+
+        tolerance_seconds = 180.0
+        tolerance_quantity = max(0.000001, quantity * 0.02)
+        remaining = quantity
+        applied: list[tuple[dict[str, Any], float]] = []
+
+        for marker in markers:
+            marker_remaining = self._to_float(marker.get("remaining_quantity"))
+            marker_created_at = self._as_datetime(marker.get("created_at"))
+            if marker_remaining <= 1e-9 or marker_created_at is None:
+                continue
+            if abs((marker_created_at - created_at).total_seconds()) > tolerance_seconds:
+                continue
+            matched_quantity = min(marker_remaining, remaining)
+            if matched_quantity <= 1e-9:
+                continue
+            marker["remaining_quantity"] = max(0.0, marker_remaining - matched_quantity)
+            applied.append((marker, matched_quantity))
+            remaining -= matched_quantity
+            if remaining <= tolerance_quantity:
+                return True
+
+        for marker, matched_quantity in applied:
+            marker["remaining_quantity"] = self._to_float(marker.get("remaining_quantity")) + matched_quantity
+        return False
 
     def _build_attributed_positions(
         self,
@@ -498,11 +660,118 @@ class BotCopyDashboardService:
     def _as_datetime(value: Any) -> datetime | None:
         if value in (None, ""):
             return None
+        if isinstance(value, (int, float)):
+            numeric = float(value)
+            if numeric > 10_000_000_000:
+                numeric /= 1000.0
+            try:
+                return datetime.fromtimestamp(numeric, tz=UTC)
+            except (OverflowError, OSError, ValueError):
+                return None
+        text = str(value).strip()
+        if not text:
+            return None
         try:
-            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            numeric = float(text)
+        except ValueError:
+            numeric = None
+        if numeric is not None:
+            if numeric > 10_000_000_000:
+                numeric /= 1000.0
+            try:
+                return datetime.fromtimestamp(numeric, tz=UTC)
+            except (OverflowError, OSError, ValueError):
+                return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         except ValueError:
             return None
         return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+    @classmethod
+    def _normalize_manual_history_row(cls, row: dict[str, Any]) -> dict[str, Any] | None:
+        event_kind, position_side = cls._position_history_event_kind(row)
+        amount = cls._to_float(row.get("amount"))
+        price = cls._to_float(row.get("price"))
+        symbol = str(row.get("symbol") or "").strip().upper().replace("-PERP", "")
+        if event_kind not in {"open", "close"} or position_side not in {"long", "short"}:
+            return None
+        if amount <= 1e-12 or price <= 0 or not symbol:
+            return None
+        return {
+            "history_id": row.get("history_id") or row.get("historyId"),
+            "order_id": row.get("order_id") or row.get("orderId"),
+            "symbol": symbol,
+            "event_kind": event_kind,
+            "position_side": position_side,
+            "amount": amount,
+            "price": price,
+            "created_at": row.get("created_at") or row.get("createdAt"),
+        }
+
+    @classmethod
+    def _position_history_event_kind(cls, row: dict[str, Any]) -> tuple[str | None, str | None]:
+        event_type = str(row.get("event_type") or row.get("eventType") or "").lower().strip()
+        if event_type.startswith("open_"):
+            return "open", "long" if event_type.endswith("long") else "short" if event_type.endswith("short") else None
+        if event_type.startswith("close_"):
+            return "close", "long" if event_type.endswith("long") else "short" if event_type.endswith("short") else None
+        side = cls._normalize_position_side(row.get("side"))
+        if side not in {"long", "short"}:
+            return None, None
+        reduce_only = cls._to_bool(row.get("reduce_only"), False)
+        amount = cls._to_float(row.get("amount"))
+        price = cls._to_float(row.get("price"))
+        order_status = str(row.get("order_status") or row.get("status") or "").lower().strip()
+        if amount <= 1e-12 or price <= 0:
+            return None, None
+        if reduce_only and (order_status in {"", "filled", "partially_filled"} or event_type.startswith("fulfill")):
+            return "close", "short" if side == "long" else "long"
+        if order_status in {"filled", "partially_filled"} or event_type.startswith("fulfill"):
+            return "open", side
+        return None, None
+
+    @staticmethod
+    def _normalize_position_side(value: Any) -> str | None:
+        normalized = str(value or "").lower().strip()
+        if normalized in {"bid", "long"}:
+            return "long"
+        if normalized in {"ask", "short"}:
+            return "short"
+        return None
+
+    @staticmethod
+    def _timestamp_value(value: Any) -> float:
+        if isinstance(value, (int, float)):
+            numeric = float(value)
+            return numeric / 1000.0 if numeric > 10_000_000_000 else numeric
+        text = str(value or "").strip()
+        if not text:
+            return 0.0
+        try:
+            numeric = float(text)
+        except ValueError:
+            numeric = None
+        if numeric is not None:
+            return numeric / 1000.0 if numeric > 10_000_000_000 else numeric
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return 0.0
+
+    @staticmethod
+    def _to_bool(value: Any, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "y"}:
+                return True
+            if normalized in {"0", "false", "no", "n"}:
+                return False
+        return bool(value)
 
     @staticmethod
     def _to_float(value: Any, default: float = 0.0) -> float:
