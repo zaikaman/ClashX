@@ -1184,6 +1184,115 @@ def test_runtime_process_retries_deferred_tpsl_without_requiring_rule_retrigger(
     assert not runtime_state.get("pending_tpsl_actions")
 
 
+def test_restore_runtime_state_clears_stale_tpsl_ids_after_new_entry() -> None:
+    supabase = FakeSupabaseRestClient()
+    supabase.tables["bot_execution_events"] = [
+        {
+            "runtime_id": "runtime-1",
+            "event_type": "action.executed",
+            "status": "success",
+            "created_at": "2026-04-16T00:10:00+00:00",
+            "request_payload": {"type": "open_long", "symbol": "BTC"},
+            "result_payload": {
+                "execution_meta": {
+                    "symbol": "BTC",
+                    "side": "bid",
+                    "amount": 0.01,
+                    "client_order_id": "entry-old",
+                    "reference_price": 70000,
+                }
+            },
+        },
+        {
+            "runtime_id": "runtime-1",
+            "event_type": "action.executed",
+            "status": "success",
+            "created_at": "2026-04-16T00:11:00+00:00",
+            "request_payload": {"type": "set_tpsl", "symbol": "BTC"},
+            "result_payload": {
+                "execution_meta": {
+                    "symbol": "BTC",
+                    "take_profit_client_order_id": "tp-old",
+                    "stop_loss_client_order_id": "sl-old",
+                }
+            },
+        },
+        {
+            "runtime_id": "runtime-1",
+            "event_type": "action.executed",
+            "status": "success",
+            "created_at": "2026-04-16T00:20:00+00:00",
+            "request_payload": {"type": "open_long", "symbol": "BTC"},
+            "result_payload": {
+                "execution_meta": {
+                    "symbol": "BTC",
+                    "side": "bid",
+                    "amount": 0.02,
+                    "client_order_id": "entry-new",
+                    "reference_price": 71000,
+                }
+            },
+        },
+    ]
+
+    worker = BotRuntimeWorker.__new__(BotRuntimeWorker)
+    worker._supabase = supabase
+
+    restored_state = worker._restore_runtime_state_from_execution_history(
+        runtime={"id": "runtime-1"},
+        runtime_state={},
+        position_lookup={
+            "BTC": {
+                "symbol": "BTC",
+                "side": "bid",
+                "amount": 0.02,
+                "entry_price": 71000,
+                "mark_price": 71100,
+            }
+        },
+        open_order_lookup={},
+    )
+
+    managed_position = restored_state["managed_positions"]["BTC"]
+    assert managed_position["entry_client_order_id"] == "entry-new"
+    assert managed_position.get("take_profit_client_order_id") in (None, "")
+    assert managed_position.get("stop_loss_client_order_id") in (None, "")
+    assert "tpsl_set_at" not in managed_position
+
+
+def test_prune_keeps_pending_tpsl_when_recorded_tpsl_is_stale() -> None:
+    worker = BotRuntimeWorker.__new__(BotRuntimeWorker)
+    actions = [{"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.5, "stop_loss_pct": 0.7}]
+    runtime_state = {
+        "managed_positions": {
+            "BTC": {
+                "symbol": "BTC",
+                "amount": 0.013,
+                "side": "bid",
+                "opened_at": "2026-04-16T00:47:49+00:00",
+                "tpsl_set_at": "2026-04-15T22:40:24+00:00",
+                "take_profit_client_order_id": "tp-old",
+                "stop_loss_client_order_id": "sl-old",
+            }
+        },
+        "pending_tpsl_actions": {
+            "BTC": {"type": "set_tpsl", "symbol": "BTC", "take_profit_pct": 1.5, "stop_loss_pct": 0.7}
+        },
+    }
+
+    filtered_actions = worker._prune_triggered_actions(
+        actions=actions,
+        runtime_policy={"max_open_positions": 1},
+        runtime_state=runtime_state,
+        position_lookup={"BTC": {"symbol": "BTC", "amount": 0.013, "side": "bid"}},
+        open_order_lookup={"BTC": []},
+        open_orders_synced=False,
+    )
+
+    assert len(filtered_actions) == 1
+    assert filtered_actions[0]["type"] == "set_tpsl"
+
+
 def test_runtime_process_does_not_append_duplicate_skipped_tpsl_events_for_unchanged_state(monkeypatch: Any) -> None:
     monkeypatch.setattr("src.workers.bot_runtime_worker.broadcaster.publish", _noop_publish)
 

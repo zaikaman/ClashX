@@ -1842,9 +1842,7 @@ class BotRuntimeWorker:
         managed_position = self._maybe_get_managed_position(runtime_state=runtime_state, symbol=symbol)
         if not isinstance(managed_position, dict):
             return False
-        take_profit_client_order_id = str(managed_position.get("take_profit_client_order_id") or "").strip()
-        stop_loss_client_order_id = str(managed_position.get("stop_loss_client_order_id") or "").strip()
-        return bool(take_profit_client_order_id and stop_loss_client_order_id)
+        return self._managed_position_has_current_tpsl_record(managed_position=managed_position)
 
     @staticmethod
     def _managed_runtime_symbols(*, runtime_state: dict[str, Any]) -> set[str]:
@@ -1890,6 +1888,7 @@ class BotRuntimeWorker:
         symbol_orders = open_order_lookup.get(symbol) or []
         take_profit_client_order_id = str(managed_position.get("take_profit_client_order_id") or "").strip()
         stop_loss_client_order_id = str(managed_position.get("stop_loss_client_order_id") or "").strip()
+        has_current_tpsl_record = self._managed_position_has_current_tpsl_record(managed_position=managed_position)
         managed_amount = abs(self._coerce_float(managed_position.get("amount")))
         symbol_position = position_lookup.get(symbol) or {}
         symbol_amount = abs(self._coerce_float(symbol_position.get("amount")))
@@ -1900,7 +1899,7 @@ class BotRuntimeWorker:
             and symbol_amount > 0
             and abs(symbol_amount - managed_amount) <= max(1e-9, managed_amount * 0.001)
         )
-        if take_profit_client_order_id and stop_loss_client_order_id:
+        if has_current_tpsl_record and take_profit_client_order_id and stop_loss_client_order_id:
             if not open_orders_synced and covers_full_position:
                 return True
             open_client_order_ids = {
@@ -1911,6 +1910,19 @@ class BotRuntimeWorker:
             if {take_profit_client_order_id, stop_loss_client_order_id}.issubset(open_client_order_ids):
                 return True
         return covers_full_position and has_take_profit_order and has_stop_loss_order
+
+    @classmethod
+    def _managed_position_has_current_tpsl_record(cls, *, managed_position: dict[str, Any]) -> bool:
+        take_profit_client_order_id = str(managed_position.get("take_profit_client_order_id") or "").strip()
+        stop_loss_client_order_id = str(managed_position.get("stop_loss_client_order_id") or "").strip()
+        if not (take_profit_client_order_id and stop_loss_client_order_id):
+            return False
+
+        opened_at = cls._parse_runtime_state_timestamp(str(managed_position.get("opened_at") or ""))
+        tpsl_set_at = cls._parse_runtime_state_timestamp(str(managed_position.get("tpsl_set_at") or ""))
+        if opened_at is not None and tpsl_set_at is not None and tpsl_set_at < opened_at:
+            return False
+        return True
 
     @staticmethod
     def _is_take_profit_order(order: dict[str, Any]) -> bool:
@@ -2095,6 +2107,10 @@ class BotRuntimeWorker:
                     continue
                 existing_position = managed_positions.get(symbol)
                 existing_position = dict(existing_position) if isinstance(existing_position, dict) else {}
+                # Fresh entries begin a new protection lifecycle.
+                existing_position.pop("take_profit_client_order_id", None)
+                existing_position.pop("stop_loss_client_order_id", None)
+                existing_position.pop("tpsl_set_at", None)
                 managed_positions[symbol] = {
                     **existing_position,
                     "symbol": symbol,
