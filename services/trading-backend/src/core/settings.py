@@ -71,10 +71,6 @@ class Settings:
     pacifica_rest_url: str
     pacifica_ws_url: str
     pacifica_solana_rpc_url: str
-    pacifica_account_address: str
-    pacifica_private_key: str
-    pacifica_agent_wallet_public_key: str
-    pacifica_agent_private_key: str
     pacifica_agent_encryption_key: str
     pacifica_positions_api_url: str
     pacifica_expiry_window_ms: int
@@ -137,10 +133,6 @@ def get_settings() -> Settings:
         pacifica_rest_url=os.getenv("PACIFICA_REST_URL", "").strip() or _default_pacifica_rest_url(pacifica_network),
         pacifica_ws_url=os.getenv("PACIFICA_WS_URL", "").strip() or _default_pacifica_ws_url(pacifica_network),
         pacifica_solana_rpc_url=os.getenv("PACIFICA_SOLANA_RPC_URL", "").strip() or "https://api.devnet.solana.com",
-        pacifica_account_address=os.getenv("PACIFICA_ACCOUNT_ADDRESS", "").strip(),
-        pacifica_private_key=os.getenv("PACIFICA_PRIVATE_KEY", "").strip(),
-        pacifica_agent_wallet_public_key=os.getenv("PACIFICA_AGENT_WALLET_PUBLIC_KEY", "").strip(),
-        pacifica_agent_private_key=os.getenv("PACIFICA_AGENT_PRIVATE_KEY", "").strip(),
         pacifica_agent_encryption_key=os.getenv("PACIFICA_AGENT_ENCRYPTION_KEY", "").strip(),
         pacifica_positions_api_url=os.getenv("PACIFICA_POSITIONS_API_URL", "").strip(),
         pacifica_expiry_window_ms=max(int(os.getenv("PACIFICA_EXPIRY_WINDOW_MS", "120000")), 1000),

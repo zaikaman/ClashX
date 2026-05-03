@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 from typing import Any
 
 import pytest
@@ -14,6 +15,10 @@ from src.services.trading_service import TradingService
 
 
 pytestmark = [pytest.mark.live, pytest.mark.smoke]
+
+
+def _smoke_wallet_address() -> str:
+    return os.getenv("PACIFICA_SMOKE_WALLET_ADDRESS", "").strip()
 
 
 def _normalize_symbol(value: str) -> str:
@@ -176,7 +181,7 @@ async def _live_market_roundtrip() -> None:
     service = TradingService()
     service.market_data = PacificaMarketDataService(service.pacifica)
     service.snapshot_cache = TradingSnapshotCacheService()
-    wallet_address = settings.pacifica_account_address
+    wallet_address = _smoke_wallet_address()
     market = await _pick_market(service)
     symbol = _normalize_symbol(str(market.get("symbol") or market.get("display_symbol") or ""))
     quantity = _build_quantity(market)
@@ -217,7 +222,7 @@ async def _live_limit_ioc_submission() -> None:
     service = TradingService()
     service.market_data = PacificaMarketDataService(service.pacifica)
     service.snapshot_cache = TradingSnapshotCacheService()
-    wallet_address = settings.pacifica_account_address
+    wallet_address = _smoke_wallet_address()
     market = await _pick_market(service)
     symbol = _normalize_symbol(str(market.get("symbol") or market.get("display_symbol") or ""))
     mark_price = float(market.get("mark_price") or 0)
@@ -258,7 +263,7 @@ async def _live_limit_submit_and_cancel() -> None:
     service = TradingService()
     service.market_data = PacificaMarketDataService(service.pacifica)
     service.snapshot_cache = TradingSnapshotCacheService()
-    wallet_address = settings.pacifica_account_address
+    wallet_address = _smoke_wallet_address()
     market = await _pick_market(service)
     symbol = _normalize_symbol(str(market.get("symbol") or market.get("display_symbol") or ""))
     mark_price = float(market.get("mark_price") or 0)
@@ -336,9 +341,10 @@ def _assert_live_env_ready() -> None:
     settings = get_settings()
     if not settings.pacifica_network.lower().startswith("test"):
         raise AssertionError(f"Live smoke is restricted to testnet, current network is {settings.pacifica_network}")
-    if not settings.pacifica_account_address:
-        raise AssertionError("PACIFICA_ACCOUNT_ADDRESS is required")
-    auth = PacificaAuthService().get_authorization_by_wallet(None, settings.pacifica_account_address)
+    wallet_address = _smoke_wallet_address()
+    if not wallet_address:
+        raise AssertionError("PACIFICA_SMOKE_WALLET_ADDRESS is required")
+    auth = PacificaAuthService().get_authorization_by_wallet(None, wallet_address)
     if auth is None or auth.get("status") != "active":
         raise AssertionError("Delegated Pacifica authorization must be active before live smoke can run")
 

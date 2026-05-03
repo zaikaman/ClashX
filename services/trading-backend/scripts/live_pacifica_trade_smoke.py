@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import math
+import os
 from typing import Any
 
 from src.core.settings import get_settings
@@ -99,7 +100,12 @@ async def _poll_position(
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Place and close a real Pacifica testnet trade using delegated agent auth.")
-    parser.add_argument("--wallet", dest="wallet_address", default=None, help="Pacifica account address. Defaults to PACIFICA_ACCOUNT_ADDRESS.")
+    parser.add_argument(
+        "--wallet",
+        dest="wallet_address",
+        default=None,
+        help="Pacifica account address. Defaults to PACIFICA_SMOKE_WALLET_ADDRESS.",
+    )
     parser.add_argument("--symbol", default=None, help="Market symbol like BTC or ETH. Defaults to the cheapest eligible market.")
     parser.add_argument("--side", default="long", choices=["long", "short"], help="Entry side.")
     parser.add_argument("--leverage", type=int, default=1, help="Entry leverage.")
@@ -109,9 +115,9 @@ async def main() -> None:
     args = parser.parse_args()
 
     settings = get_settings()
-    wallet_address = (args.wallet_address or settings.pacifica_account_address).strip()
+    wallet_address = (args.wallet_address or os.getenv("PACIFICA_SMOKE_WALLET_ADDRESS", "")).strip()
     if not wallet_address:
-        raise ValueError("Set PACIFICA_ACCOUNT_ADDRESS or pass --wallet.")
+        raise ValueError("Set PACIFICA_SMOKE_WALLET_ADDRESS or pass --wallet.")
     if not settings.pacifica_network.lower().startswith("test"):
         raise ValueError(f"Refusing to run outside testnet. Current network: {settings.pacifica_network}")
 

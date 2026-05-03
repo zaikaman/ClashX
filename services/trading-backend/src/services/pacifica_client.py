@@ -245,43 +245,19 @@ class PacificaClient:
         agent_wallet_override: str | None = None,
     ) -> tuple[str, Keypair, str | None]:
         self._ensure_crypto_runtime()
-        if signer_private_key_override:
-            signer = Keypair.from_base58_string(signer_private_key_override)
-            agent_wallet = agent_wallet_override or str(signer.pubkey())
-            derived_agent = str(signer.pubkey())
-            if agent_wallet != derived_agent:
-                raise PacificaClientError(
-                    f"Configured agent wallet {agent_wallet} does not match the delegated signer public key {derived_agent}."
-                )
-            if not requested_account:
-                raise PacificaClientError("An account address is required when using delegated Pacifica agent credentials.")
-            return requested_account, signer, agent_wallet
+        if not signer_private_key_override:
+            raise PacificaClientError("A delegated Pacifica agent private key is required for live signing.")
+        if not requested_account:
+            raise PacificaClientError("An account address is required when using delegated Pacifica agent credentials.")
 
-        configured_account = self.settings.pacifica_account_address
-        if not configured_account:
-            raise PacificaClientError("PACIFICA_ACCOUNT_ADDRESS is not configured")
-        if requested_account and requested_account != configured_account:
+        signer = Keypair.from_base58_string(signer_private_key_override)
+        derived_agent = str(signer.pubkey())
+        agent_wallet = agent_wallet_override or derived_agent
+        if agent_wallet != derived_agent:
             raise PacificaClientError(
-                f"Pacifica live signing is only configured for {configured_account}. Received order for {requested_account}."
+                f"Configured agent wallet {agent_wallet} does not match the delegated signer public key {derived_agent}."
             )
-
-        if self.settings.pacifica_agent_private_key:
-            if not self.settings.pacifica_agent_wallet_public_key:
-                raise PacificaClientError("PACIFICA_AGENT_WALLET_PUBLIC_KEY must be set when PACIFICA_AGENT_PRIVATE_KEY is configured")
-            signer = Keypair.from_base58_string(self.settings.pacifica_agent_private_key)
-            return configured_account, signer, self.settings.pacifica_agent_wallet_public_key
-
-        if not self.settings.pacifica_private_key:
-            raise PacificaClientError(
-                "Pacifica live signing is not configured. Set PACIFICA_PRIVATE_KEY or PACIFICA_AGENT_PRIVATE_KEY."
-            )
-        signer = Keypair.from_base58_string(self.settings.pacifica_private_key)
-        derived_account = str(signer.pubkey())
-        if configured_account != derived_account:
-            raise PacificaClientError(
-                f"PACIFICA_ACCOUNT_ADDRESS does not match the configured PACIFICA_PRIVATE_KEY public key ({derived_account})."
-            )
-        return configured_account, signer, None
+        return requested_account, signer, agent_wallet
 
     def _sign_request(
         self,
