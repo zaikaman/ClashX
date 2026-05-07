@@ -49,6 +49,8 @@ Vercel uses `api/index.py` as the ASGI entrypoint and routes requests through th
 
 If the Vercel build logs show `npm run build --prefix apps/web`, the project is still using the repo root settings. Set the Vercel project Root Directory to `services/trading-backend` and redeploy.
 
+The backend Vercel config installs Python dependencies from `requirements.txt`. If the runtime logs show `ModuleNotFoundError: No module named 'fastapi'`, make sure the project is using the checked-in `services/trading-backend/vercel.json` and does not override the install command with `npm install` in the Vercel dashboard.
+
 Keep the Heroku worker dyno running with `BACKGROUND_WORKERS_ENABLED=true`. After the Vercel backend is live, point the frontend `NEXT_PUBLIC_API_BASE_URL` at the Vercel backend URL.
 
 Realtime stream endpoints use the Supabase-backed `stream_events` table for cross-process fanout, so apply the latest database migration before cutting traffic over to the Vercel API.

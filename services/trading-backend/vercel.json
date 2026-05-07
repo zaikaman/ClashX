@@ -1,5 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "python -m pip install -r requirements.txt",
+  "buildCommand": "node -e \"console.log('FastAPI backend build handled by Vercel Python runtime')\"",
   "rewrites": [
     {
       "source": "/(.*)",
