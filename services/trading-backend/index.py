@@ -1,8 +1,9 @@
+from fastapi import FastAPI
+
+
 try:
     from src.main import app
 except Exception as exc:
-    from fastapi import FastAPI
-
     app = FastAPI(title="ClashX Trading Backend")
     _startup_error = f"{exc.__class__.__name__}: {exc}"
 
