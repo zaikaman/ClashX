@@ -45,7 +45,7 @@ The FastAPI web API can be deployed as a separate Vercel project rooted at:
 
 - `services/trading-backend`
 
-Vercel uses `index.py` as the ASGI entrypoint and routes requests through the existing `src.main:app`. Set `BACKGROUND_WORKERS_ENABLED=false` in the Vercel project so only the HTTP API runs there.
+Vercel uses `api/index.py` as the ASGI entrypoint and routes requests through the existing `src.main:app`. Set `BACKGROUND_WORKERS_ENABLED=false` in the Vercel project so only the HTTP API runs there.
 
 If the Vercel build logs show `npm run build --prefix apps/web`, the project is still using the repo root settings. Set the Vercel project Root Directory to `services/trading-backend` and redeploy.
 
