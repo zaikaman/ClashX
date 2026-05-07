@@ -9,11 +9,18 @@ from src.services.event_broadcaster import broadcaster, channel_to_stream
 from src.services.supabase_rest import SupabaseRestClient
 
 router = APIRouter(prefix="/api/stream", tags=["stream"])
-supabase = SupabaseRestClient()
+supabase: SupabaseRestClient | None = None
+
+
+def _get_supabase() -> SupabaseRestClient:
+    global supabase
+    if supabase is None:
+        supabase = SupabaseRestClient()
+    return supabase
 
 
 def _resolve_wallet_address_sync(user_id: str) -> str | None:
-    user = supabase.maybe_one("users", columns="wallet_address", filters={"id": user_id}, cache_ttl_seconds=60)
+    user = _get_supabase().maybe_one("users", columns="wallet_address", filters={"id": user_id}, cache_ttl_seconds=60)
     return None if user is None else user.get("wallet_address")
 
 

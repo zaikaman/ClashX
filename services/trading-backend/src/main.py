@@ -50,13 +50,6 @@ def create_app() -> FastAPI:
     settings = get_settings()
     metrics = get_performance_metrics_store()
     app = FastAPI(title=settings.app_name)
-    bot_copy_worker = BotCopyWorker()
-    bot_runtime_worker = BotRuntimeWorker()
-    bot_runtime_worker.copy_worker = bot_copy_worker
-    bot_runtime_snapshot_worker = BotRuntimeSnapshotWorker()
-    portfolio_allocator_worker = PortfolioAllocatorWorker()
-    backtest_job_worker = BacktestJobWorker()
-    market_data_service = get_pacifica_market_data_service()
 
     app.add_middleware(AuthMiddleware)
     app.add_middleware(
@@ -98,8 +91,16 @@ def create_app() -> FastAPI:
         await telegram_service.configure_bot(settings=settings)
         if not settings.background_workers_enabled:
             return
+        bot_copy_worker = BotCopyWorker()
+        bot_runtime_worker = BotRuntimeWorker()
+        bot_runtime_worker.copy_worker = bot_copy_worker
+        bot_runtime_snapshot_worker = BotRuntimeSnapshotWorker()
+        portfolio_allocator_worker = PortfolioAllocatorWorker()
+        backtest_job_worker = BacktestJobWorker()
+        market_data_service = get_pacifica_market_data_service()
         await marketplace_service.start_background_warmup()
         await market_data_service.start()
+        app.state.market_data_service = market_data_service
         app.state.bot_runtime_worker = bot_runtime_worker
         app.state.bot_copy_worker = bot_copy_worker
         app.state.bot_runtime_snapshot_worker = bot_runtime_snapshot_worker
@@ -118,6 +119,7 @@ def create_app() -> FastAPI:
         running_bot_runtime_snapshot_worker: BotRuntimeSnapshotWorker | None = getattr(app.state, "bot_runtime_snapshot_worker", None)
         running_portfolio_allocator_worker: PortfolioAllocatorWorker | None = getattr(app.state, "portfolio_allocator_worker", None)
         running_backtest_job_worker: BacktestJobWorker | None = getattr(app.state, "backtest_job_worker", None)
+        running_market_data_service = getattr(app.state, "market_data_service", None)
         with contextlib.suppress(asyncio.CancelledError):
             await marketplace_service.stop_background_warmup()
         if running_bot_copy_worker is not None:
@@ -135,7 +137,12 @@ def create_app() -> FastAPI:
         if running_backtest_job_worker is not None:
             with contextlib.suppress(asyncio.CancelledError):
                 await running_backtest_job_worker.stop()
-        await market_data_service.stop()
+        if running_market_data_service is not None:
+            await running_market_data_service.stop()
+
+    @app.get("/", tags=["ops"])
+    async def root() -> dict[str, object]:
+        return {"status": "ok", "service": settings.app_name, "health": "/healthz"}
 
     @app.get("/healthz", tags=["ops"])
     async def healthz() -> dict[str, object]:
