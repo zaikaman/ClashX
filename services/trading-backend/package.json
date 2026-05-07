@@ -1,0 +1,10 @@
+{
+  "name": "@clashx/trading-backend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "node -e \"console.log('FastAPI backend build handled by Vercel Python runtime')\"",
+    "dev": "uvicorn src.main:app --reload --host 0.0.0.0 --port 8000",
+    "start": "uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+  }
+}

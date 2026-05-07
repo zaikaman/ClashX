@@ -47,6 +47,8 @@ The FastAPI web API can be deployed as a separate Vercel project rooted at:
 
 Vercel uses `index.py` as the ASGI entrypoint and routes requests through the existing `src.main:app`. Set `BACKGROUND_WORKERS_ENABLED=false` in the Vercel project so only the HTTP API runs there.
 
+If the Vercel build logs show `npm run build --prefix apps/web`, the project is still using the repo root settings. Set the Vercel project Root Directory to `services/trading-backend` and redeploy.
+
 Keep the Heroku worker dyno running with `BACKGROUND_WORKERS_ENABLED=true`. After the Vercel backend is live, point the frontend `NEXT_PUBLIC_API_BASE_URL` at the Vercel backend URL.
 
 Realtime stream endpoints use the Supabase-backed `stream_events` table for cross-process fanout, so apply the latest database migration before cutting traffic over to the Vercel API.
