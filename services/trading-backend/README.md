@@ -20,8 +20,9 @@ This includes the runtime tables plus:
 
 - `bot_action_claims`
 - `worker_leases`
+- `stream_events`
 
-Those tables are required for duplicate-prevention and worker coordination.
+Those tables are required for duplicate-prevention, worker coordination, and cross-process realtime stream fanout.
 
 ## Start backend
 
@@ -44,11 +45,11 @@ The FastAPI web API can be deployed as a separate Vercel project rooted at:
 
 - `services/trading-backend`
 
-Vercel uses `api/index.py` as the ASGI entrypoint and routes all requests through the existing `src.main:app`. Set `BACKGROUND_WORKERS_ENABLED=false` in the Vercel project so only the HTTP API runs there.
+Vercel uses `index.py` as the ASGI entrypoint and routes requests through the existing `src.main:app`. Set `BACKGROUND_WORKERS_ENABLED=false` in the Vercel project so only the HTTP API runs there.
 
 Keep the Heroku worker dyno running with `BACKGROUND_WORKERS_ENABLED=true`. After the Vercel backend is live, point the frontend `NEXT_PUBLIC_API_BASE_URL` at the Vercel backend URL.
 
-Realtime stream endpoints currently use in-process memory for fanout, so worker-published events will not cross from the Heroku worker process to Vercel function instances without replacing the broadcaster with shared pub/sub.
+Realtime stream endpoints use the Supabase-backed `stream_events` table for cross-process fanout, so apply the latest database migration before cutting traffic over to the Vercel API.
 
 ## Live Pacifica smoke
 

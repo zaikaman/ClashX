@@ -533,6 +533,14 @@ CREATE TABLE public.strategy_activity_records (
   recorded_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT strategy_activity_records_pkey PRIMARY KEY (id)
 );
+CREATE TABLE public.stream_events (
+  event_sequence bigint NOT NULL,
+  channel character varying NOT NULL,
+  event_name character varying NOT NULL,
+  payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT stream_events_pkey PRIMARY KEY (event_sequence)
+);
 CREATE TABLE public.users (
   id uuid NOT NULL,
   wallet_address character varying NOT NULL UNIQUE,
