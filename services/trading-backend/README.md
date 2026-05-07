@@ -38,6 +38,18 @@ Background workers are controlled with `BACKGROUND_WORKERS_ENABLED`.
 
 If you run a single combined process, leave it enabled.
 
+## Vercel web API deployment
+
+The FastAPI web API can be deployed as a separate Vercel project rooted at:
+
+- `services/trading-backend`
+
+Vercel uses `api/index.py` as the ASGI entrypoint and routes all requests through the existing `src.main:app`. Set `BACKGROUND_WORKERS_ENABLED=false` in the Vercel project so only the HTTP API runs there.
+
+Keep the Heroku worker dyno running with `BACKGROUND_WORKERS_ENABLED=true`. After the Vercel backend is live, point the frontend `NEXT_PUBLIC_API_BASE_URL` at the Vercel backend URL.
+
+Realtime stream endpoints currently use in-process memory for fanout, so worker-published events will not cross from the Heroku worker process to Vercel function instances without replacing the broadcaster with shared pub/sub.
+
 ## Live Pacifica smoke
 
 The backend test suite includes a live Pacifica smoke path that validates market entry, close, IOC limit submission, and cancel-on-live-testnet against the delegated account when `PACIFICA_SMOKE_ENABLED=1` is set.
